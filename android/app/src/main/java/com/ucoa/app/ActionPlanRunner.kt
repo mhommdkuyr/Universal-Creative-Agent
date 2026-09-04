@@ -29,7 +29,12 @@ class ActionPlanRunner {
                     "type_text" -> service.typeText(a.optString("text"))
                     "back" -> service.back()
                     "home" -> service.home()
-                    "open_app" -> service.openApp(a.optString("package"))
+                    "open_app" -> {
+                        val pkg = a.optString("package")
+                        if (pkg.isNotBlank()) service.openApp(pkg)
+                        else service.openAppByName(a.optString("app_name"))
+                    }
+                    "observe" -> { onEvent(service.observeUi()); true }
                     else -> false
                 }
                 onEvent("$action: ${if (ok) "OK" else "FAILED"}")
