@@ -17,43 +17,39 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private val runner = ActionPlanRunner()
 
-    private val appPackages = mapOf(
-        "capcut" to "com.lemon.lvoverseas",
-        "canva" to "com.canva.editor",
-        "chrome" to "com.android.chrome",
-        "youtube" to "com.google.android.youtube"
-    )
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val input = EditText(this).apply {
-            hint = "مثال: افتح CapCut / اضغط Export / اكتب النص / رجوع"
+            hint = "مثال: افتح CapCut ثم اضغط Export ثم اكتب test ثم رجوع"
             minLines = 4
             setTextColor(Color.BLACK)
         }
         val target = EditText(this).apply {
-            hint = "الهدف (CapCut / Canva / Chrome)"
+            hint = "التطبيق الهدف (اختياري)"
             setTextColor(Color.BLACK)
         }
         val enable = Button(this).apply { text = "تفعيل الوصول للنظام" }
         val run = Button(this).apply { text = "تنفيذ المهمة الآن" }
         val demo = Button(this).apply { text = "اختبار حقيقي: تشغيل CapCut" }
+        val observe = Button(this).apply { text = "مراقبة الواجهة الحالية" }
         status = TextView(this).apply {
-            text = "Universal Creative Agent v0.4\nجاهز — يجب تفعيل Accessibility قبل التنفيذ"
+            text = "Universal Creative Agent v0.4\nجاهز — فعّل Accessibility قبل التحكم بالتطبيقات"
             setPadding(0, 24, 0, 24)
         }
 
         enable.setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
         demo.setOnClickListener {
-            val pkg = appPackages["capcut"]
-            if (pkg == null) return@setOnClickListener
             val plan = JSONArray().put(JSONObject().apply {
                 put("action", "open_app")
-                put("package", pkg)
+                put("app_name", "CapCut")
                 put("delay_ms", 250)
             }).toString()
-            status.text = "بدء الاختبار الحقيقي…\nفتح CapCut"
+            status.text = "بدء الاختبار الحقيقي…\nفتح CapCut بالبحث عن التطبيق المثبت"
             runner.run(plan) { event -> status.append("\n$event") }
+        }
+        observe.setOnClickListener {
+            val service = UcoaAccessibilityService.instance
+            status.text = service?.observeUi() ?: "Accessibility Service غير مفعّل"
         }
         run.setOnClickListener {
             val plan = parseSimpleArabicCommand(input.text.toString(), target.text.toString())
@@ -69,7 +65,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(32, 48, 32, 32)
         }
-        listOf(input, target, enable, demo, run, status).forEach {
+        listOf(input, target, enable, demo, observe, run, status).forEach {
             root.addView(it, ViewGroup.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         setContentView(root)
@@ -82,14 +78,14 @@ class MainActivity : Activity() {
             val s = raw.trim()
             when {
                 s.startsWith("افتح ") || s.startsWith("شغل ") || s.startsWith("شغّل ") -> {
-                    val name = s.substringAfter(' ').trim().lowercase()
-                    val pkg = appPackages[name] ?: appPackages[target.trim().lowercase()]
-                    if (pkg != null) result.put(JSONObject().apply { put("action", "open_app"); put("package", pkg) })
+                    val name = s.substringAfter(' ').trim()
+                    result.put(JSONObject().apply { put("action", "open_app"); put("app_name", name) })
                 }
                 s.startsWith("اضغط ") -> result.put(JSONObject().apply { put("action", "click_text"); put("text", s.removePrefix("اضغط ").trim()) })
-                s.startsWith("اكتب ") -> result.put(JSONObject().apply { put("action", "type_text"); put("text", s.removePrefix("اكتب ") ) })
+                s.startsWith("اكتب ") -> result.put(JSONObject().apply { put("action", "type_text"); put("text", s.removePrefix("اكتب ").trim()) })
                 s == "رجوع" || s == "عودة" -> result.put(JSONObject().apply { put("action", "back") })
                 s == "الرئيسية" || s == "الصفحة الرئيسية" -> result.put(JSONObject().apply { put("action", "home") })
+                s.isNotBlank() && target.isNotBlank() -> result.put(JSONObject().apply { put("action", "open_app"); put("app_name", target.trim()) })
             }
         }
         return result
