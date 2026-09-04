@@ -5,7 +5,6 @@ ROOT="${UCOA_LOCAL_HOME:-/opt/render/project/src/.ucoa-local}"
 BIN="$ROOT/llama-server"
 LLAMA_URL="${UCOA_LLAMA_URL:-https://github.com/ggml-org/llama.cpp/releases/download/b10586/llama-b10586-bin-ubuntu-x64.tar.gz}"
 LLAMA_SHA256="${UCOA_LLAMA_SHA256:-8fc43441b4d00d050589891c81e6b97d06039735af5d954deacf480b4f1f6b73}"
-# Stable Render Free candidate: Qwen2.5-0.5B-Instruct Q2_K (339 MB).
 MODEL_NAME="${UCOA_MODEL_NAME:-Qwen2.5-0.5B-Instruct-Q2_K}"
 MODEL_REPO="${UCOA_MODEL_REPO:-tensorblock/Qwen2.5-0.5B-Instruct-GGUF}"
 MODEL_TAG="${UCOA_MODEL_TAG:-Q2_K}"
@@ -27,7 +26,11 @@ export LD_LIBRARY_PATH="$ROOT:${LD_LIBRARY_PATH:-}"
 export UCOA_MODEL_BASE_URL="${UCOA_MODEL_BASE_URL:-http://127.0.0.1:8001/v1}"
 export UCOA_MODEL_NAME="$MODEL_NAME"
 export UCOA_LOCAL_MODEL="true"
-export UCOA_LOCAL_VISION="false"
+# Vision is supplied by the Hugging Face Qwen3-VL Space/router; the local Render LLM remains text-only.
+export UCOA_LOCAL_VISION="${UCOA_LOCAL_VISION:-true}"
+export UCOA_VISION_MODEL="${UCOA_VISION_MODEL:-Qwen/Qwen3-VL-2B-Instruct}"
+export UCOA_VISION_SPACE_URL="${UCOA_VISION_SPACE_URL:-https://akhaliq-qwen3-vl-2b-instruct.hf.space}"
+export UCOA_REASONING_MODEL="${UCOA_REASONING_MODEL:-Qwen/Qwen3-4B-Instruct-2507}"
 LOG="$ROOT/llama-server.log"
 : > "$LOG"
 
@@ -36,11 +39,11 @@ LOG="$ROOT/llama-server.log"
   --host 127.0.0.1 \
   --port 8001 \
   --alias "$MODEL_NAME" \
-  -c "${UCOA_CONTEXT:-256}" \
-  -n "${UCOA_MAX_TOKENS:-48}" \
+  -c "${UCOA_CONTEXT:-192}" \
+  -n "${UCOA_MAX_TOKENS:-64}" \
   -t "${UCOA_THREADS:-1}" \
-  --cache-type-k "${UCOA_CACHE_TYPE_K:-q4_0}" \
-  --cache-type-v "${UCOA_CACHE_TYPE_V:-q4_0}" \
+  --cache-type-k "${UCOA_CACHE_TYPE_K:-q2_K}" \
+  --cache-type-v "${UCOA_CACHE_TYPE_V:-q2_K}" \
   -np 1 \
   > "$LOG" 2>&1 &
 LLAMA_PID=$!
@@ -66,7 +69,6 @@ if ! curl -fsS --max-time 5 "$UCOA_MODEL_BASE_URL/models" >/dev/null 2>&1; then
   exit 1
 fi
 
-# Real startup inference probe. Public readiness is granted only after local inference works.
 SELFTEST="$ROOT/selftest.json"
 cat > "$ROOT/selftest-payload.json" <<JSON
 {"model":"$MODEL_NAME","temperature":0,"max_tokens":24,"messages":[{"role":"system","content":"Answer briefly in Arabic."},{"role":"user","content":"قل فقط: أنا جاهز لتنفيذ مهمة على الهاتف."}]}
@@ -86,6 +88,5 @@ else
   echo "LOCAL_BRAIN_INFERENCE_FAILED"; cat "$SELFTEST" || true; tail -n 200 "$LOG" || true; exit 1
 fi
 
-# The full agent plan/step lifecycle is exercised externally by GitHub Actions after the port is open.
 cd /opt/render/project/src/server
 exec uvicorn app:app --host 0.0.0.0 --port "${PORT:-10000}"
