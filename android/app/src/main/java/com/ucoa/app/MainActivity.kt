@@ -59,7 +59,7 @@ class MainActivity : Activity() {
 
     private fun showBrainSettings() {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(18, 8, 18, 4) }
-        val endpoint = EditText(this).apply { hint = "عنوان Brain API"; setSingleLine(); setText(brain.endpoint().ifBlank { "https://ucoa-agent-brain.onrender.com" }) }
+        val endpoint = EditText(this).apply { hint = "عنوان Brain API"; setSingleLine(); setText(brain.endpoint().ifBlank { "https://ucoa-agent-brain-local2.onrender.com" }) }
         val token = EditText(this).apply { hint = "رمز الوصول للخادم (اختياري)"; setSingleLine(); setText(brain.token()); inputType = 0x81 }
         box.addView(endpoint); box.addView(token)
         val dialog = AlertDialog.Builder(this).setTitle("ربط عقل AI العالمي").setView(box).setNegativeButton("إلغاء", null).setPositiveButton("حفظ") { _, _ -> brain.saveConfig(endpoint.text.toString(), token.text.toString()); refreshConnectionState(); addAssistantBubble("تم حفظ اتصال عقل AI العالمي.") }.create()
