@@ -5,6 +5,7 @@ import android.accessibilityservice.GestureDescription
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Path
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Base64
@@ -52,11 +53,14 @@ class UcoaAccessibilityService : AccessibilityService() {
         val candidates = pm.getInstalledApplications(0).filter { !it.packageName.equals(packageName, true) }.mapNotNull { app -> val label = pm.getApplicationLabel(app)?.toString() ?: return@mapNotNull null; if (label.lowercase().contains(q) || app.packageName.lowercase().contains(q)) app else null }.sortedBy { pm.getApplicationLabel(it)?.toString()?.length ?: 999 }
         return candidates.firstOrNull()?.let { openApp(it.packageName) } ?: false
     }
-    fun installedAppLabels(): List<String> {
-        val pm = packageManager
-        return pm.getInstalledApplications(0).filter { it.packageName != packageName }.mapNotNull { pm.getApplicationLabel(it)?.toString() }.distinct().sorted().take(250)
-    }
-    fun openUrl(url: String): Boolean = try { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }); true } catch (_: Exception) { false }
+    fun installedAppLabels(): List<String> = packageManager.getInstalledApplications(0).filter { it.packageName != packageName }.mapNotNull { packageManager.getApplicationLabel(it)?.toString() }.distinct().sorted().take(250)
+    fun openUrl(url: String): Boolean = try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }); true } catch (_: Exception) { false }
+
+    fun shareAttachment(uriString: String, packageNameTarget: String? = null): Boolean = try {
+        val uri = Uri.parse(uriString)
+        val intent = Intent(Intent.ACTION_SEND).apply { type = contentResolver.getType(uri) ?: "*/*"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION); packageNameTarget?.takeIf { it.isNotBlank() }?.let(::setPackage) }
+        startActivity(intent); true
+    } catch (_: Exception) { false }
 
     fun observeUi(maxNodes: Int = 160): String {
         val result = JSONArray(); allNodes(maxNodes).forEach { node -> val b = android.graphics.Rect(); node.getBoundsInScreen(b); result.put(JSONObject().apply {
@@ -77,8 +81,7 @@ class UcoaAccessibilityService : AccessibilityService() {
                         val bitmap = Bitmap.wrapHardwareBuffer(hw, result.colorSpace)?.copy(Bitmap.Config.ARGB_8888, false)
                         hw.close()
                         if (bitmap == null) { callback(null); return }
-                        val out = ByteArrayOutputStream(); bitmap.compress(Bitmap.CompressFormat.JPEG, 62, out); bitmap.recycle()
-                        callback(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP))
+                        val out = ByteArrayOutputStream(); bitmap.compress(Bitmap.CompressFormat.JPEG, 62, out); bitmap.recycle(); callback(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP))
                     } catch (_: Exception) { runCatching { result.hardwareBuffer.close() }; callback(null) }
                 }
                 override fun onFailure(errorCode: Int) { callback(null) }
