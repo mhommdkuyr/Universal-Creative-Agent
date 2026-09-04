@@ -1,6 +1,10 @@
+from pathlib import Path
+import sys
+
 from fastapi.testclient import TestClient
 
-from server import app
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import app  # noqa: E402
 
 client = TestClient(app.app)
 
