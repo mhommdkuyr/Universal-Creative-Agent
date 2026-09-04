@@ -5,13 +5,11 @@ ROOT="${UCOA_LOCAL_HOME:-/opt/render/project/src/.ucoa-local}"
 BIN="$ROOT/llama-server"
 LLAMA_URL="${UCOA_LLAMA_URL:-https://github.com/ggml-org/llama.cpp/releases/download/b10586/llama-b10586-bin-ubuntu-x64.tar.gz}"
 LLAMA_SHA256="${UCOA_LLAMA_SHA256:-8fc43441b4d00d050589891c81e6b97d06039735af5d954deacf480b4f1f6b73}"
-
 MODEL_NAME="${UCOA_MODEL_NAME:-SmolLM2-135M-Instruct-Q2_K}"
 MODEL_REPO="${UCOA_MODEL_REPO:-tensorblock/SmolLM2-135M-Instruct-GGUF}"
 MODEL_TAG="${UCOA_MODEL_TAG:-Q2_K}"
 
 mkdir -p "$ROOT"
-
 if [[ ! -x "$BIN" ]]; then
   tmp="$ROOT/llama.tar.gz"
   curl -fL --retry 3 --connect-timeout 20 "$LLAMA_URL" -o "$tmp"
@@ -32,30 +30,24 @@ export UCOA_LOCAL_VISION="false"
 LOG="$ROOT/llama-server.log"
 : > "$LOG"
 
-if ! "$BIN" --version >> "$LOG" 2>&1; then
-  cat "$LOG"
-  exit 1
-fi
-
 "$BIN" \
   -hf "$MODEL_REPO:$MODEL_TAG" \
   --host 127.0.0.1 \
   --port 8001 \
   --alias "$MODEL_NAME" \
-  -c "${UCOA_CONTEXT:-384}" \
-  -n "${UCOA_MAX_TOKENS:-48}" \
+  -c "${UCOA_CONTEXT:-256}" \
+  -n "${UCOA_MAX_TOKENS:-24}" \
   -t "${UCOA_THREADS:-1}" \
   -np 1 \
   > "$LOG" 2>&1 &
 LLAMA_PID=$!
-
 cleanup() { kill "$LLAMA_PID" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
 for _ in $(seq 1 150); do
   if ! kill -0 "$LLAMA_PID" 2>/dev/null; then
     echo "LOCAL_BRAIN_PROCESS_EXITED"
-    tail -n 300 "$LOG" || true
+    tail -n 200 "$LOG" || true
     exit 1
   fi
   if curl -fsS --max-time 2 "$UCOA_MODEL_BASE_URL/models" >/dev/null 2>&1; then
@@ -67,7 +59,7 @@ done
 
 if ! curl -fsS --max-time 5 "$UCOA_MODEL_BASE_URL/models" >/dev/null 2>&1; then
   echo "LOCAL_BRAIN_TIMEOUT"
-  tail -n 300 "$LOG" || true
+  tail -n 200 "$LOG" || true
   exit 1
 fi
 
