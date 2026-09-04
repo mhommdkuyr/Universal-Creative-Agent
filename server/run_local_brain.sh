@@ -10,7 +10,7 @@ MODEL_URL="${UCOA_MODEL_URL:-https://huggingface.co/ggml-org/SmolVLM-256M-Instru
 MMPROJ_URL="${UCOA_MMPROJ_URL:-https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf?download=true}"
 MODEL_SHA256="${UCOA_MODEL_SHA256:-2a31195d3769c0b0fd0a4906201666108834848db768af11de1d2cef7cd35e65}"
 MMPROJ_SHA256="${UCOA_MMPROJ_SHA256:-7e943f7c53f0382a6fc41b6ee0c2def63ba4fded9ab8ed039cc9e2ab905e0edd}"
-LLAMA_SHA256="${UCOA_LLAMA_SHA256:-8fc43441b4d00d050589891c81e6b97d06039735af5d954deacf480b4f1f6b73}"
+LLAMA_SHA256="${UCOA_LLAMA_SHA256:-8fc43441b4d00d050589891c81e6b97d06039755af5d954deacf480b4f1f6b73}"
 
 mkdir -p "$ROOT"
 
@@ -26,7 +26,7 @@ if [[ ! -x "$BIN" ]]; then
   rm -f "$tmp"
 fi
 
-# Keep shared libraries from the llama.cpp release discoverable at runtime.
+# The release may contain shared libraries beside llama-server. Keep them visible.
 export LD_LIBRARY_PATH="$ROOT:${LD_LIBRARY_PATH:-}"
 
 if [[ ! -f "$MODEL" ]]; then
@@ -44,6 +44,14 @@ fi
 export UCOA_MODEL_BASE_URL="${UCOA_MODEL_BASE_URL:-http://127.0.0.1:8001/v1}"
 export UCOA_MODEL_NAME="${UCOA_MODEL_NAME:-SmolVLM-256M-Instruct-Q8_0}"
 export UCOA_LOCAL_MODEL="${UCOA_LOCAL_MODEL:-true}"
+LOG="$ROOT/llama-server.log"
+: > "$LOG"
+
+# Fail early with a visible diagnostic if the native binary itself cannot execute.
+if ! "$BIN" --version >> "$LOG" 2>&1; then
+  cat "$LOG"
+  exit 1
+fi
 
 "$BIN" \
   -m "$MODEL" \
@@ -55,31 +63,29 @@ export UCOA_LOCAL_MODEL="${UCOA_LOCAL_MODEL:-true}"
   -c "${UCOA_CONTEXT:-1536}" \
   -n "${UCOA_MAX_TOKENS:-384}" \
   -np 1 \
-  > "$ROOT/llama-server.log" 2>&1 &
+  > "$LOG" 2>&1 &
 LLAMA_PID=$!
 
 cleanup() { kill "$LLAMA_PID" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
-python - <<'PY'
-import os, time, urllib.request
-base = os.getenv('UCOA_MODEL_BASE_URL', 'http://127.0.0.1:8001/v1')
-log = os.path.join(os.getenv('UCOA_LOCAL_HOME', '/opt/render/project/src/.ucoa-local'), 'llama-server.log')
-for _ in range(120):
-    if not os.path.exists('/proc/%s' % os.getenv('LLAMA_PID', '')):
-        pass
-    try:
-        with urllib.request.urlopen(base + '/models', timeout=2) as r:
-            if r.status == 200:
-                print('LOCAL_BRAIN_READY')
-                break
-    except Exception:
-        time.sleep(2)
-else:
-    print('LOCAL_BRAIN_STARTUP_FAILED')
-    if os.path.exists(log):
-        print(open(log, errors='replace').read()[-20000:])
-    raise SystemExit(1)
-PY
+for _ in $(seq 1 150); do
+  if ! kill -0 "$LLAMA_PID" 2>/dev/null; then
+    echo "LOCAL_BRAIN_PROCESS_EXITED"
+    tail -n 200 "$LOG" || true
+    exit 1
+  fi
+  if curl -fsS --max-time 2 "$UCOA_MODEL_BASE_URL/models" >/dev/null 2>&1; then
+    echo "LOCAL_BRAIN_READY"
+    break
+  fi
+  sleep 2
+done
+
+if ! curl -fsS --max-time 5 "$UCOA_MODEL_BASE_URL/models" >/dev/null 2>&1; then
+  echo "LOCAL_BRAIN_TIMEOUT"
+  tail -n 300 "$LOG" || true
+  exit 1
+fi
 
 exec uvicorn app:app --host 0.0.0.0 --port "${PORT:-10000}"
