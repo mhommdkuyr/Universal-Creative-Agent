@@ -2,13 +2,19 @@ package com.ucoa.app
 
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 
 object AppDiscovery {
     fun findPackage(context: Context, userName: String): String? {
         val wanted = userName.trim().lowercase()
         if (wanted.isEmpty()) return null
         val pm = context.packageManager
-        val apps = pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
+        @Suppress("DEPRECATION")
+        val apps = if (Build.VERSION.SDK_INT >= 33) {
+            pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
+        } else {
+            pm.getInstalledApplications(0)
+        }
         return apps.firstNotNullOfOrNull { info ->
             val label = pm.getApplicationLabel(info).toString().lowercase()
             when {
