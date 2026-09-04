@@ -15,7 +15,7 @@ class AgentBrainClient(private val context: Context) {
     data class Response(val ok: Boolean, val body: JSONObject?, val error: String? = null)
     private val executor = Executors.newSingleThreadExecutor()
     private val prefs get() = context.getSharedPreferences("ucoa_brain", Context.MODE_PRIVATE)
-    private val defaultEndpoint = "https://ucoa-agent-brain-local.onrender.com"
+    private val defaultEndpoint = "https://ucoa-agent-brain-local2.onrender.com"
 
     fun configured(): Boolean = endpoint().isNotBlank()
     fun endpoint(): String = prefs.getString("endpoint", defaultEndpoint)?.trim().orEmpty().trimEnd('/')
@@ -61,7 +61,7 @@ class AgentBrainClient(private val context: Context) {
             var conn: HttpURLConnection? = null
             try {
                 conn = (URL(base + path).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"; connectTimeout = 12000; readTimeout = 60000; doOutput = true; setRequestProperty("Content-Type", "application/json")
+                    requestMethod = "POST"; connectTimeout = 12000; readTimeout = 300000; doOutput = true; setRequestProperty("Content-Type", "application/json")
                     token().takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") }
                 }
                 conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
