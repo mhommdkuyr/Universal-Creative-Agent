@@ -10,7 +10,7 @@ MODEL_URL="${UCOA_MODEL_URL:-https://huggingface.co/ggml-org/SmolVLM-256M-Instru
 MMPROJ_URL="${UCOA_MMPROJ_URL:-https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf?download=true}"
 MODEL_SHA256="${UCOA_MODEL_SHA256:-2a31195d3769c0b0fd0a4906201666108834848db768af11de1d2cef7cd35e65}"
 MMPROJ_SHA256="${UCOA_MMPROJ_SHA256:-7e943f7c53f0382a6fc41b6ee0c2def63ba4fded9ab8ed039cc9e2ab905e0edd}"
-LLAMA_SHA256="${UCOA_LLAMA_SHA256:-8fc43441b4d00d050589891c81e6b97d06039735af5d954deacf480b4f1f6b73}" 
+LLAMA_SHA256="${UCOA_LLAMA_SHA256:-8fc43441b4d00d050589891c81e6b97d06039735af5d954deacf480b4f1f6b73}"
 
 mkdir -p "$ROOT"
 
@@ -21,10 +21,13 @@ if [[ ! -x "$BIN" ]]; then
   tar -xzf "$tmp" -C "$ROOT"
   found="$(find "$ROOT" -type f -name llama-server -print -quit)"
   test -n "$found"
-  cp "$found" "$BIN"
-  chmod +x "$BIN"
+  cp -a "$(dirname "$found")"/. "$ROOT"/
+  test -x "$BIN"
   rm -f "$tmp"
 fi
+
+# Keep shared libraries from the llama.cpp release discoverable at runtime.
+export LD_LIBRARY_PATH="$ROOT:${LD_LIBRARY_PATH:-}"
 
 if [[ ! -f "$MODEL" ]]; then
   curl -fL --retry 3 --connect-timeout 20 "$MODEL_URL" -o "$MODEL.part"
@@ -49,30 +52,34 @@ export UCOA_LOCAL_MODEL="${UCOA_LOCAL_MODEL:-true}"
   --host 127.0.0.1 \
   --port 8001 \
   --alias "$UCOA_MODEL_NAME" \
-  -c "${UCOA_CONTEXT:-2048}" \
-  -n "${UCOA_MAX_TOKENS:-512}" \
+  -c "${UCOA_CONTEXT:-1536}" \
+  -n "${UCOA_MAX_TOKENS:-384}" \
   -np 1 \
   > "$ROOT/llama-server.log" 2>&1 &
 LLAMA_PID=$!
 
-cleanup() {
-  kill "$LLAMA_PID" 2>/dev/null || true
-}
+cleanup() { kill "$LLAMA_PID" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
 python - <<'PY'
 import os, time, urllib.request
-url = os.getenv('UCOA_MODEL_BASE_URL', 'http://127.0.0.1:8001/v1') + '/models'
-for _ in range(90):
+base = os.getenv('UCOA_MODEL_BASE_URL', 'http://127.0.0.1:8001/v1')
+log = os.path.join(os.getenv('UCOA_LOCAL_HOME', '/opt/render/project/src/.ucoa-local'), 'llama-server.log')
+for _ in range(120):
+    if not os.path.exists('/proc/%s' % os.getenv('LLAMA_PID', '')):
+        pass
     try:
-        with urllib.request.urlopen(url, timeout=2) as r:
+        with urllib.request.urlopen(base + '/models', timeout=2) as r:
             if r.status == 200:
+                print('LOCAL_BRAIN_READY')
                 break
     except Exception:
         time.sleep(2)
 else:
-    print(open(os.path.join(os.getenv('UCOA_LOCAL_HOME', '/opt/render/project/src/.ucoa-local'), 'llama-server.log'), errors='replace').read()[-12000:])
-    raise SystemExit('local llama server did not become ready')
+    print('LOCAL_BRAIN_STARTUP_FAILED')
+    if os.path.exists(log):
+        print(open(log, errors='replace').read()[-20000:])
+    raise SystemExit(1)
 PY
 
 exec uvicorn app:app --host 0.0.0.0 --port "${PORT:-10000}"
