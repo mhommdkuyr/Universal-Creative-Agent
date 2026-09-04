@@ -29,12 +29,13 @@ class AgentBrainClient(private val context: Context) {
         post("/v1/agent/plan", payload, callback)
     }
 
-    fun step(task: String, step: Int, history: JSONArray, uiTree: String, screenshotBase64: String?, installedApps: List<String>, callback: (Response) -> Unit) {
+    fun step(task: String, step: Int, history: JSONArray, uiTree: String, screenshotBase64: String?, installedApps: List<String>, attachments: List<String>, callback: (Response) -> Unit) {
         val payload = JSONObject().apply {
             put("task", task); put("step", step); put("max_steps", 60); put("history", history); put("ui_tree", uiTree)
             if (!screenshotBase64.isNullOrBlank()) put("screenshot_base64", screenshotBase64)
             put("installed_apps", JSONArray(installedApps.take(250)))
-            put("capabilities", JSONArray(listOf("open_url", "open_app_by_name", "click_any_text", "type_into_any", "tap", "long_press", "swipe", "back", "home", "wait", "observe", "done")))
+            put("attachments", JSONArray(attachments.take(20)))
+            put("capabilities", JSONArray(listOf("open_url", "open_app_by_name", "click_any_text", "type_into_any", "share_attachment", "tap", "long_press", "swipe", "back", "home", "wait", "observe", "done")))
         }
         post("/v1/agent/step", payload, callback)
     }
@@ -51,8 +52,7 @@ class AgentBrainClient(private val context: Context) {
                     token().takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") }
                 }
                 conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
-                val code = conn.responseCode
-                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                val code = conn.responseCode; val stream = if (code in 200..299) conn.inputStream else conn.errorStream
                 val text = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
                 callback(Response(code in 200..299, runCatching { JSONObject(text) }.getOrNull(), if (code in 200..299) null else "HTTP $code: $text"))
             } catch (e: Exception) { callback(Response(false, null, e.message ?: e.javaClass.simpleName)) }
