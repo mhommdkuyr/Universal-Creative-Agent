@@ -1,0 +1,1 @@
+CI is the authority for current build state.
