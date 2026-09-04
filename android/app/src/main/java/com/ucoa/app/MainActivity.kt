@@ -62,14 +62,14 @@ class MainActivity : Activity() {
     private fun refreshConnectionState() {
         val enabled = PermissionCoordinator.isAccessibilityEnabled(this)
         val live = PermissionCoordinator.isServiceLive()
-        status.text = when { live -> "● متصل ويستطيع التفاعل مع الهاتف"; enabled -> "● الصلاحية مفعلة — الخدمة ستظهر بعد تهيئة Android"; else -> "○ غير متصل — فعّل الوصول مرة واحدة" }
-        connectButton.text = when { live -> "الهاتف متصل"; enabled -> "الصلاحية مفعلة"; else -> "ربط الهاتف بنقرة واحدة" }
+        status.text = when { live -> "● متصل ويستطيع التفاعل مع الهاتف"; enabled -> "● الصلاحية مفعلة — ارجع للتطبيق لتأكيد الاتصال"; else -> "○ غير متصل — فعّل الوصول مرة واحدة" }
+        connectButton.text = when { live -> "الهاتف متصل"; enabled -> "فتح إعدادات الوصول"; else -> "ربط الهاتف بنقرة واحدة" }
         connectButton.isEnabled = !live
     }
 
     private fun connectPhone() {
         PermissionCoordinator.openAccessibilitySettings(this)
-        Toast.makeText(this, "فعّل Universal Creative Agent من القائمة ثم ارجع. سيتم اكتشاف الاتصال تلقائيًا.", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "فعّل Universal Creative Agent ثم ارجع. لا توجد صلاحية اتصال إضافية مطلوبة.", Toast.LENGTH_LONG).show()
     }
 
     private fun chooseMedia() {
@@ -108,9 +108,10 @@ class MainActivity : Activity() {
     }
 
     private fun queueBackgroundPreparation(task: String) {
-        val data = Data.Builder().putString("task", task).putInt("media_count", selectedMedia.size).build()
-        WorkManager.getInstance(this).enqueue(OneTimeWorkRequestBuilder<MediaBackgroundWorker>().setInputData(data).build())
-        addAssistantBubble("الوسائط أُضيفت لمعالجة الخلفية. لا تحتاج لإبقاء شاشة المحادثة مفتوحة أثناء التحضير المحلي.")
+        val builder = Data.Builder().putString("task", task).putInt("media_count", selectedMedia.size)
+        builder.putStringArray("media_uris", selectedMedia.toTypedArray())
+        WorkManager.getInstance(this).enqueue(OneTimeWorkRequestBuilder<MediaBackgroundWorker>().setInputData(builder.build()).build())
+        addAssistantBubble("الوسائط أُضيفت لمعالجة الخلفية. يمكنك مغادرة الشاشة أثناء التحضير المحلي.")
     }
 
     private fun addAssistantBubble(text: String) { addBubble(text, false) }
@@ -122,7 +123,6 @@ class MainActivity : Activity() {
 
     private fun addPlanCard(plan: TaskInterpreter.PlanResult) {
         val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(22, 20, 22, 20); setBackgroundColor(0xFFF7F7F7.toInt()) }
-        card.tag = plan
         val heading = TextView(this).apply { text = "خطة التنفيذ"; textSize = 18f; setTextColor(Color.BLACK) }
         val summary = TextView(this).apply { text = plan.summary; textSize = 14f; setPadding(0, 10, 0, 8) }
         val steps = TextView(this).apply { text = plan.steps.mapIndexed { i, s -> "${i + 1}. $s" }.joinToString("\n"); textSize = 15f; setPadding(0, 8, 0, 18) }
@@ -146,13 +146,7 @@ class MainActivity : Activity() {
     private fun executePlan(plan: TaskInterpreter.PlanResult, card: View) {
         if (!PermissionCoordinator.isServiceLive()) { Toast.makeText(this, "فعّل ربط الهاتف أولًا.", Toast.LENGTH_LONG).show(); connectPhone(); return }
         val command = latestTaskText.lowercase()
-        val targetName = when {
-            command.contains("capcut") -> "capcut"
-            command.contains("canva") -> "canva"
-            command.contains("chrome") -> "chrome"
-            command.contains("youtube") -> "youtube"
-            else -> ""
-        }
+        val targetName = when { command.contains("capcut") -> "capcut"; command.contains("canva") -> "canva"; command.contains("chrome") -> "chrome"; command.contains("youtube") -> "youtube"; else -> "" }
         val json = org.json.JSONArray().apply {
             if (targetName.isNotEmpty()) {
                 val pkg = AppDiscovery.findPackage(this@MainActivity, targetName)
@@ -161,6 +155,6 @@ class MainActivity : Activity() {
         }
         card.isEnabled = false
         ActionPlanRunner().run(json.toString()) { event -> runOnUiThread { status.append("\n$event") } }
-        addAssistantBubble("بدأ التنفيذ المحلي للخطوة المتاحة، مع تسجيل نجاح/فشل الإجراء. المهام الإبداعية المعقدة تحتاج مهارة التطبيق ومزود AI متصلين بالنواة.")
+        addAssistantBubble("بدأ التنفيذ المحلي للخطوة المتاحة مع تسجيل نجاح/فشل الإجراء. التنفيذ الشامل للمهام المعقدة يحتاج ربط عقل AI ومهارات التطبيقات.")
     }
 }
