@@ -6,8 +6,9 @@ BIN="$ROOT/llama-server"
 LLAMA_URL="${UCOA_LLAMA_URL:-https://github.com/ggml-org/llama.cpp/releases/download/b10586/llama-b10586-bin-ubuntu-x64.tar.gz}"
 LLAMA_SHA256="${UCOA_LLAMA_SHA256:-8fc43441b4d00d050589891c81e6b97d06039735af5d954deacf480b4f1f6b73}"
 
-MODEL_NAME="${UCOA_MODEL_NAME:-SmolLM2-135M-Instruct-Q4_K_M}"
-MODEL_REPO="${UCOA_MODEL_REPO:-ggml-org/SmolLM2-135M-GGUF}"
+MODEL_NAME="${UCOA_MODEL_NAME:-SmolLM2-135M-Instruct-Q2_K}"
+MODEL_REPO="${UCOA_MODEL_REPO:-tensorblock/SmolLM2-135M-Instruct-GGUF}"
+MODEL_TAG="${UCOA_MODEL_TAG:-Q2_K}"
 
 mkdir -p "$ROOT"
 
@@ -37,12 +38,12 @@ if ! "$BIN" --version >> "$LOG" 2>&1; then
 fi
 
 "$BIN" \
-  -hf "$MODEL_REPO:Q4_K_M" \
+  -hf "$MODEL_REPO:$MODEL_TAG" \
   --host 127.0.0.1 \
   --port 8001 \
   --alias "$MODEL_NAME" \
-  -c "${UCOA_CONTEXT:-512}" \
-  -n "${UCOA_MAX_TOKENS:-64}" \
+  -c "${UCOA_CONTEXT:-384}" \
+  -n "${UCOA_MAX_TOKENS:-48}" \
   -t "${UCOA_THREADS:-1}" \
   -np 1 \
   > "$LOG" 2>&1 &
