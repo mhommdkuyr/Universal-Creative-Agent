@@ -5,9 +5,13 @@ import android.os.Looper
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Generic observe -> think -> act -> verify loop for arbitrary visible apps/web pages. */
+/** Observe -> visual/semantic reasoning -> safety verification -> act -> verify loop. */
 class UniversalAgentLoop(private val brain: AgentBrainClient) {
-    interface Listener { fun onEvent(text: String); fun onFinished(success: Boolean) }
+    interface Listener {
+        fun onEvent(text: String)
+        fun onFinished(success: Boolean)
+        fun onConfirmationRequired(reasons: String) { onEvent("تأكيد مطلوب قبل التنفيذ: $reasons") }
+    }
     private val main = Handler(Looper.getMainLooper())
     private var running = false
     private var task = ""
@@ -29,7 +33,7 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
         history = JSONArray()
         this.listener = listener
         attachments = selectedAttachments
-        listener.onEvent("العقل العالمي: بدأ حلقة الفهم ← الملاحظة ← التنفيذ ← التحقق.")
+        listener.onEvent("العقل العالمي: بدأ الإدراك البصري ← التفكير ← التحقق ← التنفيذ.")
         next()
     }
 
@@ -50,8 +54,8 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
         }
         service.captureScreenshotBase64 { screenshot ->
             if (!running) return@captureScreenshotBase64
-            val ui = service.observeUi(220)
-            brain.step(task, step, history, ui, screenshot, service.installedAppLabels(), attachments) { response ->
+            val ui = service.observeUi(260)
+            brain.step(task, step, history, ui, screenshot, service.installedAppLabels(), attachments, false) { response ->
                 main.post {
                     if (!running) return@post
                     if (!response.ok || response.body == null) {
@@ -59,8 +63,18 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
                         return@post
                     }
                     val decision = response.body
+                    decision.optString("visual_observation").trim().takeIf { it.isNotBlank() }?.let {
+                        listener?.onEvent("الرؤية: $it")
+                    }
                     decision.optString("message").trim().takeIf { it.isNotBlank() }?.let {
                         listener?.onEvent("العقل: $it")
+                    }
+                    val verification = decision.optJSONObject("verification")
+                    if (verification?.optBoolean("requires_confirmation", false) == true) {
+                        val reasons = verification.optJSONArray("reasons")?.let { a -> (0 until a.length()).joinToString(", ") { a.optString(it) } } ?: "policy"
+                        listener?.onConfirmationRequired(reasons)
+                        finish(false, "تم إيقاف التنفيذ الآلي حفاظًا على الأمان.")
+                        return@post
                     }
                     val action = decision.optString("action").trim()
                     val params = decision.optJSONObject("params") ?: decision
@@ -106,7 +120,7 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
             "back" -> cb(s.back(), "")
             "home" -> cb(s.home(), "")
             "wait" -> main.postDelayed({ cb(true, "waited") }, p.optLong("ms", 1000L).coerceIn(100L, 10000L))
-            "observe" -> cb(true, s.observeUi(220))
+            "observe" -> cb(true, s.observeUi(260))
             else -> cb(false, "unsupported_action=$action")
         }
     }
