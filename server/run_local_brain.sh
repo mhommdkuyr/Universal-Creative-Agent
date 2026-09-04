@@ -3,14 +3,11 @@ set -euo pipefail
 
 ROOT="${UCOA_LOCAL_HOME:-/opt/render/project/src/.ucoa-local}"
 BIN="$ROOT/llama-server"
-MODEL="$ROOT/SmolVLM-256M-Instruct-Q8_0.gguf"
-MMPROJ="$ROOT/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf"
 LLAMA_URL="${UCOA_LLAMA_URL:-https://github.com/ggml-org/llama.cpp/releases/download/b10586/llama-b10586-bin-ubuntu-x64.tar.gz}"
-MODEL_URL="${UCOA_MODEL_URL:-https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/SmolVLM-256M-Instruct-Q8_0.gguf?download=true}"
-MMPROJ_URL="${UCOA_MMPROJ_URL:-https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf?download=true}"
-MODEL_SHA256="${UCOA_MODEL_SHA256:-2a31195d3769c0b0fd0a4906201666108834848db768af11de1d2cef7cd35e65}"
-MMPROJ_SHA256="${UCOA_MMPROJ_SHA256:-7e943f7c53f0382a6fc41b6ee0c2def63ba4fded9ab8ed039cc9e2ab905e0edd}"
 LLAMA_SHA256="${UCOA_LLAMA_SHA256:-8fc43441b4d00d050589891c81e6b97d06039735af5d954deacf480b4f1f6b73}"
+
+MODEL_NAME="${UCOA_MODEL_NAME:-SmolLM2-135M-Instruct-Q4_K_M}"
+MODEL_REPO="${UCOA_MODEL_REPO:-ggml-org/SmolLM2-135M-GGUF}"
 
 mkdir -p "$ROOT"
 
@@ -27,22 +24,10 @@ if [[ ! -x "$BIN" ]]; then
 fi
 
 export LD_LIBRARY_PATH="$ROOT:${LD_LIBRARY_PATH:-}"
-
-if [[ ! -f "$MODEL" ]]; then
-  curl -fL --retry 3 --connect-timeout 20 "$MODEL_URL" -o "$MODEL.part"
-  echo "$MODEL_SHA256  $MODEL.part" | sha256sum -c -
-  mv "$MODEL.part" "$MODEL"
-fi
-
-if [[ ! -f "$MMPROJ" ]]; then
-  curl -fL --retry 3 --connect-timeout 20 "$MMPROJ_URL" -o "$MMPROJ.part"
-  echo "$MMPROJ_SHA256  $MMPROJ.part" | sha256sum -c -
-  mv "$MMPROJ.part" "$MMPROJ"
-fi
-
 export UCOA_MODEL_BASE_URL="${UCOA_MODEL_BASE_URL:-http://127.0.0.1:8001/v1}"
-export UCOA_MODEL_NAME="${UCOA_MODEL_NAME:-SmolVLM-256M-Instruct-Q8_0}"
-export UCOA_LOCAL_MODEL="${UCOA_LOCAL_MODEL:-true}"
+export UCOA_MODEL_NAME="$MODEL_NAME"
+export UCOA_LOCAL_MODEL="true"
+export UCOA_LOCAL_VISION="false"
 LOG="$ROOT/llama-server.log"
 : > "$LOG"
 
@@ -52,14 +37,12 @@ if ! "$BIN" --version >> "$LOG" 2>&1; then
 fi
 
 "$BIN" \
-  -m "$MODEL" \
-  --mmproj "$MMPROJ" \
-  --no-mmproj-offload \
+  -hf "$MODEL_REPO:Q4_K_M" \
   --host 127.0.0.1 \
   --port 8001 \
-  --alias "$UCOA_MODEL_NAME" \
-  -c "${UCOA_CONTEXT:-1024}" \
-  -n "${UCOA_MAX_TOKENS:-256}" \
+  --alias "$MODEL_NAME" \
+  -c "${UCOA_CONTEXT:-768}" \
+  -n "${UCOA_MAX_TOKENS:-160}" \
   -np 1 \
   > "$LOG" 2>&1 &
 LLAMA_PID=$!
