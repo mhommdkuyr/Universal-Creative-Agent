@@ -11,7 +11,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install pytest pillow numpy opencv-python-headless -r server/requirements.txt
-      - run: pytest -q
+      - run: PYTHONPATH=. pytest -q
 
   android-build:
     runs-on: ubuntu-latest
@@ -72,3 +72,60 @@ jobs:
             grep -q 'رفع الوسائط' window.xml
             grep -q 'الصوت' window.xml
             adb shell dumpsys activity activities | grep -Eqi 'mResumedActivity.*com\.ucoa\.app|topResumedActivity.*com\.ucoa\.app|ResumedActivity.*com\.ucoa\.app'
+
+  render-brain-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for Render local brain
+        env:
+          BRAIN_URL: https://ucoa-agent-brain-local2.onrender.com
+        run: |
+          set -e
+          for i in $(seq 1 60); do
+            body=$(curl -fsS --max-time 10 "$BRAIN_URL/health" || true)
+            echo "$body"
+            if echo "$body" | grep -q '"ok":true' && echo "$body" | grep -q '"brain_configured":true'; then exit 0; fi
+            sleep 5
+          done
+          echo 'Render brain health check failed' >&2
+          exit 1
+      - name: Test local model plan endpoint
+        env:
+          BRAIN_URL: https://ucoa-agent-brain-local2.onrender.com
+        run: |
+          set -e
+          response=$(curl -fsS --max-time 300 -X POST "$BRAIN_URL/v1/agent/plan" \
+            -H 'Content-Type: application/json' \
+            --data '{"task":"ضع خطة عامة لإكمال مهمة على الهاتف: افتح التطبيق المناسب، نفذ المطلوب، ثم تحقق من النتيجة.","attachments":[],"device":{"android":35}}')
+          echo "$response"
+          python - <<'PY' "$response"
+import json, sys
+x=json.loads(sys.argv[1])
+assert isinstance(x.get('summary'), str) and x['summary']
+assert isinstance(x.get('steps'), list) and len(x['steps']) >= 2
+PY
+      - name: Test local vision step endpoint
+        env:
+          BRAIN_URL: https://ucoa-agent-brain-local2.onrender.com
+        run: |
+          set -e
+          pip install pillow -q
+          python - <<'PY'
+from PIL import Image, ImageDraw
+import base64, io, json, os, urllib.request
+img=Image.new('RGB',(480,320),'white')
+d=ImageDraw.Draw(img)
+d.rectangle((40,40,440,100), outline='black', width=2)
+d.text((65,62),'Universal Creative Agent', fill='black')
+d.rectangle((40,140,200,210), outline='black', width=2)
+d.text((70,165),'Continue', fill='black')
+buf=io.BytesIO(); img.save(buf, format='JPEG', quality=80)
+payload={"task":"على الشاشة زر Continue. اضغطه ثم تحقق من الانتقال للخطوة التالية.","step":0,"max_steps":10,"history":[],"ui_tree":"[]","screenshot_base64":base64.b64encode(buf.getvalue()).decode(),"installed_apps":[],"capabilities":["tap","click_any_text","observe","done"]}
+req=urllib.request.Request(os.environ['BRAIN_URL']+'/v1/agent/step', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST')
+with urllib.request.urlopen(req, timeout=300) as r:
+    body=json.loads(r.read().decode())
+print(json.dumps(body, ensure_ascii=False))
+assert body.get('action') in {'tap','click_any_text','observe','done'}
+PY
