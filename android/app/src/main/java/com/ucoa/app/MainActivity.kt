@@ -13,6 +13,7 @@ import android.widget.*
 import androidx.work.Data
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import org.json.JSONArray
 
 class MainActivity : Activity() {
     private lateinit var status: TextView
@@ -20,8 +21,9 @@ class MainActivity : Activity() {
     private lateinit var input: EditText
     private lateinit var connectButton: Button
     private val selectedMedia = mutableListOf<String>()
-    private val interpreter = TaskInterpreter()
+    private val planner = AgentActionPlanner()
     private var latestPlan: TaskInterpreter.PlanResult? = null
+    private var latestActions = JSONArray()
     private var latestTaskText: String = ""
     private val pickMedia = 401
     private val speech = 402
@@ -47,7 +49,7 @@ class MainActivity : Activity() {
 
         val scroll = ScrollView(this).apply { setFillViewport(true); layoutParams = LinearLayout.LayoutParams(-1, 0, 1f) }
         chat = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 18, 24, 24) }
-        addAssistantBubble("أنا جاهز. اكتب أي شيء تريد تنفيذه، وارفع فيديو أو صورة أو ملف عند الحاجة. سأحلل المطلوب وأعرض خطة قبل التنفيذ.")
+        addAssistantBubble("أنا جاهز. اكتب أي شيء تريد تنفيذه، وارفع فيديو أو صورة أو ملف عند الحاجة. سأحلل المطلوب وأعرض خطة قابلة للتنفيذ قبل التشغيل.")
         scroll.addView(chat); root.addView(scroll)
 
         val composer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(14, 8, 14, 14) }
@@ -62,7 +64,11 @@ class MainActivity : Activity() {
     private fun refreshConnectionState() {
         val enabled = PermissionCoordinator.isAccessibilityEnabled(this)
         val live = PermissionCoordinator.isServiceLive()
-        status.text = when { live -> "● متصل ويستطيع التفاعل مع الهاتف"; enabled -> "● الصلاحية مفعلة — ارجع للتطبيق لتأكيد الاتصال"; else -> "○ غير متصل — فعّل الوصول مرة واحدة" }
+        status.text = when {
+            live -> "● متصل ويستطيع التفاعل مع الهاتف"
+            enabled -> "● الصلاحية مفعلة — جارٍ انتظار الخدمة"
+            else -> "○ غير متصل — فعّل الوصول مرة واحدة"
+        }
         connectButton.text = when { live -> "الهاتف متصل"; enabled -> "فتح إعدادات الوصول"; else -> "ربط الهاتف بنقرة واحدة" }
         connectButton.isEnabled = !live
         if (enabled && !live) window.decorView.postDelayed({ if (!PermissionCoordinator.isServiceLive()) refreshConnectionState() }, 700)
@@ -70,11 +76,13 @@ class MainActivity : Activity() {
 
     private fun connectPhone() {
         PermissionCoordinator.openAccessibilitySettings(this)
-        Toast.makeText(this, "فعّل Universal Creative Agent ثم ارجع. لا توجد صلاحية اتصال إضافية مطلوبة.", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "فعّل Universal Creative Agent ثم ارجع. بعد ذلك سيبدأ التحكم من داخل التطبيق.", Toast.LENGTH_LONG).show()
     }
 
     private fun chooseMedia() {
-        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply { type = "*/*"; putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); addCategory(Intent.CATEGORY_OPENABLE) }, pickMedia)
+        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            type = "*/*"; putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); addCategory(Intent.CATEGORY_OPENABLE)
+        }, pickMedia)
     }
 
     private fun startSpeech() {
@@ -102,9 +110,11 @@ class MainActivity : Activity() {
     private fun analyzeTask() {
         latestTaskText = input.text.toString().trim(); if (latestTaskText.isEmpty()) return
         addUserBubble(latestTaskText + if (selectedMedia.isNotEmpty()) "\n📎 ${selectedMedia.size} ملف" else "")
-        latestPlan = interpreter.analyze(latestTaskText, selectedMedia)
+        val result = planner.plan(latestTaskText, selectedMedia)
+        latestPlan = result.plan
+        latestActions = result.actions
         if (selectedMedia.isNotEmpty()) queueBackgroundPreparation(latestTaskText)
-        addPlanCard(latestPlan!!)
+        addPlanCard(result.plan, result.target?.id)
         input.setText("")
     }
 
@@ -112,24 +122,27 @@ class MainActivity : Activity() {
         val builder = Data.Builder().putString("task", task).putInt("media_count", selectedMedia.size)
         builder.putStringArray("media_uris", selectedMedia.toTypedArray())
         WorkManager.getInstance(this).enqueue(OneTimeWorkRequestBuilder<MediaBackgroundWorker>().setInputData(builder.build()).build())
-        addAssistantBubble("الوسائط أُضيفت لمعالجة الخلفية. يمكنك مغادرة الشاشة أثناء التحضير المحلي.")
+        addAssistantBubble("الوسائط أُضيفت لمعالجة الخلفية المحلية.")
     }
 
-    private fun addAssistantBubble(text: String) { addBubble(text, false) }
-    private fun addUserBubble(text: String) { addBubble(text, true) }
+    private fun addAssistantBubble(text: String) = addBubble(text, false)
+    private fun addUserBubble(text: String) = addBubble(text, true)
     private fun addBubble(text: String, user: Boolean) {
-        val tv = TextView(this).apply { this.text = text; textSize = 16f; setTextColor(if (user) Color.WHITE else Color.DKGRAY); setPadding(18, 18, 18, 18); setBackgroundColor(if (user) 0xFF222222.toInt() else 0xFFF2F2F2.toInt()) }
+        val tv = TextView(this).apply {
+            this.text = text; textSize = 16f; setTextColor(if (user) Color.WHITE else Color.DKGRAY)
+            setPadding(18, 18, 18, 18); setBackgroundColor(if (user) 0xFF222222.toInt() else 0xFFF2F2F2.toInt())
+        }
         chat.addView(tv, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, 0, 0, 18) })
     }
 
-    private fun addPlanCard(plan: TaskInterpreter.PlanResult) {
+    private fun addPlanCard(plan: TaskInterpreter.PlanResult, skillId: String?) {
         val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(22, 20, 22, 20); setBackgroundColor(0xFFF7F7F7.toInt()) }
-        val heading = TextView(this).apply { text = "خطة التنفيذ"; textSize = 18f; setTextColor(Color.BLACK) }
+        val heading = TextView(this).apply { text = if (skillId != null) "خطة التنفيذ — مهارة $skillId" else "خطة التنفيذ"; textSize = 18f; setTextColor(Color.BLACK) }
         val summary = TextView(this).apply { text = plan.summary; textSize = 14f; setPadding(0, 10, 0, 8) }
         val steps = TextView(this).apply { text = plan.steps.mapIndexed { i, s -> "${i + 1}. $s" }.joinToString("\n"); textSize = 15f; setPadding(0, 8, 0, 18) }
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val review = Button(this).apply { text = "مراجعة وتعديل"; setOnClickListener { showReview(plan) } }
-        val execute = Button(this).apply { text = "تنفيذ الآن"; setOnClickListener { executePlan(latestPlan ?: plan, card) } }
+        val execute = Button(this).apply { text = "تنفيذ الآن"; setOnClickListener { executePlan(card) } }
         row.addView(execute, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)); row.addView(review, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         card.addView(heading); card.addView(summary); card.addView(steps); card.addView(row)
         chat.addView(card, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, 0, 0, 18) })
@@ -140,22 +153,22 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this).setTitle("تعديل خطة التنفيذ").setView(editor).setNegativeButton("إلغاء", null).setPositiveButton("حفظ الخطة") { _, _ ->
             val newSteps = editor.text.toString().lines().map { it.trim() }.filter { it.isNotEmpty() }.map { it.replaceFirst(Regex("^\\d+\\.\\s*"), "") }
             latestPlan = plan.copy(steps = newSteps)
-            addAssistantBubble("تم حفظ الخطة المعدلة. ستُستخدم النسخة المعدلة عند التنفيذ.")
+            addAssistantBubble("تم حفظ الخطة المعدلة. سيُستخدم محتواها في المتابعة.")
         }.show()
     }
 
-    private fun executePlan(plan: TaskInterpreter.PlanResult, card: View) {
-        if (!PermissionCoordinator.isServiceLive()) { Toast.makeText(this, "فعّل ربط الهاتف أولًا.", Toast.LENGTH_LONG).show(); connectPhone(); return }
-        val command = latestTaskText.lowercase()
-        val targetName = when { command.contains("capcut") -> "capcut"; command.contains("canva") -> "canva"; command.contains("chrome") -> "chrome"; command.contains("youtube") -> "youtube"; else -> "" }
-        val json = org.json.JSONArray().apply {
-            if (targetName.isNotEmpty()) {
-                val pkg = AppDiscovery.findPackage(this@MainActivity, targetName)
-                if (pkg != null) put(org.json.JSONObject().apply { put("action", "open_app"); put("package", pkg); put("delay_ms", 250) })
-            } else put(org.json.JSONObject().apply { put("action", "home"); put("delay_ms", 250) })
+    private fun executePlan(card: View) {
+        if (!PermissionCoordinator.isServiceLive()) {
+            Toast.makeText(this, "فعّل ربط الهاتف أولًا.", Toast.LENGTH_LONG).show(); connectPhone(); return
         }
         card.isEnabled = false
-        ActionPlanRunner().run(json.toString()) { event -> runOnUiThread { status.append("\n$event") } }
-        addAssistantBubble("بدأ التنفيذ المحلي للخطوة المتاحة مع تسجيل نجاح/فشل الإجراء. التنفيذ الشامل للمهام المعقدة يحتاج ربط عقل AI ومهارات التطبيقات.")
+        addAssistantBubble("بدأ وكيل التنفيذ: فتح الهدف، مراقبة الواجهة، تنفيذ عناصر المهارة، ثم تسجيل النتيجة.")
+        SmartActionRunner().run(latestActions,
+            onEvent = { event -> runOnUiThread {
+                status.text = event.take(240)
+                if (event.startsWith("UI:")) addAssistantBubble(event.take(1200))
+            } },
+            onFinished = { runOnUiThread { addAssistantBubble("انتهت دورة التنفيذ الحالية. راجع سجل المراقبة لمعرفة الأفعال التي نجحت أو تم تجاوزها."); card.isEnabled = true } }
+        )
     }
 }
