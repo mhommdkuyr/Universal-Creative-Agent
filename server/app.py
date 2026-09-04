@@ -8,7 +8,7 @@ from urllib.request import Request, urlopen
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="UCOA Universal Agent Brain", version="1.4.0")
+app = FastAPI(title="UCOA Universal Agent Brain", version="1.5.0")
 MODEL_BASE_URL = os.getenv("UCOA_MODEL_BASE_URL", "").rstrip("/")
 MODEL_API_KEY = os.getenv("UCOA_MODEL_API_KEY", "")
 MODEL_NAME = os.getenv("UCOA_MODEL_NAME", "")
@@ -61,7 +61,7 @@ def model_call(system: str, user: str, image_b64: str | None = None) -> str:
     payload = {
         "model": MODEL_NAME,
         "temperature": 0,
-        "max_tokens": int(os.getenv("UCOA_MAX_TOKENS", "64")),
+        "max_tokens": int(os.getenv("UCOA_MAX_TOKENS", "48")),
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}],
         "response_format": {"type": "json_object"},
     }
@@ -69,7 +69,7 @@ def model_call(system: str, user: str, image_b64: str | None = None) -> str:
     headers = {"Content-Type": "application/json"}
     if MODEL_API_KEY: headers["Authorization"] = f"Bearer {MODEL_API_KEY}"
     try:
-        with urlopen(Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST"), timeout=int(os.getenv("UCOA_MODEL_TIMEOUT", "180"))) as response:
+        with urlopen(Request(url, data=json.dumps(payload, ensure_ascii=False).encode(), headers=headers, method="POST"), timeout=int(os.getenv("UCOA_MODEL_TIMEOUT", "180"))) as response:
             body = json.loads(response.read().decode())
     except (HTTPError, URLError, TimeoutError) as exc:
         raise RuntimeError(f"model request failed: {exc}") from exc
@@ -94,12 +94,30 @@ def _job(job_id: str) -> dict[str, Any]:
     if result.get("status") == "failed": raise HTTPException(status_code=503, detail=result.get("error", "job failed"))
     return result
 
-PLAN_SYSTEM = "You are UCOA. Return JSON only: {\"summary\":string,\"steps\":string[]}. Make a minimal 2-3 step plan for the user's task."
-STEP_SYSTEM = "You control Android. Return JSON only: {\"action\": one allowed action, \"params\": object, \"message\": string, \"done\": boolean, \"wait_after_ms\": number}. Prefer click_any_text for visible UI labels."
+def fallback_plan(raw: str, task: str) -> dict[str, Any]:
+    clean = re.sub(r"\s+", " ", raw).strip()
+    chunks = [x.strip(" •-–—\t") for x in re.split(r"[\n.!؟]+", clean) if x.strip()]
+    if not chunks: chunks = [task]
+    steps = chunks[:3]
+    if len(steps) == 1: steps = ["ابدأ بتنفيذ المطلوب على الشاشة.", "نفذ الإجراء المطلوب ثم تحقق من النتيجة."]
+    return {"summary": clean[:220] or "خطة مولدة بواسطة العقل المحلي", "steps": steps}
+
+def fallback_step(raw: str, req: StepRequest) -> dict[str, Any]:
+    text = re.sub(r"\s+", " ", raw).strip().lower()
+    ui = req.ui_tree.lower()
+    for label in ["continue", "التالي", "متابعة", "موافق", "ok", "تأكيد", "submit", "إرسال"]:
+        if label.lower() in text or label.lower() in ui:
+            return {"action": "click_any_text", "params": {"text": label}, "message": "اختيار الزر الظاهر على الشاشة", "done": False, "wait_after_ms": 700}
+    if any(k in text for k in ["رجوع", "back"]): return {"action": "back", "params": {}, "message": "رجوع", "done": False, "wait_after_ms": 500}
+    if any(k in text for k in ["انتظر", "wait"]): return {"action": "wait", "params": {"ms": 1000}, "message": "انتظار استقرار الشاشة", "done": False, "wait_after_ms": 1000}
+    return {"action": "observe", "params": {}, "message": raw[:240], "done": False, "wait_after_ms": 500}
+
+PLAN_SYSTEM = "You are UCOA. Return only a compact 2-3 step plan. JSON is preferred: {summary:string,steps:string[]}. If JSON formatting fails, write one short sentence per step and no explanation."
+STEP_SYSTEM = "You control Android. Return exactly one action decision. JSON is preferred: {action,params,message,done,wait_after_ms}. If JSON formatting fails, write only the action you want. Allowed actions: " + ", ".join(ACTIONS) + "."
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return {"ok": True, "brain_configured": bool(MODEL_BASE_URL and MODEL_NAME), "model": MODEL_NAME or None, "local_vision": LOCAL_VISION}
+    return {"ok": True, "brain_configured": bool(MODEL_BASE_URL and MODEL_NAME), "model": MODEL_NAME or None, "local_vision": LOCAL_VISION, "structured_output": "best_effort_with_repair"}
 
 @app.post("/v1/agent/plan")
 def plan(req: PlanRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
@@ -107,10 +125,14 @@ def plan(req: PlanRequest, authorization: str | None = Header(default=None)) -> 
     return _submit("plan", lambda: _run_plan(req))
 
 def _run_plan(req: PlanRequest) -> dict[str, Any]:
-    result = extract_json(model_call(PLAN_SYSTEM, json.dumps({"task": req.task, "attachments": req.attachments[:8]}, ensure_ascii=False)))
-    steps = result.get("steps") if isinstance(result.get("steps"), list) else []
-    if not steps: raise ValueError("Model returned no plan steps")
-    return {"summary": str(result.get("summary", "خطة مولدة بواسطة النموذج المحلي")), "steps": [str(x) for x in steps[:5]]}
+    raw = model_call(PLAN_SYSTEM, json.dumps({"task": req.task, "attachments": req.attachments[:8]}, ensure_ascii=False))
+    try:
+        result = extract_json(raw)
+        steps = result.get("steps") if isinstance(result.get("steps"), list) else []
+        if steps: return {"summary": str(result.get("summary", "خطة مولدة بواسطة النموذج المحلي")), "steps": [str(x) for x in steps[:5]]}
+    except Exception:
+        pass
+    return fallback_plan(raw, req.task)
 
 @app.get("/v1/agent/jobs/{job_id}")
 def get_job(job_id: str, authorization: str | None = Header(default=None)) -> dict[str, Any]:
@@ -124,11 +146,15 @@ def step(req: StepRequest, authorization: str | None = Header(default=None)) -> 
 
 def _run_step(req: StepRequest) -> dict[str, Any]:
     prompt = json.dumps({"task": req.task, "step": req.step, "history": req.history[-4:], "ui_tree": req.ui_tree[:12000], "apps": req.installed_apps[:60], "capabilities": req.capabilities}, ensure_ascii=False)
-    result = extract_json(model_call(STEP_SYSTEM, prompt, req.screenshot_base64))
-    action = str(result.get("action", "observe")); action = action if action in ACTIONS else "observe"
-    result["action"] = action
-    result["params"] = result.get("params") if isinstance(result.get("params"), dict) else {}
-    result["done"] = bool(result.get("done", action == "done"))
-    result["wait_after_ms"] = max(150, min(5000, int(result.get("wait_after_ms", 500))))
-    result["message"] = str(result.get("message", ""))
-    return result
+    raw = model_call(STEP_SYSTEM, prompt, req.screenshot_base64)
+    try:
+        result = extract_json(raw)
+        action = str(result.get("action", "observe")); action = action if action in ACTIONS else "observe"
+        result["action"] = action
+        result["params"] = result.get("params") if isinstance(result.get("params"), dict) else {}
+        result["done"] = bool(result.get("done", action == "done"))
+        result["wait_after_ms"] = max(150, min(5000, int(result.get("wait_after_ms", 500))))
+        result["message"] = str(result.get("message", ""))
+        return result
+    except Exception:
+        return fallback_step(raw, req)
