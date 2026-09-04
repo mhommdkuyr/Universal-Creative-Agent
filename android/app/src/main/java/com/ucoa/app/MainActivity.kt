@@ -52,7 +52,7 @@ class MainActivity : Activity() {
     }
 
     private fun refreshConnectionState() {
-        val enabled = PermissionCoordinator.isAccessibilityEnabled(this); val live = PermissionCoordinator.isServiceLive(); val brainText = if (brain.configured()) " • عقل AI: جاهز" else " • عقل AI: غير مُعد"
+        val enabled = PermissionCoordinator.isAccessibilityEnabled(this); val live = PermissionCoordinator.isServiceLive(); val brainText = if (brain.configured()) " • عقل AI: مُعد" else " • عقل AI: غير مُعد"
         status.text = when { live -> "● الهاتف متصل — التحكم والمراقبة متاحان$brainText"; enabled -> "● الصلاحية مفعلة — جارٍ انتظار الخدمة$brainText"; else -> "○ غير متصل — فعّل الوصول مرة واحدة$brainText" }
         connectButton.text = when { live -> "الهاتف متصل"; enabled -> "إعادة فتح إعدادات الوصول"; else -> "ربط الهاتف بنقرة واحدة" }; connectButton.isEnabled = !live || enabled
     }
@@ -63,9 +63,6 @@ class MainActivity : Activity() {
         val token = EditText(this).apply { hint = "رمز الوصول للخادم (اختياري)"; setSingleLine(); setText(brain.token()); inputType = 0x81 }
         box.addView(endpoint); box.addView(token)
         val dialog = AlertDialog.Builder(this).setTitle("ربط عقل AI العالمي").setView(box).setNegativeButton("إلغاء", null).setPositiveButton("حفظ") { _, _ -> brain.saveConfig(endpoint.text.toString(), token.text.toString()); refreshConnectionState(); addAssistantBubble("تم حفظ اتصال عقل AI العالمي.") }.create()
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener { }
-        }
         dialog.setButton(AlertDialog.BUTTON_NEUTRAL, "اختبار الاتصال") { _, _ -> }
         dialog.show()
         dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener {
@@ -100,7 +97,7 @@ class MainActivity : Activity() {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val review = Button(this).apply { text = "مراجعة وتعديل"; setOnClickListener { showReview(latestPlan!!) } }
         val execute = Button(this).apply { text = "تنفيذ عالمي"; setOnClickListener { executePlan(card) } }
-        row.addView(execute, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)); row.addView(review, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f); )
+        row.addView(execute, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)); row.addView(review, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         card.addView(heading); card.addView(summary); card.addView(steps); card.addView(row); chat.addView(card, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, 0, 0, 16) }); latestPlanCard = card
     }
 
