@@ -86,7 +86,7 @@ jobs:
           for i in $(seq 1 60); do
             body=$(curl -fsS --max-time 10 "$BRAIN_URL/health" || true)
             echo "$body"
-            if echo "$body" | grep -q '"ok":true' && echo "$body" | grep -q '"brain_configured":true' && echo "$body" | grep -q 'SmolLM2-135M-Instruct-Q4_K_M'; then exit 0; fi
+            if echo "$body" | grep -q '"ok":true' && echo "$body" | grep -q '"brain_configured":true' && echo "$body" | grep -q 'Qwen2.5-0.5B-Instruct-Q2_K'; then exit 0; fi
             sleep 5
           done
           exit 1
