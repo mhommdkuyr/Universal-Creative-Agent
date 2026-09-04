@@ -86,4 +86,5 @@ if ! curl -fsS --max-time 5 "$UCOA_MODEL_BASE_URL/models" >/dev/null 2>&1; then
   exit 1
 fi
 
+cd /opt/render/project/src/server
 exec uvicorn app:app --host 0.0.0.0 --port "${PORT:-10000}"
