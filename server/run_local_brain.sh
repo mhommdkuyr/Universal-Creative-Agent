@@ -5,9 +5,10 @@ ROOT="${UCOA_LOCAL_HOME:-/opt/render/project/src/.ucoa-local}"
 BIN="$ROOT/llama-server"
 LLAMA_URL="${UCOA_LLAMA_URL:-https://github.com/ggml-org/llama.cpp/releases/download/b10586/llama-b10586-bin-ubuntu-x64.tar.gz}"
 LLAMA_SHA256="${UCOA_LLAMA_SHA256:-8fc43441b4d00d050589891c81e6b97d06039735af5d954deacf480b4f1f6b73}"
-MODEL_NAME="${UCOA_MODEL_NAME:-Qwen2.5-0.5B-Instruct-Q2_K}"
-MODEL_REPO="${UCOA_MODEL_REPO:-tensorblock/Qwen2.5-0.5B-Instruct-GGUF}"
-MODEL_TAG="${UCOA_MODEL_TAG:-Q2_K}"
+# Candidate benchmark: Q3_K_S is ~338 MB and offers a higher-bit quantization than Q2_K.
+MODEL_NAME="${UCOA_MODEL_NAME:-Qwen2.5-0.5B-Instruct-Q3_K_S}"
+MODEL_REPO="${UCOA_MODEL_REPO:-second-state/Qwen2.5-0.5B-Instruct-GGUF}"
+MODEL_TAG="${UCOA_MODEL_TAG:-Q3_K_S}"
 
 mkdir -p "$ROOT"
 if [[ ! -x "$BIN" ]]; then
@@ -65,7 +66,6 @@ if ! curl -fsS --max-time 5 "$UCOA_MODEL_BASE_URL/models" >/dev/null 2>&1; then
   exit 1
 fi
 
-# Prove raw local inference first.
 SELFTEST="$ROOT/selftest.json"
 cat > "$ROOT/selftest-payload.json" <<JSON
 {"model":"$MODEL_NAME","temperature":0,"max_tokens":24,"messages":[{"role":"system","content":"Answer briefly in Arabic."},{"role":"user","content":"قل فقط: أنا جاهز لتنفيذ مهمة على الهاتف."}]}
@@ -85,7 +85,6 @@ else
   echo "LOCAL_BRAIN_INFERENCE_FAILED"; cat "$SELFTEST" || true; tail -n 200 "$LOG" || true; exit 1
 fi
 
-# Exercise the real UCOA planning/action functions before public readiness.
 cd /opt/render/project/src/server
 if python - <<'PY'
 from app import PlanRequest, StepRequest, _run_plan, _run_step
@@ -97,9 +96,7 @@ print("LOCAL_AGENT_PLAN_OK", plan)
 print("LOCAL_AGENT_STEP_OK", step)
 PY
 then :; else
-  echo "LOCAL_AGENT_INFERENCE_FAILED"
-  tail -n 200 "$LOG" || true
-  exit 1
+  echo "LOCAL_AGENT_INFERENCE_FAILED"; tail -n 200 "$LOG" || true; exit 1
 fi
 
 exec uvicorn app:app --host 0.0.0.0 --port "${PORT:-10000}"
