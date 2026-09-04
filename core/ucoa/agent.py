@@ -6,7 +6,14 @@ from .reference import ReferenceAnalyzer
 from .planner import CreativePlanner
 from .creative import CreativeUnderstandingEngine
 from .executor import ExecutionEngine
-from .adapters import UniversalStubAdapter, BrowserUseAdapter, OpenHandsAdapter, AndroidIntentAdapter
+from .adapters import (
+    UniversalStubAdapter,
+    BrowserUseAdapter,
+    OpenHandsAdapter,
+    AndroidIntentAdapter,
+    CoreOperationsAdapter,
+    FFmpegAdapter,
+)
 from .verifier import VerificationEngine
 from .media_verify import compare_media
 
@@ -17,7 +24,13 @@ class UniversalCreativeAgent:
         self.reference = ReferenceAnalyzer()
         self.planner = CreativePlanner()
         self.creative = CreativeUnderstandingEngine()
-        adapters = [BrowserUseAdapter(), OpenHandsAdapter(), AndroidIntentAdapter()]
+        adapters = [
+            CoreOperationsAdapter(),
+            FFmpegAdapter(),
+            BrowserUseAdapter(),
+            OpenHandsAdapter(),
+            AndroidIntentAdapter(),
+        ]
         if include_stub:
             adapters.append(UniversalStubAdapter())
         self.executor = ExecutionEngine(adapters)
@@ -48,8 +61,6 @@ class UniversalCreativeAgent:
         plan = self.planner.plan(task, route)
         events = self.executor.execute(plan.actions)
 
-        # Verification is based on real produced media when paths are supplied.
-        # Without actual output media, do not manufacture a passing score.
         metrics = compare_media(reference_path, output_path)
         if metrics.get("status") == "compared":
             verification = self.verifier.compare(reference or {}, metrics)
