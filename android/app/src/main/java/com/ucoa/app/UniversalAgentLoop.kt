@@ -10,12 +10,12 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
     interface Listener { fun onEvent(text: String); fun onFinished(success: Boolean) }
     private val main = Handler(Looper.getMainLooper())
     private var running = false; private var task = ""; private var step = 0; private var listener: Listener? = null
-    private val history = JSONArray()
+    private val history = JSONArray(); private var attachments: List<String> = emptyList()
 
-    fun start(taskText: String, listener: Listener) {
+    fun start(taskText: String, listener: Listener, selectedAttachments: List<String> = emptyList()) {
         if (running) return
         if (UcoaAccessibilityService.instance == null) { listener.onEvent("العقل: خدمة التحكم غير متاحة"); listener.onFinished(false); return }
-        running = true; task = taskText; step = 0; history.clear(); this.listener = listener
+        running = true; task = taskText; step = 0; history.clear(); this.listener = listener; attachments = selectedAttachments
         listener.onEvent("العقل العالمي: بدأ حلقة الفهم ← الملاحظة ← التنفيذ ← التحقق."); next()
     }
     fun stop() { running = false; listener?.onEvent("العقل العالمي: تم إيقاف المهمة.") }
@@ -27,7 +27,7 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
         service.captureScreenshotBase64 { screenshot ->
             if (!running) return@captureScreenshotBase64
             val ui = service.observeUi(220)
-            brain.step(task, step, history, ui, screenshot, service.installedAppLabels()) { response ->
+            brain.step(task, step, history, ui, screenshot, service.installedAppLabels(), attachments) { response ->
                 main.post {
                     if (!running) return@post
                     if (!response.ok || response.body == null) { finish(false, "تعذر الوصول إلى عقل AI: ${response.error ?: "استجابة غير صالحة"}"); return@post }
@@ -53,6 +53,11 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
             "open_app_by_name" -> cb(s.openAppByName(p.optString("app_name")), p.optString("app_name"))
             "click_any_text" -> cb(s.clickAnyText(array(p, "texts")), "")
             "type_into_any" -> cb(s.typeIntoAny(array(p, "hints"), p.optString("text")), "")
+            "share_attachment" -> {
+                val index = p.optInt("index", 0)
+                val target = attachments.getOrNull(index)
+                if (target == null) cb(false, "attachment_index_missing=$index") else cb(s.shareAttachment(target, p.optString("target_package").takeIf { it.isNotBlank() }), "attachment_$index")
+            }
             "tap" -> cb(s.tap(p.optDouble("x").toFloat(), p.optDouble("y").toFloat()), "")
             "long_press" -> cb(s.longPress(p.optDouble("x").toFloat(), p.optDouble("y").toFloat(), p.optLong("duration_ms", 700L)), "")
             "swipe" -> cb(s.swipe(p.optDouble("x1").toFloat(), p.optDouble("y1").toFloat(), p.optDouble("x2").toFloat(), p.optDouble("y2").toFloat(), p.optLong("duration_ms", 500L)), "")
