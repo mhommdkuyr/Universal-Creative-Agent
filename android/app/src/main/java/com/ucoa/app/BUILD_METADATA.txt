@@ -1,0 +1,4 @@
+version=0.6.0
+applicationId=com.ucoa.app
+minSdk=26
+targetSdk=35
