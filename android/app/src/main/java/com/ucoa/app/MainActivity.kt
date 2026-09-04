@@ -22,6 +22,7 @@ class MainActivity : Activity() {
     private val selectedMedia = mutableListOf<String>()
     private val interpreter = TaskInterpreter()
     private var latestPlan: TaskInterpreter.PlanResult? = null
+    private var latestTaskText: String = ""
     private val pickMedia = 401
     private val speech = 402
 
@@ -50,19 +51,10 @@ class MainActivity : Activity() {
         scroll.addView(chat); root.addView(scroll)
 
         val composer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(14, 8, 14, 14) }
-        val attach = ImageButton(this).apply {
-            setImageResource(android.R.drawable.ic_menu_add); contentDescription = "رفع الوسائط"; setBackgroundColor(Color.TRANSPARENT)
-            setOnClickListener { chooseMedia() }
-        }
-        val mic = ImageButton(this).apply {
-            setImageResource(android.R.drawable.ic_btn_speak_now); contentDescription = "الصوت"; setBackgroundColor(Color.TRANSPARENT)
-            setOnClickListener { startSpeech() }
-        }
+        val attach = ImageButton(this).apply { setImageResource(android.R.drawable.ic_menu_add); contentDescription = "رفع الوسائط"; setBackgroundColor(Color.TRANSPARENT); setOnClickListener { chooseMedia() } }
+        val mic = ImageButton(this).apply { setImageResource(android.R.drawable.ic_btn_speak_now); contentDescription = "الصوت"; setBackgroundColor(Color.TRANSPARENT); setOnClickListener { startSpeech() } }
         input = EditText(this).apply { hint = "اكتب ما تريد تنفيذه…"; minLines = 1; maxLines = 5; setPadding(16, 12, 16, 12); layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f) }
-        val send = ImageButton(this).apply {
-            setImageResource(android.R.drawable.ic_menu_send); contentDescription = "إرسال"; setBackgroundColor(Color.TRANSPARENT)
-            setOnClickListener { analyzeTask() }
-        }
+        val send = ImageButton(this).apply { setImageResource(android.R.drawable.ic_menu_send); contentDescription = "إرسال"; setBackgroundColor(Color.TRANSPARENT); setOnClickListener { analyzeTask() } }
         composer.addView(attach, LinearLayout.LayoutParams(48, 56)); composer.addView(mic, LinearLayout.LayoutParams(48, 56)); composer.addView(input); composer.addView(send, LinearLayout.LayoutParams(56, 56)); root.addView(composer)
         return root
     }
@@ -107,19 +99,18 @@ class MainActivity : Activity() {
     }
 
     private fun analyzeTask() {
-        val text = input.text.toString().trim(); if (text.isEmpty()) return
-        addUserBubble(text + if (selectedMedia.isNotEmpty()) "\n📎 ${selectedMedia.size} ملف" else "")
-        latestPlan = interpreter.analyze(text, selectedMedia)
-        if (selectedMedia.isNotEmpty()) queueBackgroundPreparation(text)
+        latestTaskText = input.text.toString().trim(); if (latestTaskText.isEmpty()) return
+        addUserBubble(latestTaskText + if (selectedMedia.isNotEmpty()) "\n📎 ${selectedMedia.size} ملف" else "")
+        latestPlan = interpreter.analyze(latestTaskText, selectedMedia)
+        if (selectedMedia.isNotEmpty()) queueBackgroundPreparation(latestTaskText)
         addPlanCard(latestPlan!!)
         input.setText("")
     }
 
     private fun queueBackgroundPreparation(task: String) {
         val data = Data.Builder().putString("task", task).putInt("media_count", selectedMedia.size).build()
-        val request = OneTimeWorkRequestBuilder<MediaBackgroundWorker>().setInputData(data).build()
-        WorkManager.getInstance(this).enqueue(request)
-        addAssistantBubble("الوسائط أُضيفت إلى معالجة الخلفية. لن تحتاج لإبقاء هذه الشاشة مفتوحة لتحضيرها.")
+        WorkManager.getInstance(this).enqueue(OneTimeWorkRequestBuilder<MediaBackgroundWorker>().setInputData(data).build())
+        addAssistantBubble("الوسائط أُضيفت لمعالجة الخلفية. لا تحتاج لإبقاء شاشة المحادثة مفتوحة أثناء التحضير المحلي.")
     }
 
     private fun addAssistantBubble(text: String) { addBubble(text, false) }
@@ -131,6 +122,7 @@ class MainActivity : Activity() {
 
     private fun addPlanCard(plan: TaskInterpreter.PlanResult) {
         val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(22, 20, 22, 20); setBackgroundColor(0xFFF7F7F7.toInt()) }
+        card.tag = plan
         val heading = TextView(this).apply { text = "خطة التنفيذ"; textSize = 18f; setTextColor(Color.BLACK) }
         val summary = TextView(this).apply { text = plan.summary; textSize = 14f; setPadding(0, 10, 0, 8) }
         val steps = TextView(this).apply { text = plan.steps.mapIndexed { i, s -> "${i + 1}. $s" }.joinToString("\n"); textSize = 15f; setPadding(0, 8, 0, 18) }
@@ -147,15 +139,28 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this).setTitle("تعديل خطة التنفيذ").setView(editor).setNegativeButton("إلغاء", null).setPositiveButton("حفظ الخطة") { _, _ ->
             val newSteps = editor.text.toString().lines().map { it.trim() }.filter { it.isNotEmpty() }.map { it.replaceFirst(Regex("^\\d+\\.\\s*"), "") }
             latestPlan = plan.copy(steps = newSteps)
-            addAssistantBubble("تم حفظ الخطة المعدلة. ستُستخدم هذه النسخة عند الضغط على «تنفيذ الآن».")
+            addAssistantBubble("تم حفظ الخطة المعدلة. ستُستخدم النسخة المعدلة عند التنفيذ.")
         }.show()
     }
 
     private fun executePlan(plan: TaskInterpreter.PlanResult, card: View) {
         if (!PermissionCoordinator.isServiceLive()) { Toast.makeText(this, "فعّل ربط الهاتف أولًا.", Toast.LENGTH_LONG).show(); connectPhone(); return }
-        val json = org.json.JSONArray().put(org.json.JSONObject().apply { put("action", "home"); put("delay_ms", 250) })
+        val command = latestTaskText.lowercase()
+        val targetName = when {
+            command.contains("capcut") -> "capcut"
+            command.contains("canva") -> "canva"
+            command.contains("chrome") -> "chrome"
+            command.contains("youtube") -> "youtube"
+            else -> ""
+        }
+        val json = org.json.JSONArray().apply {
+            if (targetName.isNotEmpty()) {
+                val pkg = AppDiscovery.findPackage(this@MainActivity, targetName)
+                if (pkg != null) put(org.json.JSONObject().apply { put("action", "open_app"); put("package", pkg); put("delay_ms", 250) })
+            } else put(org.json.JSONObject().apply { put("action", "home"); put("delay_ms", 250) })
+        }
         card.isEnabled = false
         ActionPlanRunner().run(json.toString()) { event -> runOnUiThread { status.append("\n$event") } }
-        addAssistantBubble("بدأ التنفيذ المحلي. الإجراءات المؤيدة حاليًا ستُرسل إلى طبقة التحكم، بينما المهام المعقدة تحتاج مزود AI/مهارة التطبيق المناسبة.")
+        addAssistantBubble("بدأ التنفيذ المحلي للخطوة المتاحة، مع تسجيل نجاح/فشل الإجراء. المهام الإبداعية المعقدة تحتاج مهارة التطبيق ومزود AI متصلين بالنواة.")
     }
 }
