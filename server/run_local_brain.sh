@@ -65,5 +65,37 @@ if ! curl -fsS --max-time 5 "$UCOA_MODEL_BASE_URL/models" >/dev/null 2>&1; then
   exit 1
 fi
 
+# Real startup inference probe: prove the model can generate structured Arabic JSON
+# before Uvicorn is exposed publicly. This prevents a false-positive 'healthy' state.
+SELFTEST="$ROOT/selftest.json"
+cat > "$ROOT/selftest-payload.json" <<JSON
+{"model":"$MODEL_NAME","temperature":0,"max_tokens":32,"response_format":{"type":"json_object"},"messages":[{"role":"system","content":"Return JSON only: {\\\"ok\\\":true,\\\"answer\\\":string}."},{"role":"user","content":"قل بالعربية بجملة قصيرة إنك جاهز لتنفيذ مهمة على الهاتف."}]}
+JSON
+if curl -fsS --max-time 90 -H 'Content-Type: application/json' -X POST "$UCOA_MODEL_BASE_URL/chat/completions" --data-binary @"$ROOT/selftest-payload.json" -o "$SELFTEST"; then
+  if python - "$SELFTEST" <<'PY'
+import json, sys
+p=sys.argv[1]
+x=json.load(open(p, encoding='utf-8'))
+content=x.get('choices',[{}])[0].get('message',{}).get('content','')
+y=json.loads(content)
+assert y.get('ok') is True
+assert isinstance(y.get('answer'), str) and y['answer'].strip()
+print('LOCAL_BRAIN_INFERENCE_OK', y['answer'])
+PY
+  then
+    :
+  else
+    echo "LOCAL_BRAIN_INFERENCE_INVALID"
+    cat "$SELFTEST" || true
+    tail -n 200 "$LOG" || true
+    exit 1
+  fi
+else
+  echo "LOCAL_BRAIN_INFERENCE_FAILED"
+  cat "$SELFTEST" || true
+  tail -n 200 "$LOG" || true
+  exit 1
+fi
+
 cd /opt/render/project/src/server
 exec uvicorn app:app --host 0.0.0.0 --port "${PORT:-10000}"
