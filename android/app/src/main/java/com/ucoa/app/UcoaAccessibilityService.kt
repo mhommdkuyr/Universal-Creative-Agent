@@ -3,12 +3,17 @@ package com.ucoa.app
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.Path
+import android.os.Build
 import android.os.Bundle
+import android.util.Base64
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 
 class UcoaAccessibilityService : AccessibilityService() {
     companion object { var instance: UcoaAccessibilityService? = null }
@@ -60,14 +65,11 @@ class UcoaAccessibilityService : AccessibilityService() {
 
     fun openApp(pkg: String): Boolean = try {
         val i = packageManager.getLaunchIntentForPackage(pkg) ?: return false
-        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        startActivity(i)
-        true
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i); true
     } catch (_: Exception) { false }
 
     fun openAppByName(query: String): Boolean {
-        val q = query.trim().lowercase()
-        val pm = packageManager
+        val q = query.trim().lowercase(); val pm = packageManager
         val candidates = pm.getInstalledApplications(0)
             .filter { !it.packageName.equals(packageName, true) }
             .mapNotNull { app ->
@@ -79,45 +81,57 @@ class UcoaAccessibilityService : AccessibilityService() {
     }
 
     fun openUrl(url: String): Boolean = try {
-        startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
-        true
+        startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }); true
     } catch (_: Exception) { false }
 
     fun observeUi(maxNodes: Int = 160): String {
         val result = JSONArray()
         allNodes(maxNodes).forEach { node ->
-            val b = android.graphics.Rect()
-            node.getBoundsInScreen(b)
+            val b = android.graphics.Rect(); node.getBoundsInScreen(b)
             result.put(JSONObject().apply {
-                put("class", node.className ?: "")
-                put("text", node.text ?: "")
-                put("hint", node.hintText ?: "")
-                put("description", node.contentDescription ?: "")
-                put("clickable", node.isClickable)
-                put("editable", node.isEditable)
-                put("enabled", node.isEnabled)
-                put("focused", node.isFocused)
+                put("class", node.className ?: ""); put("text", node.text ?: ""); put("hint", node.hintText ?: "")
+                put("description", node.contentDescription ?: ""); put("clickable", node.isClickable); put("editable", node.isEditable)
+                put("enabled", node.isEnabled); put("focused", node.isFocused)
                 put("bounds", JSONObject().apply { put("left", b.left); put("top", b.top); put("right", b.right); put("bottom", b.bottom) })
             })
         }
         return result.toString()
     }
 
+    fun captureScreenshotBase64(callback: (String?) -> Unit) {
+        if (Build.VERSION.SDK_INT < 30) { callback(null); return }
+        try {
+            takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+                override fun onSuccess(result: ScreenshotResult) {
+                    var bitmap: Bitmap? = null
+                    try {
+                        bitmap = Bitmap.wrapHardwareBuffer(result.hardwareBuffer, result.colorSpace)
+                        val copy = bitmap?.copy(Bitmap.Config.ARGB_8888, false)
+                        result.hardwareBuffer.close()
+                        if (copy == null) { callback(null); return }
+                        val out = ByteArrayOutputStream()
+                        copy.compress(Bitmap.CompressFormat.JPEG, 65, out)
+                        copy.recycle()
+                        callback(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP))
+                    } catch (_: Exception) {
+                        runCatching { result.hardwareBuffer.close() }; callback(null)
+                    } finally { bitmap?.recycle() }
+                }
+                override fun onFailure(errorCode: Int) { callback(null) }
+            })
+        } catch (_: Exception) { callback(null) }
+    }
+
     private fun allNodes(max: Int = 400): List<AccessibilityNodeInfo> {
         val result = mutableListOf<AccessibilityNodeInfo>()
         fun walk(node: AccessibilityNodeInfo?) {
             if (node == null || result.size >= max) return
-            result += node
-            for (i in 0 until node.childCount) walk(node.getChild(i))
+            result += node; for (i in 0 until node.childCount) walk(node.getChild(i))
         }
-        windows.mapNotNull { it.root }.forEach(::walk)
-        return result
+        windows.mapNotNull { it.root }.forEach(::walk); return result
     }
 
-    private fun nodeText(node: AccessibilityNodeInfo): String = listOfNotNull(
-        node.text?.toString(), node.hintText?.toString(), node.contentDescription?.toString()
-    ).joinToString(" ")
-
+    private fun nodeText(node: AccessibilityNodeInfo): String = listOfNotNull(node.text?.toString(), node.hintText?.toString(), node.contentDescription?.toString()).joinToString(" ")
     private fun normalize(value: String): String = value.trim().lowercase().replace("ـ", "").replace(Regex("\\s+"), " ")
 
     private fun clickNode(node: AccessibilityNodeInfo): Boolean {
