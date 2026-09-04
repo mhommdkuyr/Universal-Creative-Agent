@@ -21,6 +21,21 @@ class AgentBrainClient(private val context: Context) {
     fun token(): String = prefs.getString("token", "")?.trim().orEmpty()
     fun saveConfig(endpoint: String, token: String) { prefs.edit().putString("endpoint", endpoint.trim().trimEnd('/')).putString("token", token.trim()).apply() }
 
+    fun health(callback: (Boolean, String) -> Unit) {
+        val base = endpoint(); if (base.isBlank()) { callback(false, "عنوان العقل غير مُعد"); return }
+        executor.execute {
+            var conn: HttpURLConnection? = null
+            try {
+                conn = (URL(base + "/health").openConnection() as HttpURLConnection).apply { requestMethod = "GET"; connectTimeout = 10000; readTimeout = 15000; token().takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") } }
+                val code = conn.responseCode; val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                val text = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
+                val body = runCatching { JSONObject(text) }.getOrNull()
+                callback(code in 200..299, if (body != null) "${body.optBoolean("brain_configured", false).let { if (it) "النموذج مهيأ" else "الخادم متصل لكن النموذج غير مهيأ" }}" else "HTTP $code")
+            } catch (e: Exception) { callback(false, e.message ?: e.javaClass.simpleName) }
+            finally { conn?.disconnect() }
+        }
+    }
+
     fun plan(task: String, attachments: List<String>, callback: (Response) -> Unit) {
         val payload = JSONObject().apply {
             put("task", task); put("attachments", JSONArray(attachments))
@@ -33,22 +48,19 @@ class AgentBrainClient(private val context: Context) {
         val payload = JSONObject().apply {
             put("task", task); put("step", step); put("max_steps", 60); put("history", history); put("ui_tree", uiTree)
             if (!screenshotBase64.isNullOrBlank()) put("screenshot_base64", screenshotBase64)
-            put("installed_apps", JSONArray(installedApps.take(250)))
-            put("attachments", JSONArray(attachments.take(20)))
+            put("installed_apps", JSONArray(installedApps.take(250))); put("attachments", JSONArray(attachments.take(20)))
             put("capabilities", JSONArray(listOf("open_url", "open_app_by_name", "click_any_text", "type_into_any", "share_attachment", "tap", "long_press", "swipe", "back", "home", "wait", "observe", "done")))
         }
         post("/v1/agent/step", payload, callback)
     }
 
     private fun post(path: String, payload: JSONObject, callback: (Response) -> Unit) {
-        val base = endpoint()
-        if (base.isBlank()) { callback(Response(false, null, "لم يتم إعداد عنوان عقل AI بعد")); return }
+        val base = endpoint(); if (base.isBlank()) { callback(Response(false, null, "لم يتم إعداد عنوان عقل AI بعد")); return }
         executor.execute {
             var conn: HttpURLConnection? = null
             try {
                 conn = (URL(base + path).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"; connectTimeout = 12000; readTimeout = 60000; doOutput = true
-                    setRequestProperty("Content-Type", "application/json")
+                    requestMethod = "POST"; connectTimeout = 12000; readTimeout = 60000; doOutput = true; setRequestProperty("Content-Type", "application/json")
                     token().takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") }
                 }
                 conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
