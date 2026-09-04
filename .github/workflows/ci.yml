@@ -55,9 +55,27 @@ jobs:
           arch: x86_64
           target: default
           script: |
+            set -e
             adb install apk/app-debug.apk
+            adb logcat -c || true
             adb shell am force-stop com.ucoa.app || true
-            adb shell am start -n com.ucoa.app/.MainActivity
-            sleep 3
-            adb shell pidof com.ucoa.app
-            adb shell dumpsys activity activities | grep -q 'com.ucoa.app'
+            adb shell am start -W -n com.ucoa.app/.MainActivity
+            sleep 2
+            adb logcat -d -t 500 > logcat.txt || true
+            if grep -Eqi 'FATAL EXCEPTION|AndroidRuntime' logcat.txt; then
+              cat logcat.txt
+              exit 1
+            fi
+            adb shell dumpsys activity activities > activities.txt
+            if ! grep -Eqi 'mResumedActivity.*com\.ucoa\.app|topResumedActivity.*com\.ucoa\.app|ResumedActivity.*com\.ucoa\.app' activities.txt; then
+              cat activities.txt
+              adb logcat -d -t 500 || true
+              exit 1
+            fi
+            adb shell uiautomator dump /sdcard/window.xml >/dev/null 2>&1 || true
+            adb shell cat /sdcard/window.xml > window.xml 2>/dev/null || true
+            if ! grep -q 'Universal Creative Agent' window.xml; then
+              cat window.xml || true
+              adb logcat -d -t 500 || true
+              exit 1
+            fi
