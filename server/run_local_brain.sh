@@ -5,9 +5,9 @@ ROOT="${UCOA_LOCAL_HOME:-/opt/render/project/src/.ucoa-local}"
 BIN="$ROOT/llama-server"
 LLAMA_URL="${UCOA_LLAMA_URL:-https://github.com/ggml-org/llama.cpp/releases/download/b10586/llama-b10586-bin-ubuntu-x64.tar.gz}"
 LLAMA_SHA256="${UCOA_LLAMA_SHA256:-8fc43441b4d00d050589891c81e6b97d06039735af5d954deacf480b4f1f6b73}"
-MODEL_NAME="${UCOA_MODEL_NAME:-Qwen2.5-0.5B-Instruct-Q3_K_S}"
+MODEL_NAME="${UCOA_MODEL_NAME:-Qwen2.5-0.5B-Instruct-Q2_K}"
 MODEL_REPO="${UCOA_MODEL_REPO:-tensorblock/Qwen2.5-0.5B-Instruct-GGUF}"
-MODEL_TAG="${UCOA_MODEL_TAG:-Q3_K_S}"
+MODEL_TAG="${UCOA_MODEL_TAG:-Q2_K}"
 
 mkdir -p "$ROOT"
 if [[ ! -x "$BIN" ]]; then
@@ -65,7 +65,7 @@ if ! curl -fsS --max-time 5 "$UCOA_MODEL_BASE_URL/models" >/dev/null 2>&1; then
   exit 1
 fi
 
-# Real startup inference probe: prove the model can generate non-empty Arabic text.
+# Prove raw local inference first.
 SELFTEST="$ROOT/selftest.json"
 cat > "$ROOT/selftest-payload.json" <<JSON
 {"model":"$MODEL_NAME","temperature":0,"max_tokens":24,"messages":[{"role":"system","content":"Answer briefly in Arabic."},{"role":"user","content":"قل فقط: أنا جاهز لتنفيذ مهمة على الهاتف."}]}
@@ -78,38 +78,28 @@ content=x.get('choices',[{}])[0].get('message',{}).get('content','').strip()
 assert content
 print('LOCAL_BRAIN_INFERENCE_OK', content)
 PY
-  then
-    :
-  else
-    echo "LOCAL_BRAIN_INFERENCE_INVALID"
-    cat "$SELFTEST" || true
-    tail -n 200 "$LOG" || true
-    exit 1
+  then :; else
+    echo "LOCAL_BRAIN_INFERENCE_INVALID"; cat "$SELFTEST" || true; tail -n 200 "$LOG" || true; exit 1
   fi
 else
-  echo "LOCAL_BRAIN_INFERENCE_FAILED"
-  cat "$SELFTEST" || true
-  tail -n 200 "$LOG" || true
-  exit 1
+  echo "LOCAL_BRAIN_INFERENCE_FAILED"; cat "$SELFTEST" || true; tail -n 200 "$LOG" || true; exit 1
 fi
 
-# Exercise the actual UCOA plan/step logic before public readiness.
+# Exercise the real UCOA planning/action functions before public readiness.
+cd /opt/render/project/src/server
 if python - <<'PY'
 from app import PlanRequest, StepRequest, _run_plan, _run_step
 plan = _run_plan(PlanRequest(task="افتح التطبيق المناسب ثم نفذ المهمة وتحقق من النتيجة."))
 assert isinstance(plan.get("steps"), list) and len(plan["steps"]) >= 2
-step = _run_step(StepRequest(task="اضغط زر Continue الظاهر على الشاشة.", ui_tree='[{"text":"Continue"}]', capabilities=["click_any_text","tap","observe","done"]))
+step = _run_step(StepRequest(task="اضغط زر Continue الظاهر على الشاشة.", ui_tree='[{"text":"Continue","class":"android.widget.Button"}]', capabilities=["click_any_text","tap","observe","done"]))
 assert step.get("action") in {"click_any_text", "tap", "observe", "done"}
 print("LOCAL_AGENT_PLAN_OK", plan)
 print("LOCAL_AGENT_STEP_OK", step)
 PY
-then
-  :
-else
+then :; else
   echo "LOCAL_AGENT_INFERENCE_FAILED"
   tail -n 200 "$LOG" || true
   exit 1
 fi
 
-cd /opt/render/project/src/server
 exec uvicorn app:app --host 0.0.0.0 --port "${PORT:-10000}"
