@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: ucoa-agent-brain
+    runtime: python
+    plan: free
+    rootDir: server
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: UCOA_MODEL_BASE_URL
+        sync: false
+      - key: UCOA_MODEL_NAME
+        sync: false
+      - key: UCOA_MODEL_API_KEY
+        sync: false
+      - key: UCOA_AGENT_TOKEN
+        sync: false
