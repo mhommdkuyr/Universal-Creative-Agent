@@ -12,15 +12,13 @@ class CoreOperationsAdapter:
     CORE_ACTIONS = {
         "ingest_reference", "analyze_reference", "inspect_target_project", "map_assets",
         "build_edit_plan", "repair_deviations", "observe", "verify_against_reference",
-        "visual_verify", "verify_output", "finish",
+        "visual_verify", "verify_output", "finish", "render_preview", "render_final",
     }
 
     def supports(self, action: Action) -> bool:
         return action.type in self.CORE_ACTIONS
 
     def execute(self, action: Action):
-        # These steps are orchestration/state transitions. They are intentionally
-        # reported as delegated rather than falsely claiming an external app changed.
         return {"status": "delegated", "action": action.type}
 
 
