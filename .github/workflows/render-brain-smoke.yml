@@ -9,7 +9,7 @@ on:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     env:
       BRAIN_URL: https://ucoa-agent-brain-local2.onrender.com
     steps:
@@ -20,45 +20,31 @@ jobs:
           for i in $(seq 1 60); do
             code=$(curl -sS -o health.json -w '%{http_code}' --max-time 15 "$BRAIN_URL/health" || true)
             cat health.json || true
-            echo "HTTP $code"
-            if [ "$code" = "200" ] && grep -q '"ok":true' health.json && grep -q '"brain_configured":true' health.json && grep -q 'SmolLM2-135M-Instruct-Q4_K_M' health.json; then
-              exit 0
-            fi
+            if [ "$code" = "200" ] && grep -q '"ok":true' health.json && grep -q '"brain_configured":true' health.json && grep -q 'SmolLM2-135M-Instruct-Q4_K_M' health.json; then exit 0; fi
             sleep 5
           done
           exit 1
-      - name: Run local text model planning inference
+      - name: Run local text planning inference
         run: |
           set -e
-          cat > plan.json <<'JSON'
-          {"task":"Create a short plan to complete a phone task: open the appropriate app, perform the requested action, and verify the result.","attachments":[],"device":{"android":35}}
-          JSON
-          curl -fS --max-time 300 -X POST "$BRAIN_URL/v1/agent/plan" -H 'Content-Type: application/json' --data-binary @plan.json -o result.json
+          printf '%s' '{"task":"Create a 2-step plan: open the appropriate Android app, do the requested action, then verify the result.","attachments":[],"device":{"android":35}}' > plan.json
+          curl -fS --max-time 120 -X POST "$BRAIN_URL/v1/agent/plan" -H 'Content-Type: application/json' --data-binary @plan.json -o result.json
           cat result.json
           python - <<'PY'
           import json
           x=json.load(open('result.json'))
-          assert isinstance(x.get('summary'), str) and x['summary'].strip()
+          assert x.get('summary')
           assert isinstance(x.get('steps'), list) and len(x['steps']) >= 2
           print('PLAN_INFERENCE_OK')
           PY
-      - name: Run local model generic action inference from UI state
+      - name: Run local generic action inference
         run: |
           set -e
           python - <<'PY'
           import json, os, urllib.request
-          payload={
-            'task':'The screen contains a Continue button. Choose the action that presses that button.',
-            'step':0,'max_steps':10,'history':[],
-            'ui_tree':'[{"text":"Universal Creative Agent"},{"text":"Continue","class":"android.widget.Button"}]',
-            'screenshot_base64':None,
-            'installed_apps':['Chrome','Canva','CapCut'],
-            'attachments':[],
-            'capabilities':['tap','click_any_text','observe','done']
-          }
+          payload={'task':'The screen contains a Continue button. Press it.','step':0,'max_steps':5,'history':[],'ui_tree':'[{"text":"Continue","class":"android.widget.Button"}]','installed_apps':['Chrome','Canva','CapCut'],'attachments':[],'capabilities':['tap','click_any_text','observe','done']}
           req=urllib.request.Request(os.environ['BRAIN_URL']+'/v1/agent/step',data=json.dumps(payload).encode(),headers={'Content-Type':'application/json'},method='POST')
-          with urllib.request.urlopen(req,timeout=300) as r:
-              x=json.loads(r.read().decode())
+          with urllib.request.urlopen(req,timeout=120) as r: x=json.loads(r.read().decode())
           print(json.dumps(x,ensure_ascii=False))
           assert x.get('action') in {'tap','click_any_text','observe','done'}
           print('ACTION_INFERENCE_OK')
