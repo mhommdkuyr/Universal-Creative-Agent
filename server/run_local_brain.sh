@@ -5,10 +5,10 @@ ROOT="${UCOA_LOCAL_HOME:-/opt/render/project/src/.ucoa-local}"
 BIN="$ROOT/llama-server"
 LLAMA_URL="${UCOA_LLAMA_URL:-https://github.com/ggml-org/llama.cpp/releases/download/b10586/llama-b10586-bin-ubuntu-x64.tar.gz}"
 LLAMA_SHA256="${UCOA_LLAMA_SHA256:-8fc43441b4d00d050589891c81e6b97d06039735af5d954deacf480b4f1f6b73}"
-# Render Free has 512 MB RAM / 0.1 CPU, so use a tiny multilingual instruction model.
-# Qwen2.5-0.5B-Instruct is substantially more suitable for agent planning/JSON than SmolLM2.
+# Render Free: 512 MB RAM / 0.1 CPU. TensorBlock's verified Q2_K build is ~339 MB,
+# leaving materially more headroom than the official Qwen Q2_K file (~415 MB).
 MODEL_NAME="${UCOA_MODEL_NAME:-Qwen2.5-0.5B-Instruct-Q2_K}"
-MODEL_REPO="${UCOA_MODEL_REPO:-Qwen/Qwen2.5-0.5B-Instruct-GGUF}"
+MODEL_REPO="${UCOA_MODEL_REPO:-tensorblock/Qwen2.5-0.5B-Instruct-GGUF}"
 MODEL_TAG="${UCOA_MODEL_TAG:-Q2_K}"
 
 mkdir -p "$ROOT"
