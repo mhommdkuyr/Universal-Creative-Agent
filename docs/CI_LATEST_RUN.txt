@@ -1,0 +1,1 @@
+Check GitHub Actions workflow `CI` for the newest commit before installing an APK. The release artifact must come from a run with all four gates green.
