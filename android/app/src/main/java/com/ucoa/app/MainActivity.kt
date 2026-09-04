@@ -67,7 +67,7 @@ class MainActivity : Activity() {
         dialog.show()
         dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener {
             brain.saveConfig(endpoint.text.toString(), token.text.toString()); status.text = "يجري اختبار اتصال عقل AI…"
-            brain.plan("اختبار اتصال فقط. لا تنفذ أي إجراء على الهاتف.", emptyList()) { r -> runOnUiThread { status.text = if (r.ok) "● تم الاتصال بعقل AI" else "○ فشل الاتصال: ${r.error ?: "استجابة غير صالحة"}" } }
+            brain.health { ok, detail -> runOnUiThread { status.text = if (ok) "● تم الوصول إلى خادم عقل AI — $detail" else "○ فشل الاتصال: $detail" } }
         }
     }
 
@@ -114,6 +114,6 @@ class MainActivity : Activity() {
         UniversalAgentLoop(brain).start(taskForAgent, object : UniversalAgentLoop.Listener {
             override fun onEvent(text: String) { runOnUiThread { status.text = text.take(260); if (text.contains("—") || text.startsWith("العقل")) addAssistantBubble(text.take(900)) } }
             override fun onFinished(success: Boolean) { runOnUiThread { card.isEnabled = true; addAssistantBubble(if (success) "✅ أعلن العقل اكتمال المهمة بعد التحقق." else "⚠️ توقفت الدورة قبل إعلان الاكتمال. راجع آخر حالة في السجل.") } }
-        })
+        }, selectedMedia.toList())
     }
 }
