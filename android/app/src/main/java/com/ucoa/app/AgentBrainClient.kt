@@ -10,14 +10,15 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
 
-/** Network transport for the universal agent brain. No model/vendor is hard-coded here. */
+/** Network transport for the universal agent brain. Vendor/model remain replaceable. */
 class AgentBrainClient(private val context: Context) {
     data class Response(val ok: Boolean, val body: JSONObject?, val error: String? = null)
     private val executor = Executors.newSingleThreadExecutor()
     private val prefs get() = context.getSharedPreferences("ucoa_brain", Context.MODE_PRIVATE)
+    private val defaultEndpoint = "https://ucoa-agent-brain-local.onrender.com"
 
     fun configured(): Boolean = endpoint().isNotBlank()
-    fun endpoint(): String = prefs.getString("endpoint", "")?.trim().orEmpty().trimEnd('/')
+    fun endpoint(): String = prefs.getString("endpoint", defaultEndpoint)?.trim().orEmpty().trimEnd('/')
     fun token(): String = prefs.getString("token", "")?.trim().orEmpty()
     fun saveConfig(endpoint: String, token: String) { prefs.edit().putString("endpoint", endpoint.trim().trimEnd('/')).putString("token", token.trim()).apply() }
 
