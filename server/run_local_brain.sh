@@ -41,8 +41,9 @@ fi
   --host 127.0.0.1 \
   --port 8001 \
   --alias "$MODEL_NAME" \
-  -c "${UCOA_CONTEXT:-768}" \
-  -n "${UCOA_MAX_TOKENS:-160}" \
+  -c "${UCOA_CONTEXT:-512}" \
+  -n "${UCOA_MAX_TOKENS:-64}" \
+  -t "${UCOA_THREADS:-1}" \
   -np 1 \
   > "$LOG" 2>&1 &
 LLAMA_PID=$!
