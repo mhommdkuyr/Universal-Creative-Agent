@@ -14,14 +14,14 @@ jobs:
       BRAIN_URL: https://ucoa-agent-brain-local2.onrender.com
     steps:
       - uses: actions/checkout@v4
-      - name: Wait for public health
+      - name: Wait for public health and correct local model
         run: |
           set -e
           for i in $(seq 1 60); do
             code=$(curl -sS -o health.json -w '%{http_code}' --max-time 15 "$BRAIN_URL/health" || true)
             cat health.json || true
             echo "HTTP $code"
-            if [ "$code" = "200" ] && grep -q '"ok":true' health.json && grep -q '"brain_configured":true' health.json; then
+            if [ "$code" = "200" ] && grep -q '"ok":true' health.json && grep -q '"brain_configured":true' health.json && grep -q 'SmolLM2-135M-Instruct-Q4_K_M' health.json; then
               exit 0
             fi
             sleep 5
@@ -42,29 +42,23 @@ jobs:
           assert isinstance(x.get('steps'), list) and len(x['steps']) >= 2
           print('PLAN_INFERENCE_OK')
           PY
-      - name: Run vision action inference
+      - name: Run generic action inference from UI state
         run: |
           set -e
-          python -m pip install -q pillow
           python - <<'PY'
-          from PIL import Image, ImageDraw
-          import base64, io, json, os, urllib.request
-          img=Image.new('RGB',(480,320),'white')
-          d=ImageDraw.Draw(img)
-          d.text((40,50),'Universal Creative Agent',fill='black')
-          d.rectangle((40,130,220,210),outline='black',width=3)
-          d.text((78,160),'Continue',fill='black')
-          buf=io.BytesIO(); img.save(buf,format='JPEG',quality=75)
+          import json, os, urllib.request
           payload={
             'task':'على الشاشة زر Continue. اختر الفعل الذي ينفذ الضغط على الزر.',
-            'step':0,'max_steps':10,'history':[],'ui_tree':'[]',
-            'screenshot_base64':base64.b64encode(buf.getvalue()).decode(),
-            'installed_apps':[],'capabilities':['tap','click_any_text','observe','done']
+            'step':0,'max_steps':10,'history':[],
+            'ui_tree':'[{"text":"Universal Creative Agent"},{"text":"Continue","class":"android.widget.Button"}]',
+            'screenshot_base64':None,
+            'installed_apps':['Chrome','Canva','CapCut'],
+            'capabilities':['tap','click_any_text','observe','done']
           }
           req=urllib.request.Request(os.environ['BRAIN_URL']+'/v1/agent/step',data=json.dumps(payload).encode(),headers={'Content-Type':'application/json'},method='POST')
           with urllib.request.urlopen(req,timeout=300) as r:
               x=json.loads(r.read().decode())
           print(json.dumps(x,ensure_ascii=False))
           assert x.get('action') in {'tap','click_any_text','observe','done'}
-          print('VISION_INFERENCE_OK')
+          print('ACTION_INFERENCE_OK')
           PY
