@@ -27,11 +27,11 @@ jobs:
             sleep 5
           done
           exit 1
-      - name: Run text planning inference
+      - name: Run local text model planning inference
         run: |
           set -e
           cat > plan.json <<'JSON'
-          {"task":"ضع خطة قصيرة لإكمال مهمة على الهاتف: افتح التطبيق المناسب، نفذ المطلوب، وتحقق من النتيجة.","attachments":[],"device":{"android":35}}
+          {"task":"Create a short plan to complete a phone task: open the appropriate app, perform the requested action, and verify the result.","attachments":[],"device":{"android":35}}
           JSON
           curl -fS --max-time 300 -X POST "$BRAIN_URL/v1/agent/plan" -H 'Content-Type: application/json' --data-binary @plan.json -o result.json
           cat result.json
@@ -42,17 +42,18 @@ jobs:
           assert isinstance(x.get('steps'), list) and len(x['steps']) >= 2
           print('PLAN_INFERENCE_OK')
           PY
-      - name: Run generic action inference from UI state
+      - name: Run local model generic action inference from UI state
         run: |
           set -e
           python - <<'PY'
           import json, os, urllib.request
           payload={
-            'task':'على الشاشة زر Continue. اختر الفعل الذي ينفذ الضغط على الزر.',
+            'task':'The screen contains a Continue button. Choose the action that presses that button.',
             'step':0,'max_steps':10,'history':[],
             'ui_tree':'[{"text":"Universal Creative Agent"},{"text":"Continue","class":"android.widget.Button"}]',
             'screenshot_base64':None,
             'installed_apps':['Chrome','Canva','CapCut'],
+            'attachments':[],
             'capabilities':['tap','click_any_text','observe','done']
           }
           req=urllib.request.Request(os.environ['BRAIN_URL']+'/v1/agent/step',data=json.dumps(payload).encode(),headers={'Content-Type':'application/json'},method='POST')
