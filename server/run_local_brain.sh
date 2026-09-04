@@ -5,8 +5,8 @@ ROOT="${UCOA_LOCAL_HOME:-/opt/render/project/src/.ucoa-local}"
 BIN="$ROOT/llama-server"
 LLAMA_URL="${UCOA_LLAMA_URL:-https://github.com/ggml-org/llama.cpp/releases/download/b10586/llama-b10586-bin-ubuntu-x64.tar.gz}"
 LLAMA_SHA256="${UCOA_LLAMA_SHA256:-8fc43441b4d00d050589891c81e6b97d06039735af5d954deacf480b4f1f6b73}"
-# Render Free: 512 MB RAM / 0.1 CPU. TensorBlock's verified Q2_K build is ~339 MB,
-# leaving materially more headroom than the official Qwen Q2_K file (~415 MB).
+# Render Free: 512 MB RAM / 0.1 CPU. TensorBlock's verified Q2_K build is ~339 MB.
+# Keep the context/output budgets compact and quantize KV cache to leave runtime headroom.
 MODEL_NAME="${UCOA_MODEL_NAME:-Qwen2.5-0.5B-Instruct-Q2_K}"
 MODEL_REPO="${UCOA_MODEL_REPO:-tensorblock/Qwen2.5-0.5B-Instruct-GGUF}"
 MODEL_TAG="${UCOA_MODEL_TAG:-Q2_K}"
@@ -37,9 +37,11 @@ LOG="$ROOT/llama-server.log"
   --host 127.0.0.1 \
   --port 8001 \
   --alias "$MODEL_NAME" \
-  -c "${UCOA_CONTEXT:-384}" \
-  -n "${UCOA_MAX_TOKENS:-64}" \
+  -c "${UCOA_CONTEXT:-256}" \
+  -n "${UCOA_MAX_TOKENS:-48}" \
   -t "${UCOA_THREADS:-1}" \
+  --cache-type-k "${UCOA_CACHE_TYPE_K:-q4_0}" \
+  --cache-type-v "${UCOA_CACHE_TYPE_V:-q4_0}" \
   -np 1 \
   > "$LOG" 2>&1 &
 LLAMA_PID=$!
@@ -69,7 +71,7 @@ fi
 # before Uvicorn is exposed publicly. This prevents a false-positive 'healthy' state.
 SELFTEST="$ROOT/selftest.json"
 cat > "$ROOT/selftest-payload.json" <<JSON
-{"model":"$MODEL_NAME","temperature":0,"max_tokens":32,"response_format":{"type":"json_object"},"messages":[{"role":"system","content":"Return JSON only. Include boolean field ok=true and a short string field answer."},{"role":"user","content":"قل بالعربية بجملة قصيرة إنك جاهز لتنفيذ مهمة على الهاتف."}]}
+{"model":"$MODEL_NAME","temperature":0,"max_tokens":24,"response_format":{"type":"json_object"},"messages":[{"role":"system","content":"Return JSON only. Include boolean field ok=true and a short string field answer."},{"role":"user","content":"قل بالعربية بجملة قصيرة إنك جاهز لتنفيذ مهمة على الهاتف."}]}
 JSON
 if curl -fsS --max-time 90 -H 'Content-Type: application/json' -X POST "$UCOA_MODEL_BASE_URL/chat/completions" --data-binary @"$ROOT/selftest-payload.json" -o "$SELFTEST"; then
   if python - "$SELFTEST" <<'PY'
