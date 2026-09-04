@@ -6,74 +6,83 @@ on:
       - 'server/**'
       - '.github/workflows/render-brain-smoke.yml'
 
-# Stable async-job smoke test for the currently deployed local brain.
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       BRAIN_URL: https://ucoa-agent-brain-local2.onrender.com
     steps:
       - uses: actions/checkout@v4
-      - name: Wait for public health and correct local model
+      - name: Wait for public health and current architecture
         run: |
           set -e
-          for i in $(seq 1 40); do
+          for i in $(seq 1 50); do
             code=$(curl -sS -o health.json -w '%{http_code}' --max-time 10 "$BRAIN_URL/health" || true)
             cat health.json || true
-            if [ "$code" = "200" ] && grep -q '"ok":true' health.json && grep -q '"brain_configured":true' health.json && grep -q 'Qwen2.5-0.5B-Instruct-Q2_K' health.json; then exit 0; fi
-            sleep 3
+            if [ "$code" = "200" ] && grep -q '"ok":true' health.json && grep -q '"brain_configured":true' health.json && grep -q 'Qwen2.5-0.5B-Instruct-Q2_K' health.json && grep -q '"local_vision":true' health.json && grep -q 'Qwen/Qwen3-VL-2B-Instruct' health.json && grep -q 'state_persistence' health.json && grep -q 'verifier' health.json; then exit 0; fi
+            sleep 4
           done
           exit 1
-      - name: Submit and poll local text planning job
+      - name: Plan lifecycle and persistent session
         run: |
           set -e
-          printf '%s' '{"task":"Create a 2-step plan: open the appropriate Android app, do the requested action, then verify the result.","attachments":[],"device":{"android":35}}' > plan.json
-          curl -fS --max-time 15 -X POST "$BRAIN_URL/v1/agent/plan" -H 'Content-Type: application/json' --data-binary @plan.json -o job.json
-          cat job.json
-          job_id=$(python -c 'import json; print(json.load(open("job.json"))["job_id"])')
-          for i in $(seq 1 90); do
-            curl -fS --max-time 10 "$BRAIN_URL/v1/agent/jobs/$job_id" -o result.json
-            status=$(python -c 'import json; print(json.load(open("result.json")).get("status",""))')
-            echo "status=$status"
-            if [ "$status" = "completed" ]; then
-              cat result.json
-              python - <<'PY'
-import json
-x=json.load(open('result.json'))['result']
-assert x.get('summary')
-assert isinstance(x.get('steps'), list) and len(x['steps']) >= 2
-print('PLAN_INFERENCE_OK')
+          python - <<'PY'
+import json,time,urllib.request
+base='https://ucoa-agent-brain-local2.onrender.com'
+
+def post(path,payload):
+    req=urllib.request.Request(base+path,data=json.dumps(payload,ensure_ascii=False).encode(),headers={'Content-Type':'application/json'},method='POST')
+    with urllib.request.urlopen(req,timeout=30) as r: return json.loads(r.read().decode())
+
+def get(path):
+    with urllib.request.urlopen(base+path,timeout=30) as r: return json.loads(r.read().decode())
+
+sid=post('/v1/agent/sessions',{'title':'render-smoke'})['session_id']
+submitted=post('/v1/agent/plan',{'session_id':sid,'task':'أنشئ خطة من خطوتين لفتح تطبيق مناسب وتنفيذ مهمة ثم التحقق من النتيجة.','attachments':[],'device':{'android':35}})
+job=submitted['job_id']
+for _ in range(150):
+    x=get('/v1/agent/jobs/'+job)
+    if x.get('status')=='completed':
+        result=x['result']; assert len(result.get('steps',[]))>=2; assert result.get('session_id')==sid; print('PLAN_OK',json.dumps(result,ensure_ascii=False)); break
+    if x.get('status')=='failed': raise SystemExit(x.get('error','plan failed'))
+    time.sleep(1)
+else: raise SystemExit('plan timeout')
+saved=get('/v1/agent/sessions/'+sid)
+assert any(e.get('kind')=='plan' for e in saved['events'])
+print('SESSION_PERSISTENCE_OK',sid)
 PY
-              exit 0
-            fi
-            if [ "$status" = "failed" ]; then cat result.json; exit 1; fi
-            sleep 2
-          done
-          exit 1
-      - name: Submit and poll local action decision job
+      - name: Action lifecycle and verifier
         run: |
           set -e
-          cat > step.json <<'JSON'
-          {"task":"The screen contains a Continue button. Press it.","step":0,"max_steps":5,"history":[],"ui_tree":"[{\"text\":\"Continue\",\"class\":\"android.widget.Button\"}]","installed_apps":["Chrome","Canva","CapCut"],"attachments":[],"capabilities":["tap","click_any_text","observe","done"]}
-          JSON
-          curl -fS --max-time 15 -X POST "$BRAIN_URL/v1/agent/step" -H 'Content-Type: application/json' --data-binary @step.json -o job.json
-          job_id=$(python -c 'import json; print(json.load(open("job.json"))["job_id"])')
-          for i in $(seq 1 90); do
-            curl -fS --max-time 10 "$BRAIN_URL/v1/agent/jobs/$job_id" -o result.json
-            status=$(python -c 'import json; print(json.load(open("result.json")).get("status",""))')
-            echo "status=$status"
-            if [ "$status" = "completed" ]; then
-              cat result.json
-              python - <<'PY'
-import json
-x=json.load(open('result.json'))['result']
-assert x.get('action') in {'tap','click_any_text','observe','done'}
-print('ACTION_INFERENCE_OK')
+          python - <<'PY'
+import json,time,urllib.request
+base='https://ucoa-agent-brain-local2.onrender.com'
+def post(path,payload):
+    req=urllib.request.Request(base+path,data=json.dumps(payload,ensure_ascii=False).encode(),headers={'Content-Type':'application/json'},method='POST')
+    with urllib.request.urlopen(req,timeout=30) as r: return json.loads(r.read().decode())
+def get(path):
+    with urllib.request.urlopen(base+path,timeout=30) as r: return json.loads(r.read().decode())
+sid=post('/v1/agent/sessions',{'title':'action-smoke'})['session_id']
+submitted=post('/v1/agent/step',{'session_id':sid,'task':'اضغط Continue ثم تحقق من الانتقال.','step':0,'history':[],'ui_tree':'[{"text":"Continue","class":"android.widget.Button"}]','installed_apps':['Chrome','Canva'],'attachments':[],'capabilities':['click_any_text','tap','observe','done']})
+job=submitted['job_id']
+for _ in range(150):
+    x=get('/v1/agent/jobs/'+job)
+    if x.get('status')=='completed':
+        result=x['result']; assert result.get('action') in {'click_any_text','tap','observe','done'}; assert 'verification' in result; print('ACTION_OK',json.dumps(result,ensure_ascii=False)); break
+    if x.get('status')=='failed': raise SystemExit(x.get('error','step failed'))
+    time.sleep(1)
+else: raise SystemExit('step timeout')
 PY
-              exit 0
-            fi
-            if [ "$status" = "failed" ]; then cat result.json; exit 1; fi
-            sleep 2
-          done
-          exit 1
+      - name: Safety gate
+        run: |
+          set -e
+          python - <<'PY'
+import json,urllib.request
+base='https://ucoa-agent-brain-local2.onrender.com'
+payload={'task':'أرسل رمز التحقق','decision':{'action':'type_into_any','params':{'text':'123456'}}}
+req=urllib.request.Request(base+'/v1/agent/verify',data=json.dumps(payload,ensure_ascii=False).encode(),headers={'Content-Type':'application/json'},method='POST')
+with urllib.request.urlopen(req,timeout=30) as r: x=json.loads(r.read().decode())
+assert x['allowed'] is False and x['requires_confirmation'] is True
+print('SAFETY_GATE_OK')
+PY
