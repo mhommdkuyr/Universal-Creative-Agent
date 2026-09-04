@@ -8,7 +8,7 @@ from urllib.request import Request, urlopen
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="UCOA Universal Agent Brain", version="1.5.0")
+app = FastAPI(title="UCOA Universal Agent Brain", version="1.6.0")
 MODEL_BASE_URL = os.getenv("UCOA_MODEL_BASE_URL", "").rstrip("/")
 MODEL_API_KEY = os.getenv("UCOA_MODEL_API_KEY", "")
 MODEL_NAME = os.getenv("UCOA_MODEL_NAME", "")
@@ -100,24 +100,24 @@ def fallback_plan(raw: str, task: str) -> dict[str, Any]:
     if not chunks: chunks = [task]
     steps = chunks[:3]
     if len(steps) == 1: steps = ["ابدأ بتنفيذ المطلوب على الشاشة.", "نفذ الإجراء المطلوب ثم تحقق من النتيجة."]
-    return {"summary": clean[:220] or "خطة مولدة بواسطة العقل المحلي", "steps": steps}
+    return {"summary": clean[:220] or "خطة مولدة بواسطة العقل المحلي", "steps": steps, "output_mode": "repair"}
 
 def fallback_step(raw: str, req: StepRequest) -> dict[str, Any]:
     text = re.sub(r"\s+", " ", raw).strip().lower()
     ui = req.ui_tree.lower()
     for label in ["continue", "التالي", "متابعة", "موافق", "ok", "تأكيد", "submit", "إرسال"]:
         if label.lower() in text or label.lower() in ui:
-            return {"action": "click_any_text", "params": {"text": label}, "message": "اختيار الزر الظاهر على الشاشة", "done": False, "wait_after_ms": 700}
-    if any(k in text for k in ["رجوع", "back"]): return {"action": "back", "params": {}, "message": "رجوع", "done": False, "wait_after_ms": 500}
-    if any(k in text for k in ["انتظر", "wait"]): return {"action": "wait", "params": {"ms": 1000}, "message": "انتظار استقرار الشاشة", "done": False, "wait_after_ms": 1000}
-    return {"action": "observe", "params": {}, "message": raw[:240], "done": False, "wait_after_ms": 500}
+            return {"action": "click_any_text", "params": {"text": label}, "message": "اختيار الزر الظاهر على الشاشة", "done": False, "wait_after_ms": 700, "output_mode": "repair"}
+    if any(k in text for k in ["رجوع", "back"]): return {"action": "back", "params": {}, "message": "رجوع", "done": False, "wait_after_ms": 500, "output_mode": "repair"}
+    if any(k in text for k in ["انتظر", "wait"]): return {"action": "wait", "params": {"ms": 1000}, "message": "انتظار استقرار الشاشة", "done": False, "wait_after_ms": 1000, "output_mode": "repair"}
+    return {"action": "observe", "params": {}, "message": raw[:240], "done": False, "wait_after_ms": 500, "output_mode": "repair"}
 
 PLAN_SYSTEM = "You are UCOA. Return only a compact 2-3 step plan. JSON is preferred: {summary:string,steps:string[]}. If JSON formatting fails, write one short sentence per step and no explanation."
 STEP_SYSTEM = "You control Android. Return exactly one action decision. JSON is preferred: {action,params,message,done,wait_after_ms}. If JSON formatting fails, write only the action you want. Allowed actions: " + ", ".join(ACTIONS) + "."
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return {"ok": True, "brain_configured": bool(MODEL_BASE_URL and MODEL_NAME), "model": MODEL_NAME or None, "local_vision": LOCAL_VISION, "structured_output": "best_effort_with_repair"}
+    return {"ok": True, "brain_configured": bool(MODEL_BASE_URL and MODEL_NAME), "model": MODEL_NAME or None, "local_vision": LOCAL_VISION, "structured_output": "best_effort_with_repair", "version": app.version}
 
 @app.post("/v1/agent/plan")
 def plan(req: PlanRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
@@ -129,7 +129,8 @@ def _run_plan(req: PlanRequest) -> dict[str, Any]:
     try:
         result = extract_json(raw)
         steps = result.get("steps") if isinstance(result.get("steps"), list) else []
-        if steps: return {"summary": str(result.get("summary", "خطة مولدة بواسطة النموذج المحلي")), "steps": [str(x) for x in steps[:5]]}
+        if steps:
+            return {"summary": str(result.get("summary", "خطة مولدة بواسطة النموذج المحلي")), "steps": [str(x) for x in steps[:5]], "output_mode": "model"}
     except Exception:
         pass
     return fallback_plan(raw, req.task)
@@ -155,6 +156,7 @@ def _run_step(req: StepRequest) -> dict[str, Any]:
         result["done"] = bool(result.get("done", action == "done"))
         result["wait_after_ms"] = max(150, min(5000, int(result.get("wait_after_ms", 500))))
         result["message"] = str(result.get("message", ""))
+        result["output_mode"] = "model"
         return result
     except Exception:
         return fallback_step(raw, req)
