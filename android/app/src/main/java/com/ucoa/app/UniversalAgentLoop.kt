@@ -9,34 +9,76 @@ import org.json.JSONObject
 class UniversalAgentLoop(private val brain: AgentBrainClient) {
     interface Listener { fun onEvent(text: String); fun onFinished(success: Boolean) }
     private val main = Handler(Looper.getMainLooper())
-    private var running = false; private var task = ""; private var step = 0; private var listener: Listener? = null
-    private val history = JSONArray(); private var attachments: List<String> = emptyList()
+    private var running = false
+    private var task = ""
+    private var step = 0
+    private var listener: Listener? = null
+    private var history = JSONArray()
+    private var attachments: List<String> = emptyList()
 
     fun start(taskText: String, listener: Listener, selectedAttachments: List<String> = emptyList()) {
         if (running) return
-        if (UcoaAccessibilityService.instance == null) { listener.onEvent("العقل: خدمة التحكم غير متاحة"); listener.onFinished(false); return }
-        running = true; task = taskText; step = 0; history.clear(); this.listener = listener; attachments = selectedAttachments
-        listener.onEvent("العقل العالمي: بدأ حلقة الفهم ← الملاحظة ← التنفيذ ← التحقق."); next()
+        if (UcoaAccessibilityService.instance == null) {
+            listener.onEvent("العقل: خدمة التحكم غير متاحة")
+            listener.onFinished(false)
+            return
+        }
+        running = true
+        task = taskText
+        step = 0
+        history = JSONArray()
+        this.listener = listener
+        attachments = selectedAttachments
+        listener.onEvent("العقل العالمي: بدأ حلقة الفهم ← الملاحظة ← التنفيذ ← التحقق.")
+        next()
     }
-    fun stop() { running = false; listener?.onEvent("العقل العالمي: تم إيقاف المهمة.") }
+
+    fun stop() {
+        running = false
+        listener?.onEvent("العقل العالمي: تم إيقاف المهمة.")
+    }
 
     private fun next() {
         if (!running) return
-        if (step >= 60) { finish(false, "وصلت المهمة إلى الحد الآمن لخطوات التنفيذ."); return }
-        val service = UcoaAccessibilityService.instance ?: run { finish(false, "فقدت خدمة التحكم."); return }
+        if (step >= 60) {
+            finish(false, "وصلت المهمة إلى الحد الآمن لخطوات التنفيذ.")
+            return
+        }
+        val service = UcoaAccessibilityService.instance ?: run {
+            finish(false, "فقدت خدمة التحكم.")
+            return
+        }
         service.captureScreenshotBase64 { screenshot ->
             if (!running) return@captureScreenshotBase64
             val ui = service.observeUi(220)
             brain.step(task, step, history, ui, screenshot, service.installedAppLabels(), attachments) { response ->
                 main.post {
                     if (!running) return@post
-                    if (!response.ok || response.body == null) { finish(false, "تعذر الوصول إلى عقل AI: ${response.error ?: "استجابة غير صالحة"}"); return@post }
-                    val decision = response.body; decision.optString("message").trim().takeIf { it.isNotBlank() }?.let { listener?.onEvent("العقل: $it") }
-                    val action = decision.optString("action").trim(); val params = decision.optJSONObject("params") ?: decision
-                    if (decision.optBoolean("done", false) || action.equals("done", true)) { finish(true, decision.optString("message", "اكتملت المهمة.")); return@post }
-                    if (action.isBlank()) { finish(false, "العقل أعاد قرارًا بلا فعل."); return@post }
+                    if (!response.ok || response.body == null) {
+                        finish(false, "تعذر الوصول إلى عقل AI: ${response.error ?: "استجابة غير صالحة"}")
+                        return@post
+                    }
+                    val decision = response.body
+                    decision.optString("message").trim().takeIf { it.isNotBlank() }?.let {
+                        listener?.onEvent("العقل: $it")
+                    }
+                    val action = decision.optString("action").trim()
+                    val params = decision.optJSONObject("params") ?: decision
+                    if (decision.optBoolean("done", false) || action.equals("done", true)) {
+                        finish(true, decision.optString("message", "اكتملت المهمة."))
+                        return@post
+                    }
+                    if (action.isBlank()) {
+                        finish(false, "العقل أعاد قرارًا بلا فعل.")
+                        return@post
+                    }
                     execute(action, params) { ok, detail ->
-                        history.put(JSONObject().apply { put("step", step); put("action", action); put("ok", ok); put("detail", detail.take(700)) })
+                        history.put(JSONObject().apply {
+                            put("step", step)
+                            put("action", action)
+                            put("ok", ok)
+                            put("detail", detail.take(700))
+                        })
                         listener?.onEvent("التنفيذ: $action — ${if (ok) "نجح" else "فشل"}")
                         step++
                         main.postDelayed({ next() }, params.optLong("wait_after_ms", 700L).coerceIn(150L, 5000L))
@@ -68,6 +110,14 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
             else -> cb(false, "unsupported_action=$action")
         }
     }
-    private fun array(obj: JSONObject, key: String): List<String> = buildList { obj.optJSONArray(key)?.let { a -> for (i in 0 until a.length()) add(a.optString(i)) } }
-    private fun finish(success: Boolean, message: String) { running = false; if (message.isNotBlank()) listener?.onEvent(message); listener?.onFinished(success) }
+
+    private fun array(obj: JSONObject, key: String): List<String> = buildList {
+        obj.optJSONArray(key)?.let { a -> for (i in 0 until a.length()) add(a.optString(i)) }
+    }
+
+    private fun finish(success: Boolean, message: String) {
+        running = false
+        if (message.isNotBlank()) listener?.onEvent(message)
+        listener?.onFinished(success)
+    }
 }
