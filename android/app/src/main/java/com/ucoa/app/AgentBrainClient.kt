@@ -25,15 +25,10 @@ class AgentBrainClient(private val context: Context) {
     fun health(callback: (Boolean, String) -> Unit) {
         val base = endpoint(); if (base.isBlank()) { callback(false, "عنوان العقل غير مُعد"); return }
         executor.execute {
-            var conn: HttpURLConnection? = null
             try {
-                conn = (URL(base + "/health").openConnection() as HttpURLConnection).apply { requestMethod = "GET"; connectTimeout = 10000; readTimeout = 15000; token().takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") } }
-                val code = conn.responseCode; val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-                val text = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
-                val body = runCatching { JSONObject(text) }.getOrNull()
-                callback(code in 200..299, if (body != null) "${body.optBoolean("brain_configured", false).let { if (it) "النموذج مهيأ" else "الخادم متصل لكن النموذج غير مهيأ" }}" else "HTTP $code")
+                val body = requestJson("GET", base + "/health", null, 15000)
+                callback(true, if (body.optBoolean("brain_configured", false)) "النموذج مهيأ: ${body.optString("model", "local")}" else "الخادم متصل لكن النموذج غير مهيأ")
             } catch (e: Exception) { callback(false, e.message ?: e.javaClass.simpleName) }
-            finally { conn?.disconnect() }
         }
     }
 
@@ -42,7 +37,7 @@ class AgentBrainClient(private val context: Context) {
             put("task", task); put("attachments", JSONArray(attachments))
             put("device", JSONObject().apply { put("manufacturer", Build.MANUFACTURER); put("model", Build.MODEL); put("android", Build.VERSION.SDK_INT) })
         }
-        post("/v1/agent/plan", payload, callback)
+        submitJob("/v1/agent/plan", payload, callback)
     }
 
     fun step(task: String, step: Int, history: JSONArray, uiTree: String, screenshotBase64: String?, installedApps: List<String>, attachments: List<String>, callback: (Response) -> Unit) {
@@ -52,24 +47,53 @@ class AgentBrainClient(private val context: Context) {
             put("installed_apps", JSONArray(installedApps.take(250))); put("attachments", JSONArray(attachments.take(20)))
             put("capabilities", JSONArray(listOf("open_url", "open_app_by_name", "click_any_text", "type_into_any", "share_attachment", "tap", "long_press", "swipe", "back", "home", "wait", "observe", "done")))
         }
-        post("/v1/agent/step", payload, callback)
+        submitJob("/v1/agent/step", payload, callback)
     }
 
-    private fun post(path: String, payload: JSONObject, callback: (Response) -> Unit) {
+    private fun submitJob(path: String, payload: JSONObject, callback: (Response) -> Unit) {
         val base = endpoint(); if (base.isBlank()) { callback(Response(false, null, "لم يتم إعداد عنوان عقل AI بعد")); return }
         executor.execute {
-            var conn: HttpURLConnection? = null
             try {
-                conn = (URL(base + path).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"; connectTimeout = 12000; readTimeout = 300000; doOutput = true; setRequestProperty("Content-Type", "application/json")
-                    token().takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") }
-                }
-                conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
-                val code = conn.responseCode; val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-                val text = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
-                callback(Response(code in 200..299, runCatching { JSONObject(text) }.getOrNull(), if (code in 200..299) null else "HTTP $code: $text"))
+                val submitted = requestJson("POST", base + path, payload, 15000)
+                val jobId = submitted.optString("job_id").takeIf { it.isNotBlank() }
+                    ?: throw IllegalStateException("Brain did not return a job_id")
+                pollJob(base, jobId, callback, 0)
             } catch (e: Exception) { callback(Response(false, null, e.message ?: e.javaClass.simpleName)) }
-            finally { conn?.disconnect() }
         }
+    }
+
+    private fun pollJob(base: String, jobId: String, callback: (Response) -> Unit, attempt: Int) {
+        if (attempt >= 120) { callback(Response(false, null, "انتهت مهلة انتظار عقل AI")); return }
+        try {
+            val job = requestJson("GET", base + "/v1/agent/jobs/$jobId", null, 15000)
+            when (job.optString("status")) {
+                "completed" -> {
+                    val result = job.optJSONObject("result")
+                    callback(if (result != null) Response(true, result) else Response(false, null, "العقل أنهى المهمة بلا نتيجة"))
+                }
+                "failed" -> callback(Response(false, null, job.optString("error", "فشل تشغيل عقل AI")))
+                else -> {
+                    Thread.sleep(1500)
+                    pollJob(base, jobId, callback, attempt + 1)
+                }
+            }
+        } catch (e: Exception) { callback(Response(false, null, e.message ?: e.javaClass.simpleName)) }
+    }
+
+    private fun requestJson(method: String, url: String, payload: JSONObject?, timeout: Int): JSONObject {
+        var conn: HttpURLConnection? = null
+        try {
+            conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = method; connectTimeout = timeout; readTimeout = timeout; doInput = true
+                if (payload != null) { doOutput = true; setRequestProperty("Content-Type", "application/json") }
+                token().takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") }
+            }
+            if (payload != null) conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
+            if (code !in 200..299) throw IllegalStateException("HTTP $code: $text")
+            return JSONObject(text)
+        } finally { conn?.disconnect() }
     }
 }
