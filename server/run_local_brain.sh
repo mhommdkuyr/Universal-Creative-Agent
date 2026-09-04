@@ -69,7 +69,7 @@ fi
 # before Uvicorn is exposed publicly. This prevents a false-positive 'healthy' state.
 SELFTEST="$ROOT/selftest.json"
 cat > "$ROOT/selftest-payload.json" <<JSON
-{"model":"$MODEL_NAME","temperature":0,"max_tokens":32,"response_format":{"type":"json_object"},"messages":[{"role":"system","content":"Return JSON only: {\\\"ok\\\":true,\\\"answer\\\":string}."},{"role":"user","content":"قل بالعربية بجملة قصيرة إنك جاهز لتنفيذ مهمة على الهاتف."}]}
+{"model":"$MODEL_NAME","temperature":0,"max_tokens":32,"response_format":{"type":"json_object"},"messages":[{"role":"system","content":"Return JSON only. Include boolean field ok=true and a short string field answer."},{"role":"user","content":"قل بالعربية بجملة قصيرة إنك جاهز لتنفيذ مهمة على الهاتف."}]}
 JSON
 if curl -fsS --max-time 90 -H 'Content-Type: application/json' -X POST "$UCOA_MODEL_BASE_URL/chat/completions" --data-binary @"$ROOT/selftest-payload.json" -o "$SELFTEST"; then
   if python - "$SELFTEST" <<'PY'
