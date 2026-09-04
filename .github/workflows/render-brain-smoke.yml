@@ -21,7 +21,7 @@ jobs:
           for i in $(seq 1 40); do
             code=$(curl -sS -o health.json -w '%{http_code}' --max-time 10 "$BRAIN_URL/health" || true)
             cat health.json || true
-            if [ "$code" = "200" ] && grep -q '"ok":true' health.json && grep -q '"brain_configured":true' health.json && grep -q 'SmolLM2-135M-Instruct-Q4_K_M' health.json; then exit 0; fi
+            if [ "$code" = "200" ] && grep -q '"ok":true' health.json && grep -q '"brain_configured":true' health.json && grep -q 'Qwen2.5-0.5B-Instruct-Q2_K' health.json; then exit 0; fi
             sleep 3
           done
           exit 1
@@ -32,7 +32,7 @@ jobs:
           curl -fS --max-time 15 -X POST "$BRAIN_URL/v1/agent/plan" -H 'Content-Type: application/json' --data-binary @plan.json -o job.json
           cat job.json
           job_id=$(python -c 'import json; print(json.load(open("job.json"))["job_id"])')
-          for i in $(seq 1 60); do
+          for i in $(seq 1 90); do
             curl -fS --max-time 10 "$BRAIN_URL/v1/agent/jobs/$job_id" -o result.json
             status=$(python -c 'import json; print(json.load(open("result.json")).get("status",""))')
             echo "status=$status"
@@ -59,7 +59,7 @@ PY
           JSON
           curl -fS --max-time 15 -X POST "$BRAIN_URL/v1/agent/step" -H 'Content-Type: application/json' --data-binary @step.json -o job.json
           job_id=$(python -c 'import json; print(json.load(open("job.json"))["job_id"])')
-          for i in $(seq 1 60); do
+          for i in $(seq 1 90); do
             curl -fS --max-time 10 "$BRAIN_URL/v1/agent/jobs/$job_id" -o result.json
             status=$(python -c 'import json; print(json.load(open("result.json")).get("status",""))')
             echo "status=$status"
