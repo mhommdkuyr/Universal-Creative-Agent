@@ -10,7 +10,7 @@ MODEL_URL="${UCOA_MODEL_URL:-https://huggingface.co/ggml-org/SmolVLM-256M-Instru
 MMPROJ_URL="${UCOA_MMPROJ_URL:-https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf?download=true}"
 MODEL_SHA256="${UCOA_MODEL_SHA256:-2a31195d3769c0b0fd0a4906201666108834848db768af11de1d2cef7cd35e65}"
 MMPROJ_SHA256="${UCOA_MMPROJ_SHA256:-7e943f7c53f0382a6fc41b6ee0c2def63ba4fded9ab8ed039cc9e2ab905e0edd}"
-LLAMA_SHA256="${UCOA_LLAMA_SHA256:-8fc43441b4d00d050589891c81e6b97d06039755af5d954deacf480b4f1f6b73}"
+LLAMA_SHA256="${UCOA_LLAMA_SHA256:-8fc43441b4d00d050589891c81e6b97d06039735af5d954deacf480b4f1f6b73}"
 
 mkdir -p "$ROOT"
 
@@ -26,7 +26,6 @@ if [[ ! -x "$BIN" ]]; then
   rm -f "$tmp"
 fi
 
-# The release may contain shared libraries beside llama-server. Keep them visible.
 export LD_LIBRARY_PATH="$ROOT:${LD_LIBRARY_PATH:-}"
 
 if [[ ! -f "$MODEL" ]]; then
@@ -47,7 +46,6 @@ export UCOA_LOCAL_MODEL="${UCOA_LOCAL_MODEL:-true}"
 LOG="$ROOT/llama-server.log"
 : > "$LOG"
 
-# Fail early with a visible diagnostic if the native binary itself cannot execute.
 if ! "$BIN" --version >> "$LOG" 2>&1; then
   cat "$LOG"
   exit 1
@@ -60,8 +58,8 @@ fi
   --host 127.0.0.1 \
   --port 8001 \
   --alias "$UCOA_MODEL_NAME" \
-  -c "${UCOA_CONTEXT:-1536}" \
-  -n "${UCOA_MAX_TOKENS:-384}" \
+  -c "${UCOA_CONTEXT:-1024}" \
+  -n "${UCOA_MAX_TOKENS:-256}" \
   -np 1 \
   > "$LOG" 2>&1 &
 LLAMA_PID=$!
@@ -72,7 +70,7 @@ trap cleanup EXIT INT TERM
 for _ in $(seq 1 150); do
   if ! kill -0 "$LLAMA_PID" 2>/dev/null; then
     echo "LOCAL_BRAIN_PROCESS_EXITED"
-    tail -n 200 "$LOG" || true
+    tail -n 300 "$LOG" || true
     exit 1
   fi
   if curl -fsS --max-time 2 "$UCOA_MODEL_BASE_URL/models" >/dev/null 2>&1; then
