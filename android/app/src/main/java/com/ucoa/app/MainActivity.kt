@@ -45,7 +45,7 @@ class MainActivity : Activity() {
         connectButton = Button(this).apply { text = "ربط الهاتف بنقرة واحدة"; setOnClickListener { connectPhone() } }
         top.addView(title); top.addView(status); top.addView(connectButton); root.addView(top)
 
-        val scroll = ScrollView(this).apply { fillViewport = true; layoutParams = LinearLayout.LayoutParams(-1, 0, 1f) }
+        val scroll = ScrollView(this).apply { setFillViewport(true); layoutParams = LinearLayout.LayoutParams(-1, 0, 1f) }
         chat = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 18, 24, 24) }
         addAssistantBubble("أنا جاهز. اكتب أي شيء تريد تنفيذه، وارفع فيديو أو صورة أو ملف عند الحاجة. سأحلل المطلوب وأعرض خطة قبل التنفيذ.")
         scroll.addView(chat); root.addView(scroll)
@@ -65,6 +65,7 @@ class MainActivity : Activity() {
         status.text = when { live -> "● متصل ويستطيع التفاعل مع الهاتف"; enabled -> "● الصلاحية مفعلة — ارجع للتطبيق لتأكيد الاتصال"; else -> "○ غير متصل — فعّل الوصول مرة واحدة" }
         connectButton.text = when { live -> "الهاتف متصل"; enabled -> "فتح إعدادات الوصول"; else -> "ربط الهاتف بنقرة واحدة" }
         connectButton.isEnabled = !live
+        if (enabled && !live) window.decorView.postDelayed({ if (!PermissionCoordinator.isServiceLive()) refreshConnectionState() }, 700)
     }
 
     private fun connectPhone() {
@@ -129,7 +130,7 @@ class MainActivity : Activity() {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val review = Button(this).apply { text = "مراجعة وتعديل"; setOnClickListener { showReview(plan) } }
         val execute = Button(this).apply { text = "تنفيذ الآن"; setOnClickListener { executePlan(latestPlan ?: plan, card) } }
-        row.addView(execute, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)); row.addView(review, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(execute, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)); row.addView(review, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         card.addView(heading); card.addView(summary); card.addView(steps); card.addView(row)
         chat.addView(card, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, 0, 0, 18) })
     }
