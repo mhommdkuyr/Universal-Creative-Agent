@@ -5,7 +5,7 @@ import android.os.Looper
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Observe -> visual/semantic reasoning -> safety verification -> act -> verify loop. */
+/** Real observe -> VLM perception -> reasoning -> safety -> action -> post-action verification loop. */
 class UniversalAgentLoop(private val brain: AgentBrainClient) {
     interface Listener {
         fun onEvent(text: String)
@@ -22,80 +22,66 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
 
     fun start(taskText: String, listener: Listener, selectedAttachments: List<String> = emptyList()) {
         if (running) return
-        if (UcoaAccessibilityService.instance == null) {
-            listener.onEvent("العقل: خدمة التحكم غير متاحة")
-            listener.onFinished(false)
-            return
-        }
-        running = true
-        task = taskText
-        step = 0
-        history = JSONArray()
-        this.listener = listener
-        attachments = selectedAttachments
-        listener.onEvent("العقل العالمي: بدأ الإدراك البصري ← التفكير ← التحقق ← التنفيذ.")
-        next()
+        if (UcoaAccessibilityService.instance == null) { listener.onEvent("العقل: خدمة التحكم غير متاحة"); listener.onFinished(false); return }
+        running = true; task = taskText; step = 0; history = JSONArray(); this.listener = listener; attachments = selectedAttachments
+        listener.onEvent("العقل العالمي: الإدراك البصري ← التفكير ← الأمان ← التنفيذ ← التحقق.")
+        persist("running"); next()
     }
 
-    fun stop() {
-        running = false
-        listener?.onEvent("العقل العالمي: تم إيقاف المهمة.")
-    }
+    fun stop() { running = false; persist("stopped"); listener?.onEvent("العقل العالمي: تم إيقاف المهمة.") }
 
     private fun next() {
         if (!running) return
-        if (step >= 60) {
-            finish(false, "وصلت المهمة إلى الحد الآمن لخطوات التنفيذ.")
-            return
-        }
-        val service = UcoaAccessibilityService.instance ?: run {
-            finish(false, "فقدت خدمة التحكم.")
-            return
-        }
-        service.captureScreenshotBase64 { screenshot ->
+        if (step >= 60) { finish(false, "وصلت المهمة إلى الحد الآمن لخطوات التنفيذ."); return }
+        val service = UcoaAccessibilityService.instance ?: run { finish(false, "فقدت خدمة التحكم."); return }
+        service.captureScreenshotBase64 { beforeScreenshot ->
             if (!running) return@captureScreenshotBase64
-            val ui = service.observeUi(260)
-            brain.step(task, step, history, ui, screenshot, service.installedAppLabels(), attachments, false) { response ->
+            val beforeUi = service.observeUi(260)
+            brain.step(task, step, history, beforeUi, beforeScreenshot, service.installedAppLabels(), attachments, false) { response ->
                 main.post {
                     if (!running) return@post
-                    if (!response.ok || response.body == null) {
-                        finish(false, "تعذر الوصول إلى عقل AI: ${response.error ?: "استجابة غير صالحة"}")
-                        return@post
-                    }
+                    if (!response.ok || response.body == null) { finish(false, "تعذر الوصول إلى عقل AI: ${response.error ?: "استجابة غير صالحة"}"); return@post }
                     val decision = response.body
-                    decision.optString("visual_observation").trim().takeIf { it.isNotBlank() }?.let {
-                        listener?.onEvent("الرؤية: $it")
-                    }
-                    decision.optString("message").trim().takeIf { it.isNotBlank() }?.let {
-                        listener?.onEvent("العقل: $it")
-                    }
+                    decision.optString("visual_observation").trim().takeIf { it.isNotBlank() }?.let { listener?.onEvent("الرؤية: $it") }
+                    decision.optString("message").trim().takeIf { it.isNotBlank() }?.let { listener?.onEvent("العقل: $it") }
                     val verification = decision.optJSONObject("verification")
                     if (verification?.optBoolean("requires_confirmation", false) == true) {
                         val reasons = verification.optJSONArray("reasons")?.let { a -> (0 until a.length()).joinToString(", ") { a.optString(it) } } ?: "policy"
-                        listener?.onConfirmationRequired(reasons)
-                        finish(false, "تم إيقاف التنفيذ الآلي حفاظًا على الأمان.")
-                        return@post
+                        listener?.onConfirmationRequired(reasons); finish(false, "تم إيقاف التنفيذ الآلي حفاظًا على الأمان."); return@post
                     }
-                    val action = decision.optString("action").trim()
-                    val params = decision.optJSONObject("params") ?: decision
-                    if (decision.optBoolean("done", false) || action.equals("done", true)) {
-                        finish(true, decision.optString("message", "اكتملت المهمة."))
-                        return@post
-                    }
-                    if (action.isBlank()) {
-                        finish(false, "العقل أعاد قرارًا بلا فعل.")
-                        return@post
-                    }
+                    val action = decision.optString("action").trim(); val params = decision.optJSONObject("params") ?: decision
+                    if (decision.optBoolean("done", false) || action.equals("done", true)) { finish(true, decision.optString("message", "اكتملت المهمة.")); return@post }
+                    if (action.isBlank()) { finish(false, "العقل أعاد قرارًا بلا فعل."); return@post }
                     execute(action, params) { ok, detail ->
-                        history.put(JSONObject().apply {
-                            put("step", step)
-                            put("action", action)
-                            put("ok", ok)
-                            put("detail", detail.take(700))
-                        })
-                        listener?.onEvent("التنفيذ: $action — ${if (ok) "نجح" else "فشل"}")
+                        main.post { afterAction(beforeUi, beforeScreenshot, action, decision, ok, detail) }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun afterAction(beforeUi: String, beforeScreenshot: String?, action: String, decision: JSONObject, ok: Boolean, detail: String) {
+        val service = UcoaAccessibilityService.instance ?: run { finish(false, "فقدت خدمة التحكم أثناء التحقق."); return }
+        history.put(JSONObject().apply { put("step", step); put("action", action); put("ok", ok); put("detail", detail.take(700)) })
+        listener?.onEvent("التنفيذ: $action — ${if (ok) "أُرسل" else "فشل محليًا"}")
+        persist("step_$step")
+        if (!ok) { step++; main.postDelayed({ next() }, 400L); return }
+        service.captureScreenshotBase64 { afterScreenshot ->
+            val afterUi = service.observeUi(260)
+            brain.verifyResult(task, decision, beforeUi, afterUi, beforeScreenshot, afterScreenshot) { result ->
+                main.post {
+                    if (!running) return@post
+                    val verified = result.ok && (result.body?.optBoolean("verified", false) ?: false)
+                    if (verified) {
+                        listener?.onEvent("التحقق: نجح وتغيرت حالة الشاشة.")
                         step++
-                        main.postDelayed({ next() }, params.optLong("wait_after_ms", 700L).coerceIn(150L, 5000L))
+                        persist("verified_$step")
+                        main.postDelayed({ next() }, decision.optLong("wait_after_ms", 700L).coerceIn(150L, 5000L))
+                    } else {
+                        listener?.onEvent("التحقق: لم يثبت نجاح الإجراء؛ سأعيد الملاحظة بدل إعلان الاكتمال.")
+                        step++
+                        persist("verification_failed_$step")
+                        main.postDelayed({ next() }, 600L)
                     }
                 }
             }
@@ -107,13 +93,9 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
         when (action.lowercase()) {
             "open_url" -> cb(s.openUrl(p.optString("url")), "")
             "open_app_by_name" -> cb(s.openAppByName(p.optString("app_name")), p.optString("app_name"))
-            "click_any_text" -> cb(s.clickAnyText(array(p, "texts")), "")
+            "click_any_text" -> cb(s.clickAnyText(array(p, "texts", "text")), "")
             "type_into_any" -> cb(s.typeIntoAny(array(p, "hints"), p.optString("text")), "")
-            "share_attachment" -> {
-                val index = p.optInt("index", 0)
-                val target = attachments.getOrNull(index)
-                if (target == null) cb(false, "attachment_index_missing=$index") else cb(s.shareAttachment(target, p.optString("target_package").takeIf { it.isNotBlank() }), "attachment_$index")
-            }
+            "share_attachment" -> { val index = p.optInt("index", 0); val target = attachments.getOrNull(index); if (target == null) cb(false, "attachment_index_missing=$index") else cb(s.shareAttachment(target, p.optString("target_package").takeIf { it.isNotBlank() }), "attachment_$index") }
             "tap" -> cb(s.tap(p.optDouble("x").toFloat(), p.optDouble("y").toFloat()), "")
             "long_press" -> cb(s.longPress(p.optDouble("x").toFloat(), p.optDouble("y").toFloat(), p.optLong("duration_ms", 700L)), "")
             "swipe" -> cb(s.swipe(p.optDouble("x1").toFloat(), p.optDouble("y1").toFloat(), p.optDouble("x2").toFloat(), p.optDouble("y2").toFloat(), p.optLong("duration_ms", 500L)), "")
@@ -125,13 +107,12 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
         }
     }
 
-    private fun array(obj: JSONObject, key: String): List<String> = buildList {
+    private fun array(obj: JSONObject, key: String, fallbackKey: String? = null): List<String> = buildList {
         obj.optJSONArray(key)?.let { a -> for (i in 0 until a.length()) add(a.optString(i)) }
+        if (isEmpty() && fallbackKey != null) obj.optString(fallbackKey).takeIf { it.isNotBlank() }?.let { add(it) }
     }
 
-    private fun finish(success: Boolean, message: String) {
-        running = false
-        if (message.isNotBlank()) listener?.onEvent(message)
-        listener?.onFinished(success)
-    }
+    private fun persist(status: String) { brain.persistExecutionState(task, step, history, status) }
+
+    private fun finish(success: Boolean, message: String) { running = false; persist(if (success) "completed" else "failed"); if (message.isNotBlank()) listener?.onEvent(message); listener?.onFinished(success) }
 }
