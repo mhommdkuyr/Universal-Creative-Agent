@@ -23,12 +23,19 @@ class UcoaAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
     override fun onInterrupt() = Unit
 
+    fun foregroundPackageName(): String? = windows.asSequence().mapNotNull { it.root?.packageName?.toString() }.firstOrNull()
+
     fun findText(text: String): AccessibilityNodeInfo? = windows.mapNotNull { it.root }.asSequence().flatMap { it.findAccessibilityNodeInfosByText(text).asSequence() }.firstOrNull()
     fun clickText(text: String): Boolean = findText(text)?.let(::clickNode) == true
     fun clickAnyText(texts: List<String>): Boolean {
         val wanted = texts.map(::normalize).filter { it.isNotBlank() }; val nodes = allNodes()
         nodes.firstOrNull { normalize(nodeText(it)) in wanted }?.let { if (clickNode(it)) return true }
         nodes.firstOrNull { n -> val v = normalize(nodeText(n)); v.isNotBlank() && wanted.any { v.contains(it) } }?.let { if (clickNode(it)) return true }
+        // Some canvas/custom-rendered controls expose text but are not clickable.
+        nodes.firstOrNull { n -> val v = normalize(nodeText(n)); v.isNotBlank() && wanted.any { v.contains(it) } }?.let { n ->
+            val b = android.graphics.Rect(); n.getBoundsInScreen(b)
+            if (b.width() > 2 && b.height() > 2) return tap(b.centerX().toFloat(), b.centerY().toFloat())
+        }
         return false
     }
     fun typeText(text: String): Boolean {
@@ -81,7 +88,7 @@ class UcoaAccessibilityService : AccessibilityService() {
                         val bitmap = Bitmap.wrapHardwareBuffer(hw, result.colorSpace)?.copy(Bitmap.Config.ARGB_8888, false)
                         hw.close()
                         if (bitmap == null) { callback(null); return }
-                        val out = ByteArrayOutputStream(); bitmap.compress(Bitmap.CompressFormat.JPEG, 62, out); bitmap.recycle(); callback(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP))
+                        val out = ByteArrayOutputStream(); bitmap.compress(Bitmap.CompressFormat.JPEG, 72, out); bitmap.recycle(); callback(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP))
                     } catch (_: Exception) { runCatching { result.hardwareBuffer.close() }; callback(null) }
                 }
                 override fun onFailure(errorCode: Int) { callback(null) }
