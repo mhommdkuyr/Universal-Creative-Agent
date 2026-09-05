@@ -1,0 +1,10 @@
+# Thin runtime wrapper: use the official prebuilt OmniRoute image so Render does not
+# rebuild the large Next.js application on every deploy.
+FROM diegosouzapw/omniroute:latest
+
+ENV PORT=20128 \
+    HOSTNAME=0.0.0.0 \
+    DATA_DIR=/app/data \
+    REQUIRE_API_KEY=false
+
+EXPOSE 20128
