@@ -33,7 +33,6 @@ export UCOA_REASONING_MODEL="${UCOA_REASONING_MODEL:-Qwen/Qwen3-4B-Instruct-2507
 LOG="$ROOT/llama-server.log"
 : > "$LOG"
 
-# llama.cpp supports q4_0/q4_1/etc for KV cache; q2_K is a model quantization, not a KV cache type.
 "$BIN" -hf "$MODEL_REPO:$MODEL_TAG" --host 127.0.0.1 --port 8001 --alias "$MODEL_NAME" -c "${UCOA_CONTEXT:-192}" -n "${UCOA_MAX_TOKENS:-64}" -t "${UCOA_THREADS:-1}" --cache-type-k "${UCOA_CACHE_TYPE_K:-q4_0}" --cache-type-v "${UCOA_CACHE_TYPE_V:-q4_0}" -np 1 > "$LOG" 2>&1 &
 LLAMA_PID=$!
 cleanup(){ kill "$LLAMA_PID" 2>/dev/null || true; }
@@ -56,4 +55,4 @@ import json,sys
 x=json.load(open(sys.argv[1],encoding='utf-8')); content=x.get('choices',[{}])[0].get('message',{}).get('content','').strip(); assert content; print('LOCAL_BRAIN_INFERENCE_OK',content)
 PY
 cd /opt/render/project/src/server
-exec uvicorn app_v3:app --host 0.0.0.0 --port "${PORT:-10000}"
+exec uvicorn app_v3_runtime:app --host 0.0.0.0 --port "${PORT:-10000}"
