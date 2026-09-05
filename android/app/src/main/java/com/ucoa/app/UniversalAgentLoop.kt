@@ -5,7 +5,7 @@ import android.os.Looper
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Real observe -> VLM perception -> reasoning -> safety -> action -> post-action verification loop. */
+/** Real observe -> multimodal controller -> safety -> action -> post-action verification loop. */
 class UniversalAgentLoop(private val brain: AgentBrainClient) {
     interface Listener {
         fun onEvent(text: String)
@@ -34,9 +34,25 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
         if (!running) return
         if (step >= 60) { finish(false, "وصلت المهمة إلى الحد الآمن لخطوات التنفيذ."); return }
         val service = UcoaAccessibilityService.instance ?: run { finish(false, "فقدت خدمة التحكم."); return }
+
+        // Explicit app bootstrap is a local deterministic operation. We do it before
+        // asking the cloud model so a slow/unavailable planner cannot prevent the
+        // agent from ever reaching the requested application.
+        if (step == 0) {
+            val requestedApp = requestedAppName(task)
+            if (requestedApp != null && service.openAppByName(requestedApp)) {
+                listener?.onEvent("التنفيذ المحلي: فتح $requestedApp")
+                history.put(JSONObject().apply { put("step", 0); put("action", "open_app_by_name"); put("ok", true); put("detail", requestedApp) })
+                persist("opened_$requestedApp")
+                step = 1
+                main.postDelayed({ next() }, 1200L)
+                return
+            }
+        }
+
         service.captureScreenshotBase64 { beforeScreenshot ->
             if (!running) return@captureScreenshotBase64
-            val beforeUi = service.observeUi(260)
+            val beforeUi = service.observeUi(320)
             brain.step(task, step, history, beforeUi, beforeScreenshot, service.installedAppLabels(), attachments, false) { response ->
                 main.post {
                     if (!running) return@post
@@ -60,6 +76,20 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
         }
     }
 
+    private fun requestedAppName(text: String): String? {
+        val t = text.lowercase()
+        val aliases = listOf(
+            "capcut" to "CapCut", "كاب كات" to "CapCut",
+            "youtube" to "YouTube", "يوتيوب" to "YouTube",
+            "canva" to "Canva", "كانفا" to "Canva",
+            "chrome" to "Chrome", "كروم" to "Chrome",
+            "instagram" to "Instagram", "انستجرام" to "Instagram",
+            "whatsapp" to "WhatsApp", "واتساب" to "WhatsApp",
+            "telegram" to "Telegram", "تليجرام" to "Telegram"
+        )
+        return aliases.firstOrNull { t.contains(it.first) }?.second
+    }
+
     private fun afterAction(beforeUi: String, beforeScreenshot: String?, action: String, decision: JSONObject, ok: Boolean, detail: String) {
         val service = UcoaAccessibilityService.instance ?: run { finish(false, "فقدت خدمة التحكم أثناء التحقق."); return }
         history.put(JSONObject().apply { put("step", step); put("action", action); put("ok", ok); put("detail", detail.take(700)) })
@@ -67,7 +97,7 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
         persist("step_$step")
         if (!ok) { step++; main.postDelayed({ next() }, 400L); return }
         service.captureScreenshotBase64 { afterScreenshot ->
-            val afterUi = service.observeUi(260)
+            val afterUi = service.observeUi(320)
             brain.verifyResult(task, decision, beforeUi, afterUi, beforeScreenshot, afterScreenshot) { result ->
                 main.post {
                     if (!running) return@post
@@ -100,7 +130,7 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
             "back" -> cb(s.back(), "")
             "home" -> cb(s.home(), "")
             "wait" -> main.postDelayed({ cb(true, "waited") }, p.optLong("ms", 1000L).coerceIn(100L, 10000L))
-            "observe" -> cb(true, s.observeUi(260))
+            "observe" -> cb(true, s.observeUi(320))
             else -> cb(false, "unsupported_action=$action")
         }
     }
@@ -111,6 +141,5 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
     }
 
     private fun persist(status: String) { brain.persistExecutionState(task, step, history, status) }
-
     private fun finish(success: Boolean, message: String) { running = false; persist(if (success) "completed" else "failed"); if (message.isNotBlank()) listener?.onEvent(message); listener?.onFinished(success) }
 }
