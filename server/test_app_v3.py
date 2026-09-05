@@ -26,7 +26,8 @@ def test_v3_health():
 def test_v3_visual_then_reasoning(monkeypatch):
     monkeypatch.setattr(app_v3, 'VISION_ENABLED', True)
     monkeypatch.setattr(app_v3, 'visual', lambda task, ui, image: ({'screen_summary': 'Continue button visible', 'elements': [{'text': 'Continue', 'role': 'button', 'x': 100, 'y': 200}], 'confidence': 0.95}, 'vision-test'))
-    monkeypatch.setattr(app_v3, 'reasoning', lambda system, user: ('{"action":"click_any_text","params":{"texts":["Continue"]},"message":"click visible button","done":false}', 'reasoning-test'))
+    monkeypatch.setattr(app_v3, 'reasoning', lambda system, user: ('{"action":"click_any_text","params":{"texts":["Continue"]},"message":"click visible button","done":false,"wait_after_ms":700}', 'reasoning-test'))
+    monkeypatch.setattr(app_v3, 'extract_json', lambda raw: {"action": "click_any_text", "params": {"texts": ["Continue"]}, "message": "click visible button", "done": False, "wait_after_ms": 700})
     r = client.post('/v1/agent/step', json={'task': 'continue', 'ui_tree': '[]', 'screenshot_base64': 'aGVsbG8='})
     x = wait_job(r.json()['job_id'])
     assert x['vision_provider'] == 'vision-test'
