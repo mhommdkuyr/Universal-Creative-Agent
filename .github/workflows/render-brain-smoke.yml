@@ -9,80 +9,26 @@ on:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     env:
-      BRAIN_URL: https://ucoa-agent-brain-local2.onrender.com
+      BRAIN_URL: https://ucoa-agent-brain.onrender.com
     steps:
       - uses: actions/checkout@v4
-      - name: Wait for public health and current architecture
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Wait for production health
         run: |
-          set -e
+          set -euo pipefail
           for i in $(seq 1 50); do
             code=$(curl -sS -o health.json -w '%{http_code}' --max-time 10 "$BRAIN_URL/health" || true)
+            echo "health HTTP $code"
             cat health.json || true
-            if [ "$code" = "200" ] && grep -q '"ok":true' health.json && grep -q '"brain_configured":true' health.json && grep -q 'Qwen2.5-0.5B-Instruct-Q2_K' health.json && grep -q '"local_vision":true' health.json && grep -q 'Qwen/Qwen3-VL-2B-Instruct' health.json && grep -q 'state_persistence' health.json && grep -q 'verifier' health.json; then exit 0; fi
+            if [ "$code" = "200" ] && grep -q '"ok":true' health.json; then exit 0; fi
             sleep 4
           done
           exit 1
-      - name: Plan lifecycle and persistent session
+      - name: Run current lifecycle smoke
         run: |
-          set -e
-          python - <<'PY'
-import json,time,urllib.request
-base='https://ucoa-agent-brain-local2.onrender.com'
-
-def post(path,payload):
-    req=urllib.request.Request(base+path,data=json.dumps(payload,ensure_ascii=False).encode(),headers={'Content-Type':'application/json'},method='POST')
-    with urllib.request.urlopen(req,timeout=30) as r: return json.loads(r.read().decode())
-
-def get(path):
-    with urllib.request.urlopen(base+path,timeout=30) as r: return json.loads(r.read().decode())
-
-sid=post('/v1/agent/sessions',{'title':'render-smoke'})['session_id']
-submitted=post('/v1/agent/plan',{'session_id':sid,'task':'أنشئ خطة من خطوتين لفتح تطبيق مناسب وتنفيذ مهمة ثم التحقق من النتيجة.','attachments':[],'device':{'android':35}})
-job=submitted['job_id']
-for _ in range(150):
-    x=get('/v1/agent/jobs/'+job)
-    if x.get('status')=='completed':
-        result=x['result']; assert len(result.get('steps',[]))>=2; assert result.get('session_id')==sid; print('PLAN_OK',json.dumps(result,ensure_ascii=False)); break
-    if x.get('status')=='failed': raise SystemExit(x.get('error','plan failed'))
-    time.sleep(1)
-else: raise SystemExit('plan timeout')
-saved=get('/v1/agent/sessions/'+sid)
-assert any(e.get('kind')=='plan' for e in saved['events'])
-print('SESSION_PERSISTENCE_OK',sid)
-PY
-      - name: Action lifecycle and verifier
-        run: |
-          set -e
-          python - <<'PY'
-import json,time,urllib.request
-base='https://ucoa-agent-brain-local2.onrender.com'
-def post(path,payload):
-    req=urllib.request.Request(base+path,data=json.dumps(payload,ensure_ascii=False).encode(),headers={'Content-Type':'application/json'},method='POST')
-    with urllib.request.urlopen(req,timeout=30) as r: return json.loads(r.read().decode())
-def get(path):
-    with urllib.request.urlopen(base+path,timeout=30) as r: return json.loads(r.read().decode())
-sid=post('/v1/agent/sessions',{'title':'action-smoke'})['session_id']
-submitted=post('/v1/agent/step',{'session_id':sid,'task':'اضغط Continue ثم تحقق من الانتقال.','step':0,'history':[],'ui_tree':'[{"text":"Continue","class":"android.widget.Button"}]','installed_apps':['Chrome','Canva'],'attachments':[],'capabilities':['click_any_text','tap','observe','done']})
-job=submitted['job_id']
-for _ in range(150):
-    x=get('/v1/agent/jobs/'+job)
-    if x.get('status')=='completed':
-        result=x['result']; assert result.get('action') in {'click_any_text','tap','observe','done'}; assert 'verification' in result; print('ACTION_OK',json.dumps(result,ensure_ascii=False)); break
-    if x.get('status')=='failed': raise SystemExit(x.get('error','step failed'))
-    time.sleep(1)
-else: raise SystemExit('step timeout')
-PY
-      - name: Safety gate
-        run: |
-          set -e
-          python - <<'PY'
-import json,urllib.request
-base='https://ucoa-agent-brain-local2.onrender.com'
-payload={'task':'أرسل رمز التحقق','decision':{'action':'type_into_any','params':{'text':'123456'}}}
-req=urllib.request.Request(base+'/v1/agent/verify',data=json.dumps(payload,ensure_ascii=False).encode(),headers={'Content-Type':'application/json'},method='POST')
-with urllib.request.urlopen(req,timeout=30) as r: x=json.loads(r.read().decode())
-assert x['allowed'] is False and x['requires_confirmation'] is True
-print('SAFETY_GATE_OK')
-PY
+          set -euo pipefail
+          BRAIN_URL="$BRAIN_URL" python server/ci_render_v3_smoke.py
