@@ -33,7 +33,8 @@ export UCOA_REASONING_MODEL="${UCOA_REASONING_MODEL:-Qwen/Qwen3-4B-Instruct-2507
 LOG="$ROOT/llama-server.log"
 : > "$LOG"
 
-"$BIN" -hf "$MODEL_REPO:$MODEL_TAG" --host 127.0.0.1 --port 8001 --alias "$MODEL_NAME" -c "${UCOA_CONTEXT:-192}" -n "${UCOA_MAX_TOKENS:-64}" -t "${UCOA_THREADS:-1}" --cache-type-k "${UCOA_CACHE_TYPE_K:-q2_K}" --cache-type-v "${UCOA_CACHE_TYPE_V:-q2_K}" -np 1 > "$LOG" 2>&1 &
+# llama.cpp supports q4_0/q4_1/etc for KV cache; q2_K is a model quantization, not a KV cache type.
+"$BIN" -hf "$MODEL_REPO:$MODEL_TAG" --host 127.0.0.1 --port 8001 --alias "$MODEL_NAME" -c "${UCOA_CONTEXT:-192}" -n "${UCOA_MAX_TOKENS:-64}" -t "${UCOA_THREADS:-1}" --cache-type-k "${UCOA_CACHE_TYPE_K:-q4_0}" --cache-type-v "${UCOA_CACHE_TYPE_V:-q4_0}" -np 1 > "$LOG" 2>&1 &
 LLAMA_PID=$!
 cleanup(){ kill "$LLAMA_PID" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
