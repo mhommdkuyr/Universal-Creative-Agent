@@ -37,7 +37,12 @@ jobs:
           AVD_NAME=ucoa-capcut
           mkdir -p "$HOME/.android/avd"
           adb start-server
-          DEVICE_ID="$(avdmanager list device | awk -F'"' '/id: / {print $2; exit}')"
+          echo 'Available hardware profiles:'
+          avdmanager list device | sed -n '1,180p'
+          DEVICE_ID="$(avdmanager list device | awk -F'"' '/id: / && tolower($2) ~ /pixel/ {print $2; exit}')"
+          if [ -z "$DEVICE_ID" ]; then
+            DEVICE_ID="$(avdmanager list device | awk -F'"' '/id: / {print $2; exit}')"
+          fi
           test -n "$DEVICE_ID"
           echo "Using AVD device profile: $DEVICE_ID"
           printf 'no\n' | avdmanager create avd --force --name "$AVD_NAME" --package 'system-images;android-35;default;x86_64' --device "$DEVICE_ID"
