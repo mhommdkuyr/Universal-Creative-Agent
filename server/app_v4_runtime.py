@@ -144,6 +144,8 @@ def run_plan(req: Any) -> dict[str, Any]:
     sid=app_v3.ensure_session(req.session_id)
     payload=json.dumps({"task":req.task,"attachments":req.attachments[:8],"device":req.device,"memory":app_v3.memory(sid,12)},ensure_ascii=False)
     try:
+        # Production must never route planning to the old Render/local model.
+        # The legacy hook is used only when a test explicitly monkeypatches it.
         if app_v3.reasoning is not _LEGACY_REASONING:
             raw, provider = app_v3.reasoning(PLANNER,payload)
         else:
@@ -191,7 +193,7 @@ def run_step(req: Any) -> dict[str, Any]:
             if req.step==0 and app_name:
                 result={"action":"open_app_by_name","params":{"app_name":app_name},"message":f"فتح {app_name}","done":False,"wait_after_ms":1000,"confidence":0.99,"coordinate_space":None,"verification_goal":"ظهور واجهة التطبيق","provider":"repair","vision_provider":"repair","output_mode":"repair","error":str(exc)}
             else:
-                result={"action":"observe","params":{},"message":"لا يوجد هدف مؤكد؛ إعادة الملاحظة","done":False,"wait_after_ms":700,"confidence":0.1,"coordinate_space":None,"verification_goal":"الحصول على شاشة وهدف مؤكد","provider":"repair","vision_provider":"repair","output_mode":"repair","error":str(exc)}
+                result={"action":"observe","params":{},"message":"لا يوجد هدف مؤكد؛ إعادة الملاحظة","done":False,"wait_after_ms":700,"confidence":0.1,"coordinate_space":None,"verification_goal":"الحصول على هدف مؤكد","provider":"repair","vision_provider":"repair","output_mode":"repair","error":str(exc)}
         result["research"]=research_results; result["visual_observation"]={"screen_summary":"direct Qwen3-VL-235B controller","elements":[],"confidence":result.get("confidence",0.0)}
     result["session_id"]=sid; result["verification"]=app_v3.safety(req.task,result,req.approved_risks)
     app_v3.remember(sid,"decision",result); app_v3.save_state(sid,{"phase":"executing","task":req.task,"step":req.step,"last_decision":result}); return result
