@@ -16,7 +16,7 @@ on:
 jobs:
   capcut-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -27,56 +27,19 @@ jobs:
         with:
           packages: platform-tools
       - uses: gradle/actions/setup-gradle@v4
-      - name: Install Android test image
-        run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools" "emulator" "system-images;android-35;default;x86_64"
-      - run: gradle -p android assembleDebug --stacktrace
-      - name: Start emulator and run CapCut E2E
-        shell: bash
-        run: |
-          set -euo pipefail
-          AVD_NAME=ucoa-capcut
-          mkdir -p "$HOME/.android/avd"
-          adb start-server
-          rm -rf "$HOME/.android/avd/${AVD_NAME}.avd" "$HOME/.android/avd/${AVD_NAME}.ini"
-          printf 'no\n' | avdmanager create avd --force --name "$AVD_NAME" --package 'system-images;android-35;default;x86_64' --abi 'x86_64'
-          AVD_DIR="$HOME/.android/avd/${AVD_NAME}.avd"
-          test -f "$AVD_DIR/config.ini"
-          cat >> "$AVD_DIR/config.ini" <<'EOF'
-          hw.cpu.ncore=2
-          hw.ramSize=2048
-          hw.gpu.enabled=yes
-          hw.gpu.mode=swiftshader_indirect
-          hw.lcd.width=1080
-          hw.lcd.height=1920
-          hw.lcd.density=420
-          EOF
-          echo '--- AVD config ---'
-          cat "$AVD_DIR/config.ini"
-          emulator -avd "$AVD_NAME" -port 5554 -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -no-snapshot-load -wipe-data -accel off >/tmp/ucoa-emulator.log 2>&1 &
-          EMU_PID=$!
-          cleanup() {
-            adb -s emulator-5554 emu kill >/dev/null 2>&1 || true
-            kill "$EMU_PID" >/dev/null 2>&1 || true
-            wait "$EMU_PID" >/dev/null 2>&1 || true
-            echo '--- emulator log ---'
-            tail -n 240 /tmp/ucoa-emulator.log || true
-          }
-          trap cleanup EXIT
-          echo 'Waiting for ADB device...'
-          for i in $(seq 1 240); do
-            if adb devices | awk 'NR>1 && $1=="emulator-5554" && $2=="device" {found=1} END{exit found?0:1}'; then break; fi
-            sleep 2
-          done
-          test "$(adb devices | awk 'NR>1 && $1=="emulator-5554" && $2=="device" {print $2}')" = "device"
-          echo 'Waiting for Android boot completion...'
-          for i in $(seq 1 480); do
-            BOOTED="$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
-            if [ "$BOOTED" = "1" ]; then break; fi
-            sleep 2
-          done
-          test "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d '\r')" = "1"
-          adb -s emulator-5554 shell input keyevent 82 || true
-          adb -s emulator-5554 shell settings put system screen_off_timeout 1800000 || true
-          bash ./server/ci_capcut_e2e.sh
+      - name: Build UCOA debug APK
+        run: gradle -p android assembleDebug --stacktrace
+      - name: Run CapCut E2E on managed Android emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: default
+          arch: x86_64
+          profile: pixel_2
+          force-avd-creation: true
+          emulator-options: -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel off
+          disable-animations: true
+          script: |
+            adb wait-for-device
+            adb shell settings put system screen_off_timeout 1800000 || true
+            bash ./server/ci_capcut_e2e.sh
