@@ -23,21 +23,19 @@ class UcoaCapCutSmokeActivity : Activity() {
         val label = intent.getStringExtra("capcut_label") ?: "CapCut"
         capCutPackage = findPackage(label)
         Log.i(TAG, "UCOA_CAPCUT_SMOKE_START package=$capCutPackage")
+        if (capCutPackage == null) return fail("CapCut is not installed in emulator")
         waitForService(0)
     }
 
     private fun waitForService(attempt: Int) {
         if (finished) return
-        if (UcoaAccessibilityService.instance != null) {
-            startAgent()
-            return
-        }
+        if (UcoaAccessibilityService.instance != null) { startAgent(); return }
         if (attempt >= 45) return fail("accessibility service unavailable")
         main.postDelayed({ waitForService(attempt + 1) }, 400)
     }
 
     private fun startAgent() {
-        val task = "Open CapCut and reach its video editing workspace. If it asks for a new project, create one and choose the first available video. Continue navigating through visible screens until the CapCut editor/timeline is visible. Stop only when the editor is visibly confirmed. Never guess a control."
+        val task = "Open CapCut and reach its video editing workspace. If it asks for a new project, create one and choose the first available video. Continue through the visible screens until CapCut's editor/timeline is visibly confirmed. Never guess a control and never claim success without visual/UI evidence."
         loop = UniversalAgentLoop(brain)
         loop.start(task, object : UniversalAgentLoop.Listener {
             override fun onEvent(text: String) {
@@ -48,20 +46,14 @@ class UcoaCapCutSmokeActivity : Activity() {
             }
             override fun onConfirmationRequired(reasons: String) { fail("confirmation required: $reasons") }
             override fun onFinished(success: Boolean) {
-                main.post {
-                    if (finished) return@post
-                    if (success && isEditorVisible()) succeed() else fail("agent finished success=$success actions=$usefulActions verified=$verifiedActions foreground=${foregroundPackage()}")
-                }
+                main.post { if (!finished) { if (success && isEditorVisible()) succeed() else fail("agent finished success=$success actions=$usefulActions verified=$verifiedActions foreground=${foregroundPackage()}") } }
             }
         })
     }
 
     private fun inspectState() {
         if (finished) return
-        if (isEditorVisible() && usefulActions >= 1) {
-            loop.stop()
-            succeed()
-        }
+        if (isEditorVisible() && usefulActions >= 1) { loop.stop(); succeed() }
     }
 
     private fun succeed() {
@@ -82,9 +74,7 @@ class UcoaCapCutSmokeActivity : Activity() {
 
     private fun findPackage(label: String): String? {
         val pm = packageManager
-        return pm.getInstalledApplications(0).firstOrNull {
-            (pm.getApplicationLabel(it)?.toString() ?: "").contains(label, true)
-        }?.packageName
+        return pm.getInstalledApplications(0).firstOrNull { (pm.getApplicationLabel(it)?.toString() ?: "").contains(label, true) }?.packageName
     }
 
     private fun fail(reason: String) {
