@@ -37,8 +37,8 @@ jobs:
           AVD_NAME=ucoa-capcut
           mkdir -p "$HOME/.android/avd"
           adb start-server
-          avdmanager list device | sed -n '1,120p'
-          printf 'no\n' | avdmanager create avd --force --name "$AVD_NAME" --package 'system-images;android-35;default;x86_64' --device 'pixel_2'
+          avdmanager list device | sed -n '1,90p'
+          yes no | avdmanager create avd --force --name "$AVD_NAME" --package 'system-images;android-35;default;x86_64' --abi 'x86_64' --device 24
           AVD_DIR="$HOME/.android/avd/${AVD_NAME}.avd"
           test -f "$AVD_DIR/config.ini"
           cat >> "$AVD_DIR/config.ini" <<'EOF'
@@ -60,9 +60,7 @@ jobs:
 
           echo 'Waiting for ADB device...'
           for i in $(seq 1 240); do
-            if adb devices | awk 'NR>1 && $1=="emulator-5554" && $2=="device" {found=1} END{exit found?0:1}'; then
-              break
-            fi
+            if adb devices | awk 'NR>1 && $1=="emulator-5554" && $2=="device" {found=1} END{exit found?0:1}'; then break; fi
             sleep 2
           done
           test "$(adb devices | awk 'NR>1 && $1=="emulator-5554" && $2=="device" {print $2}')" = "device"
@@ -70,9 +68,7 @@ jobs:
           echo 'Waiting for Android boot completion...'
           for i in $(seq 1 480); do
             BOOTED="$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
-            if [ "$BOOTED" = "1" ]; then
-              break
-            fi
+            if [ "$BOOTED" = "1" ]; then break; fi
             sleep 2
           done
           test "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d '\r')" = "1"
