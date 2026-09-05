@@ -19,8 +19,11 @@ with tempfile.NamedTemporaryFile(suffix=".png") as f:
     draw.text((125, 290), "CONTINUE", fill="black")
     image.save(f.name)
     image_ref = handle_file(f.name)
-    history = [((image_ref,), None), ("Return ONLY JSON with action, params, message, done, confidence. Identify the visible CONTINUE button and choose the safest action to press it.", None)]
-    result = client.predict(history, history, api_name="/predict")
+
+    history = client.predict([], image_ref, api_name="/add_file")
+    history = client.predict(history, "Return ONLY JSON with action, params, message, done, confidence. Identify the visible CONTINUE button and choose the safest action to press it.", api_name="/add_text")
+    result = client.predict(history, api_name="/predict")
 
 print("HF_235B_RESULT", json.dumps(result, ensure_ascii=False, default=str))
 assert result is not None
+assert "continue" in str(result).lower()
