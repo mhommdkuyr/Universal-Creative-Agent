@@ -142,16 +142,17 @@ def _requested_app(task: str, installed: list[str]) -> str | None:
 
 def run_plan(req: Any) -> dict[str, Any]:
     sid=app_v3.ensure_session(req.session_id)
-    if app_v3.reasoning is not _LEGACY_REASONING:
-        raw, provider = app_v3.reasoning(PLANNER, json.dumps({"task":req.task,"attachments":req.attachments[:8],"device":req.device,"memory":app_v3.memory(sid,12)},ensure_ascii=False))
-    else:
-        raw, provider = _space_predict(PLANNER+"\n"+json.dumps({"task":req.task,"attachments":req.attachments[:8],"device":req.device,"memory":app_v3.memory(sid,12)},ensure_ascii=False)), "huggingface-qwen3-vl-235b"
+    payload=json.dumps({"task":req.task,"attachments":req.attachments[:8],"device":req.device,"memory":app_v3.memory(sid,12)},ensure_ascii=False)
     try:
+        if app_v3.reasoning is not _LEGACY_REASONING:
+            raw, provider = app_v3.reasoning(PLANNER,payload)
+        else:
+            raw, provider = _space_predict(PLANNER+"\n"+payload), "huggingface-qwen3-vl-235b"
         x=app_v3.extract_json(raw); steps=x.get("steps") if isinstance(x.get("steps"),list) else []
         if not steps: raise ValueError("missing steps")
         result={"summary":str(x.get("summary","UCOA plan")),"steps":[str(s) for s in steps[:6]],"output_mode":"primary_model","provider":provider,"session_id":sid}
     except Exception as exc:
-        result={"summary":"خطة قابلة للتحقق","steps":["افتح التطبيق الهدف.","نفذ الإجراء المطلوب.","تحقق بصريًا من النتيجة."],"output_mode":"repair","provider":provider,"session_id":sid,"error":str(exc)}
+        result={"summary":"خطة قابلة للتحقق","steps":["افتح التطبيق الهدف.","نفذ الإجراء المطلوب.","تحقق بصريًا من النتيجة."],"output_mode":"repair","provider":"repair","session_id":sid,"error":str(exc)}
     app_v3.remember(sid,"plan",result); app_v3.save_state(sid,{"phase":"planned","task":req.task,"step":0,"plan":result}); return result
 
 
@@ -160,16 +161,23 @@ def run_step(req: Any) -> dict[str, Any]:
     visual_changed = app_v3.visual is not _LEGACY_VISUAL
     reasoning_changed = app_v3.reasoning is not _LEGACY_REASONING
     call_vision_changed = app_v3.call_vision is not _LEGACY_CALL_VISION
-
     if visual_changed or reasoning_changed or call_vision_changed:
         if call_vision_changed:
-            obs, vp = app_v3.call_vision(req.task, req.ui_tree, req.screenshot_base64)
+            obs,vp=app_v3.call_vision(req.task,req.ui_tree,req.screenshot_base64)
         elif visual_changed and req.screenshot_base64:
-            obs, vp = app_v3.visual(req.task, req.ui_tree, req.screenshot_base64)
+            obs,vp=app_v3.visual(req.task,req.ui_tree,req.screenshot_base64)
         else:
-            obs, vp = {"screen_summary":"legacy compatibility without screenshot","elements":[],"confidence":0.0}, "compatibility"
-        raw, rp = app_v3.reasoning(CONTROLLER,json.dumps({"task":req.task,"step":req.step,"ui_tree":req.ui_tree,"visual":obs,"capabilities":req.capabilities},ensure_ascii=False))
-        result=_normalize_action(app_v3.extract_json(raw),req.screenshot_base64)
+            obs,vp={"screen_summary":"legacy compatibility without screenshot","elements":[],"confidence":0.0},"compatibility"
+        try:
+            raw,rp=app_v3.reasoning(CONTROLLER,json.dumps({"task":req.task,"step":req.step,"ui_tree":req.ui_tree,"visual":obs,"capabilities":req.capabilities},ensure_ascii=False))
+            parsed=app_v3.extract_json(raw)
+            try:
+                result=_normalize_action(parsed,req.screenshot_base64)
+            except ValueError:
+                result={"action":"observe","params":{},"message":"النموذج أعاد إجراء غير مدعوم؛ سأراقب بدل التخمين.","done":False,"wait_after_ms":600,"confidence":0.0,"coordinate_space":None,"verification_goal":"الحصول على هدف مؤكد"}
+        except Exception as exc:
+            result={"action":"observe","params":{},"message":"تعذر قرار النموذج؛ إعادة الملاحظة بأمان.","done":False,"wait_after_ms":600,"confidence":0.0,"coordinate_space":None,"verification_goal":"الحصول على هدف مؤكد","error":str(exc)}
+            rp="repair"
         result.update({"provider":rp,"vision_provider":vp,"output_mode":"compatibility_test","visual_observation":obs})
     else:
         app_name=_requested_app(req.task,req.installed_apps)
