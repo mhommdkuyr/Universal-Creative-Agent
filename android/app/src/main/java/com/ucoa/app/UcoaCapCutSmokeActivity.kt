@@ -14,6 +14,7 @@ class UcoaCapCutSmokeActivity : Activity() {
     private var usefulActions = 0
     private var verifiedActions = 0
     private var capCutPackage: String? = null
+    private var sawPrimaryBrain = false
     private lateinit var loop: UniversalAgentLoop
     private lateinit var brain: AgentBrainClient
 
@@ -40,26 +41,27 @@ class UcoaCapCutSmokeActivity : Activity() {
         loop.start(task, object : UniversalAgentLoop.Listener {
             override fun onEvent(text: String) {
                 Log.i(TAG, "UCOA_CAPCUT_EVENT $text")
-                if (text.startsWith("التنفيذ:") && !text.contains("observe", true)) usefulActions++
+                if (text.contains("huggingface-qwen3-vl-235b", true)) sawPrimaryBrain = true
+                if (text.startsWith("التنفيذ المحلي:") || text.startsWith("التنفيذ:") && !text.contains("observe", true)) usefulActions++
                 if (text.contains("التحقق: نجح", true)) verifiedActions++
                 main.postDelayed({ inspectState() }, 300)
             }
             override fun onConfirmationRequired(reasons: String) { fail("confirmation required: $reasons") }
             override fun onFinished(success: Boolean) {
-                main.post { if (!finished) { if (success && isEditorVisible()) succeed() else fail("agent finished success=$success actions=$usefulActions verified=$verifiedActions foreground=${foregroundPackage()}") } }
+                main.post { if (!finished) { if (success && sawPrimaryBrain && isEditorVisible()) succeed() else fail("agent finished success=$success primary=$sawPrimaryBrain actions=$usefulActions verified=$verifiedActions foreground=${foregroundPackage()}") } }
             }
         })
     }
 
     private fun inspectState() {
         if (finished) return
-        if (isEditorVisible() && usefulActions >= 1) { loop.stop(); succeed() }
+        if (isEditorVisible() && sawPrimaryBrain && usefulActions >= 1) { loop.stop(); succeed() }
     }
 
     private fun succeed() {
         if (finished) return
         finished = true
-        Log.i(TAG, "UCOA_CAPCUT_SMOKE_OK actions=$usefulActions verified=$verifiedActions package=${foregroundPackage()}")
+        Log.i(TAG, "UCOA_CAPCUT_SMOKE_OK actions=$usefulActions verified=$verifiedActions primary_brain=$sawPrimaryBrain package=${foregroundPackage()}")
         finish()
     }
 
