@@ -1,5 +1,5 @@
 name: CapCut E2E
-# Production acceptance: exercise the current main branch after the OmniRoute bridge change.
+# Production acceptance: build UCOA and exercise the CapCut path on a real Android emulator.
 on:
   workflow_dispatch:
   push:
@@ -15,7 +15,7 @@ on:
 jobs:
   capcut-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -26,14 +26,47 @@ jobs:
         with:
           packages: platform-tools
       - uses: gradle/actions/setup-gradle@v4
-      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Install Android test image
+        run: |
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools" "emulator" "system-images;android-35;default;x86_64"
       - run: gradle -p android assembleDebug --stacktrace
-      - uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          arch: x86_64
-          target: default
-          force-avd-creation: true
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
-          disable-animations: true
-          script: bash ./server/ci_capcut_e2e.sh
+      - name: Start emulator and run CapCut E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          AVD_NAME=ucoa-capcut
+          adb start-server
+          echo no | avdmanager create avd --force -n "$AVD_NAME" --package 'system-images;android-35;default;x86_64'
+          printf 'hw.cpu.ncore=2\nhw.ramSize=2048\nhw.gpu.enabled=yes\nhw.gpu.mode=swiftshader_indirect\n' >> "$HOME/.android/avd/${AVD_NAME}.avd/config.ini"
+          emulator -avd "$AVD_NAME" -port 5554 -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -accel off >/tmp/ucoa-emulator.log 2>&1 &
+          EMU_PID=$!
+          cleanup() {
+            adb -s emulator-5554 emu kill >/dev/null 2>&1 || true
+            kill "$EMU_PID" >/dev/null 2>&1 || true
+            wait "$EMU_PID" >/dev/null 2>&1 || true
+            echo '--- emulator log ---'
+            tail -n 120 /tmp/ucoa-emulator.log || true
+          }
+          trap cleanup EXIT
+
+          echo 'Waiting for ADB device...'
+          for i in $(seq 1 240); do
+            if adb devices | awk 'NR>1 && $1=="emulator-5554" && $2=="device" {found=1} END{exit found?0:1}'; then
+              break
+            fi
+            sleep 2
+          done
+          adb -s emulator-5554 wait-for-device
+
+          echo 'Waiting for Android boot completion...'
+          for i in $(seq 1 480); do
+            BOOTED="$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+            if [ "$BOOTED" = "1" ]; then
+              break
+            fi
+            sleep 2
+          done
+          test "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d '\r')" = "1"
+          adb -s emulator-5554 shell input keyevent 82 || true
+          bash ./server/ci_capcut_e2e.sh
