@@ -28,7 +28,6 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Install Android test image
         run: |
-          yes | sdkmanager --licenses >/dev/null
           sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools" "emulator" "system-images;android-35;default;x86_64"
       - run: gradle -p android assembleDebug --stacktrace
       - name: Start emulator and run CapCut E2E
@@ -36,9 +35,17 @@ jobs:
         run: |
           set -euo pipefail
           AVD_NAME=ucoa-capcut
+          mkdir -p "$HOME/.android/avd"
           adb start-server
-          echo no | avdmanager create avd --force -n "$AVD_NAME" --package 'system-images;android-35;default;x86_64'
-          printf 'hw.cpu.ncore=2\nhw.ramSize=2048\nhw.gpu.enabled=yes\nhw.gpu.mode=swiftshader_indirect\n' >> "$HOME/.android/avd/${AVD_NAME}.avd/config.ini"
+          echo no | avdmanager create avd --force --name "$AVD_NAME" --package 'system-images;android-35;default;x86_64' --device 'pixel_2'
+          AVD_DIR="$HOME/.android/avd/${AVD_NAME}.avd"
+          test -f "$AVD_DIR/config.ini"
+          cat >> "$AVD_DIR/config.ini" <<'EOF'
+          hw.cpu.ncore=2
+          hw.ramSize=2048
+          hw.gpu.enabled=yes
+          hw.gpu.mode=swiftshader_indirect
+          EOF
           emulator -avd "$AVD_NAME" -port 5554 -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -accel off >/tmp/ucoa-emulator.log 2>&1 &
           EMU_PID=$!
           cleanup() {
@@ -46,7 +53,7 @@ jobs:
             kill "$EMU_PID" >/dev/null 2>&1 || true
             wait "$EMU_PID" >/dev/null 2>&1 || true
             echo '--- emulator log ---'
-            tail -n 120 /tmp/ucoa-emulator.log || true
+            tail -n 160 /tmp/ucoa-emulator.log || true
           }
           trap cleanup EXIT
 
