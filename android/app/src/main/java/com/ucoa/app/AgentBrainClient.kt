@@ -62,7 +62,7 @@ class AgentBrainClient(private val context: Context) {
             try {
                 val body = requestJson("GET", base + "/health", null, 15000)
                 val vision = body.optString("vision_model", "غير متاح")
-                callback(true, if (body.optBoolean("brain_configured", false)) "العقل متصل: ${body.optString("model", "local")} | الرؤية: $vision" else "الخادم متصل لكن النموذج غير مهيأ")
+                callback(true, if (body.optBoolean("brain_configured", false)) "العقل متصل: ${body.optString("reasoning_model", body.optString("model", "primary"))} | الرؤية: $vision" else "الخادم متصل لكن النموذج غير مهيأ")
             } catch (e: Exception) { callback(false, e.message ?: e.javaClass.simpleName) }
         }
     }
@@ -82,6 +82,9 @@ class AgentBrainClient(private val context: Context) {
             if (!screenshotBase64.isNullOrBlank()) put("screenshot_base64", screenshotBase64)
             put("installed_apps", JSONArray(installedApps.take(250))); put("attachments", JSONArray(attachments.take(20)))
             put("capabilities", JSONArray(listOf("open_url", "open_app_by_name", "click_any_text", "type_into_any", "share_attachment", "tap", "long_press", "swipe", "back", "home", "wait", "observe", "done")))
+            put("foreground_package", UcoaAccessibilityService.instance?.foregroundPackageName() ?: "")
+            val dm = context.resources.displayMetrics
+            put("screen_width", dm.widthPixels); put("screen_height", dm.heightPixels)
         }
         submitJob("/v1/agent/step", payload, callback)
     }
@@ -99,7 +102,7 @@ class AgentBrainClient(private val context: Context) {
     }
 
     private fun pollJob(base: String, jobId: String, callback: (Response) -> Unit, attempt: Int) {
-        if (attempt >= 160) { callback(Response(false, null, "انتهت مهلة انتظار عقل AI")); return }
+        if (attempt >= 240) { callback(Response(false, null, "انتهت مهلة انتظار عقل AI")); return }
         try {
             val job = requestJson("GET", base + "/v1/agent/jobs/$jobId", null, 15000)
             when (job.optString("status")) {
