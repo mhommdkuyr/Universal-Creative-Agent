@@ -56,4 +56,4 @@ jobs:
           api-level: 35
           arch: x86_64
           target: default
-          script: ./server/ci_android_smoke.sh
+          script: bash ./server/ci_android_smoke.sh
