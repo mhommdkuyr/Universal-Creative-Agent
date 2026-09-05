@@ -1,9 +1,12 @@
 """Production entrypoint for UCOA V4 with live provider routing."""
+import base64
+import io
 import sys
 
 import app_v4_runtime  # noqa: F401,E402
 import app_v3
 import provider_router
+from PIL import Image, ImageDraw
 
 
 def _provider_reasoning(system, user):
@@ -23,6 +26,29 @@ app_v3.visual = _provider_visual
 @app_v3.app.get("/v1/providers/probe")
 def providers_probe():
     return provider_router.safe_text_probe()
+
+
+@app_v3.app.get("/v1/providers/probe-vision")
+def providers_probe_vision():
+    """Live multimodal probe using a synthetic Android-like screen."""
+    image = Image.new("RGB", (640, 360), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 0, 640, 64), fill="black")
+    draw.text((24, 20), "UCOA Vision Test", fill="white")
+    draw.rounded_rectangle((220, 150, 420, 215), radius=12, fill="#dddddd", outline="black")
+    draw.text((295, 172), "CONTINUE", fill="black")
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG", quality=85)
+    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+    task = "Find the visible primary button in this Android-like screen. Return JSON only."
+    tree = '[{"text":"CONTINUE","role":"button"}]'
+    try:
+        result, provider = provider_router.visual(task, tree, encoded)
+        labels = [str(e.get("text", "")) for e in result.get("elements", []) if isinstance(e, dict)] if isinstance(result, dict) else []
+        found = any("continue" in x.lower() for x in labels) or "continue" in str(result).lower()
+        return {"ok": bool(found), "provider": provider, "detected_target": "CONTINUE" if found else None, "confidence": result.get("confidence") if isinstance(result, dict) else None}
+    except Exception as exc:
+        return {"ok": False, "provider": None, "error": type(exc).__name__}
 
 
 sys.modules[__name__] = app_v3
