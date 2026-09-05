@@ -38,7 +38,8 @@ jobs:
           mkdir -p "$HOME/.android/avd"
           adb start-server
           avdmanager list device | sed -n '1,90p'
-          yes no | avdmanager create avd --force --name "$AVD_NAME" --package 'system-images;android-35;default;x86_64' --abi 'x86_64' --device 24
+          printf 'no\n' > /tmp/ucoa-avd-answers
+          avdmanager create avd --force --name "$AVD_NAME" --package 'system-images;android-35;default;x86_64' --abi 'x86_64' --device 24 < /tmp/ucoa-avd-answers
           AVD_DIR="$HOME/.android/avd/${AVD_NAME}.avd"
           test -f "$AVD_DIR/config.ini"
           cat >> "$AVD_DIR/config.ini" <<'EOF'
