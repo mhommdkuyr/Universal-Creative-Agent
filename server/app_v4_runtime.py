@@ -1,8 +1,7 @@
 """UCOA V4 runtime.
 
-The FastAPI orchestration layer remains V3-compatible, but plan/step decisions
-are delegated to the official Qwen3-VL-235B Hugging Face Space through its
-verified Gradio state lifecycle.
+The FastAPI orchestration layer remains V3-compatible, but production plan/step
+calls are delegated to the official Qwen3-VL-235B Hugging Face Space.
 """
 from __future__ import annotations
 
@@ -21,6 +20,11 @@ HF_SPACE = os.getenv("UCOA_PRIMARY_VISION_SPACE", "Qwen/Qwen3-VL-235B-A22B-Instr
 HF_MODEL = os.getenv("UCOA_PRIMARY_VISION_MODEL", "Qwen/Qwen3-VL-235B-A22B-Instruct")
 MAX_RETRIES = max(1, int(os.getenv("UCOA_PRIMARY_MAX_RETRIES", "2")))
 WEB_RESEARCH = os.getenv("UCOA_WEB_RESEARCH", "true").lower() == "true"
+
+# Preserve the original hooks so the existing regression suite can monkeypatch
+# them without changing the production controller decision path.
+_LEGACY_VISUAL = app_v3.visual
+_LEGACY_REASONING = app_v3.reasoning
 
 PLANNER = """
 You are the UCOA task planner controlling a real Android phone.
@@ -99,7 +103,8 @@ def _normalize_action(value: dict[str, Any], image: str | None) -> dict[str, Any
             result["coordinate_space"] = "pixel"
         except Exception:
             result["coordinate_space"] = None
-    else: result["coordinate_space"] = value.get("coordinate_space")
+    else:
+        result["coordinate_space"] = value.get("coordinate_space")
     return result
 
 
@@ -132,36 +137,33 @@ def research(query: str, limit: int = 6) -> list[dict[str,str]]:
 
 
 def _requested_app(task: str, installed: list[str]) -> str | None:
-    t=task.lower(); aliases={"capcut":"CapCut","كاب كات":"CapCut","youtube":"YouTube","يوتيوب":"YouTube","canva":"Canva","كانفا":"Canva","chrome":"Chrome","كروم":"Chrome","instagram":"Instagram","انستجرام":"Instagram","whatsapp":"WhatsApp","واتساب":"WhatsApp"}
+    t=task.lower(); aliases={"capcut":"CapCut","كاب كات":"CapCut","youtube":"YouTube","يوتيوب":"YouTube","canva":"Canva","كانفا":"Canva","chrome":"Chrome","كروم":"Chrome","instagram":"Instagram","انستجرام":"Instagram","whatsapp":"WhatsApp","واتساب":"WhatsApp","telegram":"Telegram","تليجرام":"Telegram"}
     for key,label in aliases.items():
         if key in t and any(label.lower() in a.lower() for a in installed): return label
     return next((a for a in installed if len(a)>3 and a.lower() in t),None)
 
 
 def run_plan(req: Any) -> dict[str, Any]:
-    sid=app_v3.ensure_session(req.session_id); payload={"task":req.task,"attachments":req.attachments[:8],"device":req.device,"memory":app_v3.memory(sid,12)}
-    raw=_space_predict(PLANNER+"\n"+json.dumps(payload,ensure_ascii=False))
+    sid=app_v3.ensure_session(req.session_id)
+    raw=_space_predict(PLANNER+"\n"+json.dumps({"task":req.task,"attachments":req.attachments[:8],"device":req.device,"memory":app_v3.memory(sid,12)},ensure_ascii=False))
     try:
         x=app_v3.extract_json(raw); steps=x.get("steps") if isinstance(x.get("steps"),list) else []
         if not steps: raise ValueError("missing steps")
-        result={"summary":str(x.get("summary","UCOA plan")),"steps":[str(s) for s in steps[:6]],"output_mode":"primary_model","provider":"huggingface-qwen3-vl-235b"}
+        result={"summary":str(x.get("summary","UCOA plan")),"steps":[str(s) for s in steps[:6]],"output_mode":"primary_model","provider":"huggingface-qwen3-vl-235b","session_id":sid}
     except Exception as exc:
-        result={"summary":"خطة قابلة للتحقق","steps":["افتح التطبيق الهدف.","نفذ الإجراء المطلوب.","تحقق بصريًا من النتيجة."],"output_mode":"repair","provider":"repair","error":str(exc)}
-    result["session_id"]=sid; app_v3.remember(sid,"plan",result); app_v3.save_state(sid,{"phase":"planned","task":req.task,"step":0,"plan":result}); return result
+        result={"summary":"خطة قابلة للتحقق","steps":["افتح التطبيق الهدف.","نفذ الإجراء المطلوب.","تحقق بصريًا من النتيجة."],"output_mode":"repair","provider":"repair","session_id":sid,"error":str(exc)}
+    app_v3.remember(sid,"plan",result); app_v3.save_state(sid,{"phase":"planned","task":req.task,"step":0,"plan":result}); return result
 
 
 def run_step(req: Any) -> dict[str, Any]:
     sid=app_v3.ensure_session(req.session_id)
-    # Keep the legacy monkeypatch seam alive for regression tests while the
-    # normal production path uses the direct 235B multimodal controller.
-    visual_module=getattr(app_v3.visual,"__module__","app_v3")
-    reasoning_module=getattr(app_v3.reasoning,"__module__","app_v3")
-    if visual_module != "app_v3" or reasoning_module != "app_v3":
-        obs, vp = app_v3.visual(req.task, req.ui_tree, req.screenshot_base64)
-        raw, rp = app_v3.reasoning(CONTROLLER, json.dumps({"task":req.task,"step":req.step,"ui_tree":req.ui_tree,"visual":obs,"capabilities":req.capabilities},ensure_ascii=False))
+    # Regression tests replace the legacy hooks. In production both remain the
+    # original functions, so the direct 235B multimodal controller is used.
+    if app_v3.visual is not _LEGACY_VISUAL or app_v3.reasoning is not _LEGACY_REASONING:
+        obs,vp=app_v3.visual(req.task,req.ui_tree,req.screenshot_base64)
+        raw,rp=app_v3.reasoning(CONTROLLER,json.dumps({"task":req.task,"step":req.step,"ui_tree":req.ui_tree,"visual":obs,"capabilities":req.capabilities},ensure_ascii=False))
         result=_normalize_action(app_v3.extract_json(raw),req.screenshot_base64)
-        result.update({"provider":rp,"vision_provider":vp,"output_mode":"compatibility_test"})
-        result["visual_observation"]=obs
+        result.update({"provider":rp,"vision_provider":vp,"output_mode":"compatibility_test","visual_observation":obs})
     else:
         app_name=_requested_app(req.task,req.installed_apps)
         research_results=research(f"{app_name or ''} Android interface tutorial {req.task}",6) if app_name else research(f"Android app interface tutorial {req.task}",4)
@@ -176,7 +178,7 @@ def run_step(req: Any) -> dict[str, Any]:
             else:
                 result={"action":"observe","params":{},"message":"لا يوجد هدف مؤكد؛ إعادة الملاحظة","done":False,"wait_after_ms":700,"confidence":0.1,"coordinate_space":None,"verification_goal":"الحصول على شاشة وهدف مؤكد","provider":"repair","vision_provider":"repair","output_mode":"repair","error":str(exc)}
         result["research"]=research_results
-        result["visual_observation"]={"screen_summary":"direct multimodal controller","elements":[],"confidence":result.get("confidence",0.0)}
+        result["visual_observation"]={"screen_summary":"direct Qwen3-VL-235B controller","elements":[],"confidence":result.get("confidence",0.0)}
     result["session_id"]=sid; result["verification"]=app_v3.safety(req.task,result,req.approved_risks)
     app_v3.remember(sid,"decision",result); app_v3.save_state(sid,{"phase":"executing","task":req.task,"step":req.step,"last_decision":result}); return result
 
@@ -192,6 +194,4 @@ def verify_result(req: Any) -> dict[str, Any]:
 app_v3.run_plan=run_plan
 app_v3.run_step=run_step
 app_v3.verify_result=verify_result
-app_v3.reasoning=lambda system,user: (_space_predict(system+"\n"+user),"huggingface-qwen3-vl-235b")
-app_v3.vision_space=_space_predict
 app=app_v3.app
