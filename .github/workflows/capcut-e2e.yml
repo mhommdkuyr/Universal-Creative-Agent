@@ -8,6 +8,7 @@ on:
       - 'server/app.py'
       - 'server/app_v3.py'
       - 'server/app_v4_runtime.py'
+      - 'server/provider_router.py'
       - 'server/requirements.txt'
       - 'server/ci_capcut_e2e.sh'
       - '.github/workflows/capcut-e2e.yml'
@@ -28,6 +29,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Install Android test image
         run: |
+          yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools" "emulator" "system-images;android-35;default;x86_64"
       - run: gradle -p android assembleDebug --stacktrace
       - name: Start emulator and run CapCut E2E
@@ -38,7 +40,7 @@ jobs:
           mkdir -p "$HOME/.android/avd"
           adb start-server
           rm -rf "$HOME/.android/avd/${AVD_NAME}.avd" "$HOME/.android/avd/${AVD_NAME}.ini"
-          avdmanager create avd --force --name "$AVD_NAME" --package 'system-images;android-35;default;x86_64' --device 'pixel_2'
+          printf 'no\n' | avdmanager create avd --force --name "$AVD_NAME" --package 'system-images;android-35;default;x86_64' --abi 'x86_64' --device 'pixel_2'
           AVD_DIR="$HOME/.android/avd/${AVD_NAME}.avd"
           test -f "$AVD_DIR/config.ini"
           cat >> "$AVD_DIR/config.ini" <<'EOF'
@@ -62,14 +64,12 @@ jobs:
             tail -n 240 /tmp/ucoa-emulator.log || true
           }
           trap cleanup EXIT
-
           echo 'Waiting for ADB device...'
           for i in $(seq 1 240); do
             if adb devices | awk 'NR>1 && $1=="emulator-5554" && $2=="device" {found=1} END{exit found?0:1}'; then break; fi
             sleep 2
           done
           test "$(adb devices | awk 'NR>1 && $1=="emulator-5554" && $2=="device" {print $2}')" = "device"
-
           echo 'Waiting for Android boot completion...'
           for i in $(seq 1 480); do
             BOOTED="$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
