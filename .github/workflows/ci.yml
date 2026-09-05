@@ -1,7 +1,9 @@
 name: CI
+
 on:
   push:
   pull_request:
+
 jobs:
   python:
     runs-on: ubuntu-latest
@@ -54,115 +56,4 @@ jobs:
           api-level: 35
           arch: x86_64
           target: default
-          script: |
-            set -e
-            adb install apk/app-debug.apk
-            adb logcat -c || true
-            adb shell am force-stop com.ucoa.app || true
-            adb shell am start -W -n com.ucoa.app/.MainActivity
-            sleep 2
-            adb logcat -d -t 800 > logcat.txt || true
-            if grep -Eqi 'FATAL EXCEPTION|AndroidRuntime' logcat.txt; then cat logcat.txt; exit 1; fi
-            adb shell uiautomator dump /sdcard/window.xml >/dev/null 2>&1 || true
-            adb shell cat /sdcard/window.xml > window.xml 2>/dev/null || true
-            grep -q 'Universal Creative Agent' window.xml
-            grep -q 'تنفيذ عالمي' window.xml
-            grep -q 'إعداد عقل AI' window.xml
-            grep -q 'إرسال' window.xml
-            grep -q 'رفع الوسائط' window.xml
-            grep -q 'الصوت' window.xml
-            adb shell dumpsys activity activities | grep -Eqi 'mResumedActivity.*com\.ucoa\.app|topResumedActivity.*com\.ucoa\.app|ResumedActivity.*com\.ucoa\.app'
-
-  render-brain-smoke:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - name: Wait for Render local brain
-        env:
-          BRAIN_URL: https://ucoa-agent-brain-local2.onrender.com
-        run: |
-          set -e
-          for i in $(seq 1 60); do
-            body=$(curl -fsS --max-time 10 "$BRAIN_URL/health" || true)
-            echo "$body"
-            if echo "$body" | grep -q '"ok":true' && echo "$body" | grep -q '"brain_configured":true' && echo "$body" | grep -q 'Qwen2.5-0.5B-Instruct-Q2_K' && echo "$body" | grep -q '"local_vision":true'; then exit 0; fi
-            sleep 5
-          done
-          exit 1
-      - name: Test local model plan job lifecycle
-        run: |
-          set -e
-          python - <<'PY'
-import json,time,urllib.request
-base='https://ucoa-agent-brain-local2.onrender.com'
-payload={"task":"ضع خطة عامة لإكمال مهمة على الهاتف: افتح التطبيق المناسب، نفذ المطلوب، ثم تحقق من النتيجة.","attachments":[],"device":{"android":35}}
-req=urllib.request.Request(base+'/v1/agent/plan',data=json.dumps(payload,ensure_ascii=False).encode(),headers={'Content-Type':'application/json'},method='POST')
-with urllib.request.urlopen(req,timeout=30) as r: submitted=json.loads(r.read().decode())
-job=submitted['job_id']
-for _ in range(150):
-    with urllib.request.urlopen(base+'/v1/agent/jobs/'+job,timeout=20) as r: x=json.loads(r.read().decode())
-    if x.get('status')=='completed':
-        result=x.get('result',{}); assert result.get('summary'); assert len(result.get('steps',[]))>=2
-        print('PLAN_INFERENCE_OK',json.dumps(result,ensure_ascii=False)); break
-    if x.get('status')=='failed': raise SystemExit(x.get('error','job failed'))
-    time.sleep(1)
-else: raise SystemExit('plan timeout')
-PY
-      - name: Test local model action job lifecycle
-        run: |
-          set -e
-          python - <<'PY'
-import json,time,urllib.request
-base='https://ucoa-agent-brain-local2.onrender.com'
-payload={"task":"اضغط الزر Continue ثم تحقق من الانتقال للخطوة التالية.","step":0,"history":[],"ui_tree":"[{\"text\":\"Continue\"}]","screenshot_base64":null,"installed_apps":[],"attachments":[],"capabilities":["tap","click_any_text","observe","done"]}
-req=urllib.request.Request(base+'/v1/agent/step',data=json.dumps(payload,ensure_ascii=False).encode(),headers={'Content-Type':'application/json'},method='POST')
-with urllib.request.urlopen(req,timeout=30) as r: submitted=json.loads(r.read().decode())
-job=submitted['job_id']
-for _ in range(150):
-    with urllib.request.urlopen(base+'/v1/agent/jobs/'+job,timeout=20) as r: x=json.loads(r.read().decode())
-    if x.get('status')=='completed':
-        result=x.get('result',{}); assert result.get('action') in {'tap','click_any_text','observe','done'}
-        print('STEP_INFERENCE_OK',json.dumps(result,ensure_ascii=False)); break
-    if x.get('status')=='failed': raise SystemExit(x.get('error','job failed'))
-    time.sleep(1)
-else: raise SystemExit('step timeout')
-PY
-      - name: Test persisted session and safety gate
-        run: |
-          set -e
-          python - <<'PY'
-import json,urllib.request
-base='https://ucoa-agent-brain-local2.onrender.com'
-req=urllib.request.Request(base+'/v1/agent/sessions',data=b'{"title":"ci"}',headers={'Content-Type':'application/json'},method='POST')
-with urllib.request.urlopen(req,timeout=30) as r: sid=json.loads(r.read().decode())['session_id']
-req=urllib.request.Request(base+'/v1/agent/verify',data=json.dumps({"session_id":sid,"task":"أرسل رمز التحقق","decision":{"action":"type_into_any","params":{"text":"123456"}}},ensure_ascii=False).encode(),headers={'Content-Type':'application/json'},method='POST')
-with urllib.request.urlopen(req,timeout=30) as r: verdict=json.loads(r.read().decode())
-assert verdict['requires_confirmation'] is True and verdict['allowed'] is False
-with urllib.request.urlopen(base+'/v1/agent/sessions/'+sid,timeout=30) as r: saved=json.loads(r.read().decode())
-assert any(e.get('kind')=='verification' for e in saved['events'])
-print('SESSION_SAFETY_OK',sid)
-PY
-
-  huggingface-vision-smoke:
-    runs-on: ubuntu-latest
-    timeout-minutes: 12
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: pip install "gradio_client>=1.13,<2"
-      - name: Run real Qwen3-VL image understanding
-        run: |
-          python - <<'PY'
-from gradio_client import Client, handle_file
-from urllib.request import urlretrieve
-img='/tmp/candy.jpg'
-urlretrieve('https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/p-blog/candy.JPG', img)
-client=Client('https://akhaliq-qwen3-vl-2b-instruct.hf.space', verbose=False)
-result=client.predict({'text':'ما الحيوان الظاهر في الصورة؟ أجب بكلمة أو كلمتين.', 'files':[handle_file(img)]}, [], api_name='/qwen_chat_fn')
-text=str(result).strip()
-print('HF_VISION_RESULT:',text)
-assert text and ('cat' in text.lower() or 'قطة' in text or 'قط' in text)
-PY
+          script: ./server/ci_android_smoke.sh
