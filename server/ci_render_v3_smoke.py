@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -9,12 +10,14 @@ from io import BytesIO
 
 from PIL import Image, ImageDraw, ImageFont
 
-BASE = "https://ucoa-agent-brain-local2.onrender.com"
+BASE = os.getenv("BRAIN_URL", "https://ucoa-agent-brain.onrender.com").rstrip("/")
+
 
 def post(path, payload):
     req = urllib.request.Request(BASE + path, data=json.dumps(payload, ensure_ascii=False).encode(), headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read().decode())
+
 
 def poll(job_id):
     for _ in range(180):
@@ -26,6 +29,7 @@ def poll(job_id):
             raise RuntimeError(x.get("error", "job failed"))
         time.sleep(1)
     raise TimeoutError("job timeout")
+
 
 def screenshot_b64():
     img = Image.new("RGB", (900, 500), "white")
@@ -40,27 +44,29 @@ def screenshot_b64():
     out = BytesIO(); img.save(out, format="JPEG", quality=90)
     return base64.b64encode(out.getvalue()).decode()
 
+
 mode = sys.argv[1]
 if mode == "plan":
     submitted = post("/v1/agent/plan", {"task": "Open the appropriate app, perform the requested action, and verify the result.", "device": {"android": 35}})
     result = poll(submitted["job_id"])
     assert len(result.get("steps", [])) >= 2
-    print("PLAN_V3_OK", json.dumps(result, ensure_ascii=False))
+    print("PLAN_V4_OK", json.dumps(result, ensure_ascii=False))
 elif mode == "step":
     submitted = post("/v1/agent/step", {"task": "Press the visible CONTINUE button.", "step": 0, "history": [], "ui_tree": "[{\"text\":\"CONTINUE\",\"class\":\"android.widget.Button\"}]", "screenshot_base64": screenshot_b64(), "installed_apps": ["Chrome"], "capabilities": ["click_any_text", "tap", "observe", "done"]})
     result = poll(submitted["job_id"])
-    assert result.get("vision_provider") in {"huggingface-space", "huggingface-router"}, result
+    provider = str(result.get("vision_provider", ""))
+    assert provider in {"omniroute", "huggingface-space", "huggingface-router", "huggingface-space-fallback", "huggingface-router-fallback"}, result
     assert result.get("visual_observation"), result
     assert result.get("action") in {"click_any_text", "tap", "observe", "done"}, result
-    print("RENDER_V3_VISION_REASONING_OK", json.dumps({"vision_provider": result.get("vision_provider"), "provider": result.get("provider"), "action": result.get("action"), "visual_observation": result.get("visual_observation")}, ensure_ascii=False))
+    print("RENDER_V4_MULTIMODAL_OK", json.dumps({"vision_provider": provider, "provider": result.get("provider"), "action": result.get("action"), "visual_observation": result.get("visual_observation")}, ensure_ascii=False))
 elif mode == "state":
-    sid = post("/v1/agent/sessions", {"title": "ci-v3"})["session_id"]
+    sid = post("/v1/agent/sessions", {"title": "ci-v4"})["session_id"]
     post("/v1/agent/state", {"session_id": sid, "state": {"task": "smoke", "step": 2, "status": "verified"}})
     with urllib.request.urlopen(BASE + "/v1/agent/state/" + sid, timeout=20) as r:
         state = json.loads(r.read().decode())
     assert state["state"]["step"] == 2
     verified = post("/v1/agent/verify-result", {"task": "press continue", "action": {"action": "click_any_text", "params": {"texts": ["CONTINUE"]}}, "before_ui_tree": "[{\"text\":\"CONTINUE\"}]", "after_ui_tree": "[{\"text\":\"NEXT\"}]", "session_id": sid})
     assert verified["verified"] is True, verified
-    print("RENDER_V3_STATE_VERIFIER_OK", sid)
+    print("RENDER_V4_STATE_VERIFIER_OK", sid)
 else:
     raise SystemExit("unknown mode")
