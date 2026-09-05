@@ -20,6 +20,7 @@ app_v3.STEP_SYSTEM = (
 )
 
 VISION_SPACE_ID = "akhaliq/Qwen3-VL-2B-Instruct"
+VISION_API_NAME = "/qwen_chat_fn"
 
 
 def vision_space(prompt: str, image: str) -> str:
@@ -28,7 +29,7 @@ def vision_space(prompt: str, image: str) -> str:
     raw = base64.b64decode(image)
     last_error = None
     for target in (VISION_SPACE_ID, app_v3.VISION_SPACE):
-        for attempt in range(2):
+        for attempt in range(3):
             try:
                 with tempfile.NamedTemporaryFile(suffix=".jpg") as f:
                     f.write(raw)
@@ -37,18 +38,19 @@ def vision_space(prompt: str, image: str) -> str:
                     result = client.predict(
                         {"text": prompt, "files": [handle_file(f.name)]},
                         [],
-                        api_name="/chat",
+                        api_name=VISION_API_NAME,
                     )
                 text = str(result)
-                # Keep real VLM output. Normalize only when the Space returns
-                # ordinary text rather than the JSON requested in the prompt.
                 try:
                     app_v3.extract_json(text)
                     return text
                 except Exception:
                     normalized = text.replace("_", " ")
                     labels = []
-                    for label in ("continue", "التالي", "متابعة", "موافق", "ok", "تأكيد", "submit", "إرسال"):
+                    for label in (
+                        "continue", "التالي", "متابعة", "موافق", "ok",
+                        "تأكيد", "submit", "إرسال"
+                    ):
                         if re.search(rf"\b{re.escape(label)}\b", normalized, re.IGNORECASE):
                             labels.append(label)
                     elements = [
@@ -66,8 +68,8 @@ def vision_space(prompt: str, image: str) -> str:
                     )
             except Exception as exc:
                 last_error = exc
-                if attempt == 0:
-                    time.sleep(2)
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
     raise RuntimeError(f"VLM Space request failed: {last_error}")
 
 
