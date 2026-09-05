@@ -9,9 +9,17 @@ adb shell settings put secure accessibility_enabled 1
 sleep 2
 adb logcat -c || true
 adb shell am force-stop com.ucoa.app || true
-adb shell am start -W -n com.ucoa.app/.MainActivity
-sleep 3
-adb logcat -d -t 1200 > logcat.txt || true
+# Do not use `am start -W`: on software-rendered CI emulators it can time out
+# waiting for the first frame even though the activity is already launching.
+adb shell am start -n com.ucoa.app/.MainActivity >/tmp/ucoa-main-start.txt 2>&1
+for i in $(seq 1 30); do
+  if adb shell dumpsys activity activities | grep -Eqi 'mResumedActivity.*com\\.ucoa\\.app|topResumedActivity.*com\\.ucoa\\.app|ResumedActivity.*com\\.ucoa\\.app'; then
+    break
+  fi
+  sleep 2
+done
+sleep 2
+adb logcat -d -t 1600 > logcat.txt || true
 if grep -Eqi 'FATAL EXCEPTION|AndroidRuntime' logcat.txt; then cat logcat.txt; exit 1; fi
 adb shell uiautomator dump /sdcard/window.xml >/dev/null 2>&1 || true
 adb shell cat /sdcard/window.xml > window.xml 2>/dev/null || true
@@ -27,7 +35,7 @@ echo ANDROID_UI_SMOKE_OK
 
 echo '--- Real agent smoke: Accessibility -> screenshot -> HF VLM -> reasoning -> action -> verifier ---'
 adb shell am force-stop com.ucoa.app || true
-adb shell am start -W -n com.ucoa.app/.UcoaSmokeActivity
+adb shell am start -n com.ucoa.app/.UcoaSmokeActivity >/tmp/ucoa-real-start.txt 2>&1
 # Render+VLM is a cold, networked path; allow up to 6 minutes.
 for i in $(seq 1 180); do
   adb shell uiautomator dump /sdcard/window.xml >/dev/null 2>&1 || true
