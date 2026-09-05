@@ -1,0 +1,44 @@
+name: OmniRoute E2E
+
+on:
+  push:
+    paths:
+      - 'server/omniroute_bridge.py'
+      - '.github/workflows/omniroute-e2e.yml'
+  workflow_dispatch:
+
+jobs:
+  gateway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Wait for OmniRoute
+        env:
+          OMNI_URL: https://ucoa-omniroute-live.onrender.com
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 10 "$OMNI_URL/v1/models" >/tmp/models.json; then
+              cat /tmp/models.json
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 1
+      - name: Exercise OpenAI-compatible multimodal inference
+        env:
+          OMNI_URL: https://ucoa-omniroute-live.onrender.com
+        run: |
+          python - <<'PY'
+          import base64, json, os, urllib.request
+          png = base64.b64encode(bytes.fromhex('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360f8cf00000003000100d2c4a4f70000000049454e44ae426082')).decode()
+          body={"model":"auto","temperature":0,"max_tokens":64,"messages":[{"role":"user","content":[{"type":"text","text":"Return ONLY JSON: {\\"action\\":\\"observe\\",\\"confidence\\":number}. Confirm you can inspect this image."},{"type":"image_url","image_url":{"url":"data:image/png;base64,"+png}}]}]}
+          req=urllib.request.Request(os.environ['OMNI_URL']+'/v1/chat/completions',data=json.dumps(body).encode(),headers={'Content-Type':'application/json'},method='POST')
+          with urllib.request.urlopen(req,timeout=120) as r: result=json.loads(r.read().decode())
+          print(json.dumps(result,ensure_ascii=False))
+          assert result.get('choices'), result
+          assert result['choices'][0].get('message',{}).get('content'), result
+          PY
