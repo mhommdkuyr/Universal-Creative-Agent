@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import time
 from pathlib import Path
 
@@ -23,18 +22,16 @@ img.save(IMAGE)
 
 client = Client(SPACE, verbose=False)
 prompt = "Inspect the screenshot. Identify the main button label exactly. Do not invent anything. Reply with a short factual description."
-last = ""
 for attempt in range(3):
     try:
         result = client.predict(
             {"text": prompt, "files": [handle_file(str(IMAGE))]},
             [],
-            api_name="/qwen_chat_fn",
+            api_name="/chat",
         )
-        last = str(result)
-        print("HF_VISION_RESULT:", last)
-        normalized = last.lower().replace("_", " ")
-        assert "continue" in normalized, f"VLM did not identify CONTINUE: {last}"
+        text = str(result)
+        print("HF_VISION_RESULT:", text)
+        assert "continue" in text.lower(), f"VLM did not identify CONTINUE: {text}"
         print("HF_VISION_SMOKE_OK")
         break
     except Exception as exc:
