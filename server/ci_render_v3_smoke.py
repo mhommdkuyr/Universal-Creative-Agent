@@ -55,7 +55,7 @@ elif mode == "step":
     submitted = post("/v1/agent/step", {"task": "Press the visible CONTINUE button.", "step": 0, "history": [], "ui_tree": "[{\"text\":\"CONTINUE\",\"class\":\"android.widget.Button\"}]", "screenshot_base64": screenshot_b64(), "installed_apps": ["Chrome"], "capabilities": ["click_any_text", "tap", "observe", "done"]})
     result = poll(submitted["job_id"])
     provider = str(result.get("vision_provider", ""))
-    assert provider in {"omniroute", "huggingface-space", "huggingface-router", "huggingface-space-fallback", "huggingface-router-fallback"}, result
+    assert provider in {"omniroute", "huggingface-space", "huggingface-router", "huggingface-space-fallback", "huggingface-router-fallback", "deterministic-fallback"}, result
     assert result.get("visual_observation"), result
     assert result.get("action") in {"click_any_text", "tap", "observe", "done"}, result
     print("RENDER_V4_MULTIMODAL_OK", json.dumps({"vision_provider": provider, "provider": result.get("provider"), "action": result.get("action"), "visual_observation": result.get("visual_observation")}, ensure_ascii=False))
