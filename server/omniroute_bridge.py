@@ -1,8 +1,4 @@
-"""OmniRoute bridge for UCOA V4.
-
-Keeps UCOA's stable FastAPI contract while moving production planning, visual
-perception and action selection behind OmniRoute's OpenAI-compatible gateway.
-"""
+"""OmniRoute bridge with bounded fallback to the proven UCOA vision/reasoning path."""
 from __future__ import annotations
 
 import os
@@ -11,7 +7,11 @@ import app_v3
 BASE = os.getenv("UCOA_OMNIROUTE_BASE_URL", "").rstrip("/")
 MODEL = os.getenv("UCOA_OMNIROUTE_MODEL", "auto")
 KEY = os.getenv("UCOA_OMNIROUTE_API_KEY", "")
-TIMEOUT = int(os.getenv("UCOA_OMNIROUTE_TIMEOUT", "120"))
+TIMEOUT = int(os.getenv("UCOA_OMNIROUTE_TIMEOUT", "25"))
+
+_ORIGINAL_REASONING = app_v3.reasoning
+_ORIGINAL_VISUAL = app_v3.visual
+_ORIGINAL_CALL_VISION = app_v3.call_vision
 
 VISION = """You are UCOA visual perception. Inspect ONLY the current Android screenshot
 and UI tree. Return ONLY JSON:
@@ -26,17 +26,21 @@ def _chat(system: str, user: str, image: str | None = None) -> str:
 
 
 def reasoning(system: str, user: str):
-    return _chat(system, user), "omniroute"
+    try:
+        return _chat(system, user), "omniroute"
+    except Exception:
+        return _ORIGINAL_REASONING(system, user)[0], "fallback"
 
 
 def visual(task: str, ui_tree: str, image: str | None):
     if not image:
-        return {"screen_summary":"no screenshot","elements":[],"visible_goal_state":"unknown","confidence":0.0}, "omniroute"
-    raw = _chat(VISION, f"TASK: {task}\nUI_TREE:\n{ui_tree[:14000]}", image)
+        return _ORIGINAL_VISUAL(task, ui_tree, image)[0], "fallback"
     try:
+        raw = _chat(VISION, f"TASK: {task}\nUI_TREE:\n{ui_tree[:14000]}", image)
         return app_v3.extract_json(raw), "omniroute"
     except Exception:
-        return {"screen_summary": raw[:1200], "elements": [], "visible_goal_state":"unknown", "confidence":0.2}, "omniroute"
+        obs, provider = _ORIGINAL_CALL_VISION(task, ui_tree, image)
+        return obs, f"{provider}-fallback"
 
 
 def call_vision(task: str, ui_tree: str, image: str | None):
