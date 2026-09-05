@@ -4,6 +4,10 @@ on:
   push:
     paths:
       - 'android/**'
+      - 'server/app.py'
+      - 'server/app_v3.py'
+      - 'server/app_v4_runtime.py'
+      - 'server/requirements.txt'
       - 'server/ci_capcut_e2e.sh'
       - '.github/workflows/capcut-e2e.yml'
 
