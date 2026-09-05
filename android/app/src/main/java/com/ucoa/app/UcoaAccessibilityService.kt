@@ -18,12 +18,15 @@ import java.io.ByteArrayOutputStream
 
 class UcoaAccessibilityService : AccessibilityService() {
     companion object { var instance: UcoaAccessibilityService? = null }
+    @Volatile private var lastForegroundPackage: String? = null
     override fun onServiceConnected() { super.onServiceConnected(); instance = this }
     override fun onDestroy() { instance = null; super.onDestroy() }
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        event?.packageName?.toString()?.takeIf { it.isNotBlank() }?.let { lastForegroundPackage = it }
+    }
     override fun onInterrupt() = Unit
 
-    fun foregroundPackageName(): String? = windows.asSequence().mapNotNull { it.root?.packageName?.toString() }.firstOrNull()
+    fun foregroundPackageName(): String? = lastForegroundPackage ?: windows.asSequence().mapNotNull { it.root?.packageName?.toString() }.firstOrNull()
 
     fun findText(text: String): AccessibilityNodeInfo? = windows.mapNotNull { it.root }.asSequence().flatMap { it.findAccessibilityNodeInfosByText(text).asSequence() }.firstOrNull()
     fun clickText(text: String): Boolean = findText(text)?.let(::clickNode) == true
@@ -31,7 +34,6 @@ class UcoaAccessibilityService : AccessibilityService() {
         val wanted = texts.map(::normalize).filter { it.isNotBlank() }; val nodes = allNodes()
         nodes.firstOrNull { normalize(nodeText(it)) in wanted }?.let { if (clickNode(it)) return true }
         nodes.firstOrNull { n -> val v = normalize(nodeText(n)); v.isNotBlank() && wanted.any { v.contains(it) } }?.let { if (clickNode(it)) return true }
-        // Some canvas/custom-rendered controls expose text but are not clickable.
         nodes.firstOrNull { n -> val v = normalize(nodeText(n)); v.isNotBlank() && wanted.any { v.contains(it) } }?.let { n ->
             val b = android.graphics.Rect(); n.getBoundsInScreen(b)
             if (b.width() > 2 && b.height() > 2) return tap(b.centerX().toFloat(), b.centerY().toFloat())
