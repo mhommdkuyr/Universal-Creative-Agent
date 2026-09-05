@@ -1,0 +1,42 @@
+name: Production Vision Probe
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'server/app.py'
+      - 'server/provider_router.py'
+      - '.github/workflows/production-vision-probe.yml'
+
+jobs:
+  vision-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Wait for Render deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 36); do
+            if curl -fsS --max-time 10 https://ucoa-agent-brain.onrender.com/health >/tmp/health.json; then
+              cat /tmp/health.json
+              exit 0
+            fi
+            sleep 5
+          done
+          cat /tmp/health.json || true
+          exit 1
+      - name: Run live vision probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 120 https://ucoa-agent-brain.onrender.com/v1/providers/probe-vision | tee /tmp/vision.json
+          python - <<'PY'
+          import json
+          d=json.load(open('/tmp/vision.json'))
+          assert d.get('ok'), d
+          assert d.get('provider'), d
+          assert d.get('detected_target') == 'CONTINUE', d
+          print('vision provider:', d['provider'])
+          print('detected target:', d['detected_target'])
+          print('confidence:', d.get('confidence'))
+          PY
