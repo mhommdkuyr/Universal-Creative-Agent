@@ -42,7 +42,9 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
                     if (!running) return@post
                     if (!response.ok || response.body == null) { finish(false, "تعذر الوصول إلى عقل AI: ${response.error ?: "استجابة غير صالحة"}"); return@post }
                     val decision = response.body
-                    decision.optString("visual_observation").trim().takeIf { it.isNotBlank() }?.let { listener?.onEvent("الرؤية: $it") }
+                    val vp = decision.optString("vision_provider").trim()
+                    val visualSummary = decision.optJSONObject("visual_observation")?.optString("screen_summary", "")?.trim().orEmpty()
+                    if (visualSummary.isNotBlank()) listener?.onEvent("الرؤية[$vp]: $visualSummary")
                     decision.optString("message").trim().takeIf { it.isNotBlank() }?.let { listener?.onEvent("العقل: $it") }
                     val verification = decision.optJSONObject("verification")
                     if (verification?.optBoolean("requires_confirmation", false) == true) {
@@ -52,9 +54,7 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
                     val action = decision.optString("action").trim(); val params = decision.optJSONObject("params") ?: decision
                     if (decision.optBoolean("done", false) || action.equals("done", true)) { finish(true, decision.optString("message", "اكتملت المهمة.")); return@post }
                     if (action.isBlank()) { finish(false, "العقل أعاد قرارًا بلا فعل."); return@post }
-                    execute(action, params) { ok, detail ->
-                        main.post { afterAction(beforeUi, beforeScreenshot, action, decision, ok, detail) }
-                    }
+                    execute(action, params) { ok, detail -> main.post { afterAction(beforeUi, beforeScreenshot, action, decision, ok, detail) } }
                 }
             }
         }
@@ -74,13 +74,11 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
                     val verified = result.ok && (result.body?.optBoolean("verified", false) ?: false)
                     if (verified) {
                         listener?.onEvent("التحقق: نجح وتغيرت حالة الشاشة.")
-                        step++
-                        persist("verified_$step")
+                        step++; persist("verified_$step")
                         main.postDelayed({ next() }, decision.optLong("wait_after_ms", 700L).coerceIn(150L, 5000L))
                     } else {
                         listener?.onEvent("التحقق: لم يثبت نجاح الإجراء؛ سأعيد الملاحظة بدل إعلان الاكتمال.")
-                        step++
-                        persist("verification_failed_$step")
+                        step++; persist("verification_failed_$step")
                         main.postDelayed({ next() }, 600L)
                     }
                 }
