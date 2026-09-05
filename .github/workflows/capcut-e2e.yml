@@ -37,15 +37,7 @@ jobs:
           AVD_NAME=ucoa-capcut
           mkdir -p "$HOME/.android/avd"
           adb start-server
-          echo 'Available hardware profiles:'
-          avdmanager list device | sed -n '1,180p'
-          DEVICE_ID="$(avdmanager list device | awk -F'"' '/id: / && tolower($2) ~ /pixel/ {print $2; exit}')"
-          if [ -z "$DEVICE_ID" ]; then
-            DEVICE_ID="$(avdmanager list device | awk -F'"' '/id: / {print $2; exit}')"
-          fi
-          test -n "$DEVICE_ID"
-          echo "Using AVD device profile: $DEVICE_ID"
-          printf 'no\n' | avdmanager create avd --force --name "$AVD_NAME" --package 'system-images;android-35;default;x86_64' --device "$DEVICE_ID"
+          printf 'no\n' | avdmanager create avd --force --name "$AVD_NAME" --package 'system-images;android-35;default;x86_64'
           AVD_DIR="$HOME/.android/avd/${AVD_NAME}.avd"
           test -f "$AVD_DIR/config.ini"
           cat >> "$AVD_DIR/config.ini" <<'EOF'
@@ -72,7 +64,7 @@ jobs:
             fi
             sleep 2
           done
-          adb -s emulator-5554 wait-for-device
+          test "$(adb devices | awk 'NR>1 && $1=="emulator-5554" && $2=="device" {print $2}')" = "device"
 
           echo 'Waiting for Android boot completion...'
           for i in $(seq 1 480); do
