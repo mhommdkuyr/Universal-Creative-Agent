@@ -6,10 +6,14 @@ import tempfile
 
 import app_v3
 
-# V3 currently uses this symbol in run_plan; define it here without rewriting the large module.
 app_v3.PLAN_SYSTEM = (
     "You are UCOA planner. Return JSON {summary:string,steps:string[]}. "
     "Create 2-5 ordered steps and include verification. Never claim success."
+)
+app_v3.STEP_SYSTEM = (
+    "You are UCOA action reasoner. Use the visual observation and UI tree. "
+    "Return ONLY JSON with action, params, message, done, wait_after_ms. "
+    "Choose only from the provided capabilities. Never invent hidden UI."
 )
 
 
