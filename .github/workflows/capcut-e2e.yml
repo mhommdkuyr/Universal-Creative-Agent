@@ -37,9 +37,9 @@ jobs:
           AVD_NAME=ucoa-capcut
           mkdir -p "$HOME/.android/avd"
           adb start-server
-          avdmanager list device | sed -n '1,90p'
+          rm -rf "$HOME/.android/avd/${AVD_NAME}.avd" "$HOME/.android/avd/${AVD_NAME}.ini"
           printf 'no\n' > /tmp/ucoa-avd-answers
-          avdmanager create avd --force --name "$AVD_NAME" --package 'system-images;android-35;default;x86_64' --abi 'x86_64' --device 24 < /tmp/ucoa-avd-answers
+          avdmanager create avd --force --name "$AVD_NAME" --package 'system-images;android-35;default;x86_64' --abi 'x86_64' < /tmp/ucoa-avd-answers
           AVD_DIR="$HOME/.android/avd/${AVD_NAME}.avd"
           test -f "$AVD_DIR/config.ini"
           cat >> "$AVD_DIR/config.ini" <<'EOF'
@@ -47,15 +47,20 @@ jobs:
           hw.ramSize=2048
           hw.gpu.enabled=yes
           hw.gpu.mode=swiftshader_indirect
+          hw.lcd.width=1080
+          hw.lcd.height=1920
+          hw.lcd.density=420
           EOF
-          emulator -avd "$AVD_NAME" -port 5554 -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -accel off >/tmp/ucoa-emulator.log 2>&1 &
+          echo '--- AVD config ---'
+          cat "$AVD_DIR/config.ini"
+          emulator -avd "$AVD_NAME" -port 5554 -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -no-snapshot-load -wipe-data -accel off >/tmp/ucoa-emulator.log 2>&1 &
           EMU_PID=$!
           cleanup() {
             adb -s emulator-5554 emu kill >/dev/null 2>&1 || true
             kill "$EMU_PID" >/dev/null 2>&1 || true
             wait "$EMU_PID" >/dev/null 2>&1 || true
             echo '--- emulator log ---'
-            tail -n 160 /tmp/ucoa-emulator.log || true
+            tail -n 240 /tmp/ucoa-emulator.log || true
           }
           trap cleanup EXIT
 
@@ -74,4 +79,5 @@ jobs:
           done
           test "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d '\r')" = "1"
           adb -s emulator-5554 shell input keyevent 82 || true
+          adb -s emulator-5554 shell settings put system screen_off_timeout 1800000 || true
           bash ./server/ci_capcut_e2e.sh
