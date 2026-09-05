@@ -5,12 +5,13 @@ on:
     paths:
       - 'server/omniroute_bridge.py'
       - '.github/workflows/omniroute-e2e.yml'
+      - 'Dockerfile'
   workflow_dispatch:
 
 jobs:
   gateway:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -18,29 +19,30 @@ jobs:
           python-version: '3.12'
       - name: Wait for OmniRoute
         env:
-          OMNI_URL: https://ucoa-omniroute-prod.onrender.com
+          OMNI_URL: https://ucoa-omniroute-image.onrender.com
         run: |
+          set -euo pipefail
           for i in $(seq 1 60); do
-            if curl -fsS --max-time 10 "$OMNI_URL/v1/models" >/tmp/models.json; then
-              cat /tmp/models.json
-              exit 0
-            fi
+            code=$(curl -sS -o /tmp/models.json -w '%{http_code}' --max-time 10 "$OMNI_URL/v1/models" || true)
+            echo "models HTTP $code"
+            cat /tmp/models.json || true
+            if [ "$code" = "200" ]; then exit 0; fi
             sleep 5
           done
           exit 1
       - name: Try keyless free-provider bootstrap
         env:
-          OMNI_URL: https://ucoa-omniroute-prod.onrender.com
+          OMNI_URL: https://ucoa-omniroute-image.onrender.com
         run: |
           set +e
           curl -sS --max-time 30 -X POST "$OMNI_URL/api/providers" \
             -H 'Content-Type: application/json' \
             --data '{"provider":"opencode-free","name":"UCOA OpenCode Free","apiKey":"","priority":1,"testStatus":"unknown"}' \
             -o /tmp/provider.json -w '%{http_code}\n' | tee /tmp/provider.status
-          cat /tmp/provider.json
+          cat /tmp/provider.json || true
       - name: Exercise OpenAI-compatible multimodal inference
         env:
-          OMNI_URL: https://ucoa-omniroute-prod.onrender.com
+          OMNI_URL: https://ucoa-omniroute-image.onrender.com
         run: |
           python - <<'PY'
           import base64, json, os, urllib.request
