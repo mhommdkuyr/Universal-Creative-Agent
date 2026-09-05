@@ -1,3 +1,4 @@
+# Production acceptance run: this workflow intentionally exercises the live V4 brain.
 name: Vision Integration
 
 on:
@@ -37,7 +38,7 @@ jobs:
           for i in $(seq 1 60); do
             body=$(curl -fsS --max-time 10 "$BRAIN_URL/health" || true)
             echo "$body"
-            if echo "$body" | grep -q '"ok":true'; then exit 0; fi
+            if echo "$body" | grep -q '\"ok\":true'; then exit 0; fi
             sleep 5
           done
           exit 1
