@@ -129,10 +129,9 @@ def visual(task,ui,image):
     try:return extract_json(raw),"huggingface-space"
     except:return {"screen_summary":re.sub(r"\s+"," ",raw)[:1200],"elements":[],"visible_goal_state":"unknown","confidence":0.35},"huggingface-space"
 
-# Backward-compatible provider hook used by the original test suite and
-# older integrations. The runtime entrypoint monkeypatches this path via the
-# V3 module, so tests can substitute deterministic visual observations.
-call_vision = visual
+def call_vision(task, ui, image):
+    """Backward-compatible hook that resolves the current visual function dynamically."""
+    return visual(task, ui, image)
 
 def reasoning(system,user):
     if HF_TOKEN:
