@@ -44,19 +44,13 @@ class UcoaCapCutSmokeActivity : Activity() {
                 Log.i(TAG, "UCOA_CAPCUT_EVENT $text")
                 if (text.startsWith("التنفيذ:") && !text.contains("observe", true)) usefulActions++
                 if (text.contains("التحقق: نجح", true)) verifiedActions++
-                main.postDelayed({ inspectState() }, 250)
+                main.postDelayed({ inspectState() }, 300)
             }
             override fun onConfirmationRequired(reasons: String) { fail("confirmation required: $reasons") }
             override fun onFinished(success: Boolean) {
                 main.post {
                     if (finished) return@post
-                    if (success && isEditorVisible()) {
-                        Log.i(TAG, "UCOA_CAPCUT_SMOKE_OK actions=$usefulActions verified=$verifiedActions package=${foregroundPackage()}")
-                        finished = true
-                        finish()
-                    } else {
-                        fail("agent finished success=$success actions=$usefulActions verified=$verifiedActions foreground=${foregroundPackage()}")
-                    }
+                    if (success && isEditorVisible()) succeed() else fail("agent finished success=$success actions=$usefulActions verified=$verifiedActions foreground=${foregroundPackage()}")
                 }
             }
         })
@@ -65,20 +59,23 @@ class UcoaCapCutSmokeActivity : Activity() {
     private fun inspectState() {
         if (finished) return
         if (isEditorVisible() && usefulActions >= 1) {
-            Log.i(TAG, "UCOA_CAPCUT_EDITOR_CONFIRMED actions=$usefulActions verified=$verifiedActions package=${foregroundPackage()}")
             loop.stop()
-            finished = true
-            Log.i(TAG, "UCOA_CAPCUT_SMOKE_OK actions=$usefulActions verified=$verifiedActions package=${foregroundPackage()}")
-            finish()
+            succeed()
         }
+    }
+
+    private fun succeed() {
+        if (finished) return
+        finished = true
+        Log.i(TAG, "UCOA_CAPCUT_SMOKE_OK actions=$usefulActions verified=$verifiedActions package=${foregroundPackage()}")
+        finish()
     }
 
     private fun isEditorVisible(): Boolean {
         val pkg = foregroundPackage() ?: return false
         if (capCutPackage != null && pkg != capCutPackage) return false
-        val ui = UcoaAccessibilityService.instance?.observeUi(500)?.lowercase(Locale.ROOT) ?: return false
-        // These are broad editor signals; the model is responsible for the actual path.
-        return listOf("timeline", "audio", "text", "split", "speed", "canvas", "export", "add audio", "tracks").count { ui.contains(it) } >= 2
+        val ui = UcoaAccessibilityService.instance?.observeUi(700)?.lowercase(Locale.ROOT) ?: return false
+        return listOf("timeline", "audio", "text", "split", "speed", "canvas", "export", "add audio", "tracks", "adjust", "filter").count { ui.contains(it) } >= 2
     }
 
     private fun foregroundPackage(): String? = UcoaAccessibilityService.instance?.foregroundPackageName()
@@ -90,17 +87,13 @@ class UcoaCapCutSmokeActivity : Activity() {
         }?.packageName
     }
 
-    private fun fail(reason: String): Nothing {
-        if (!finished) {
-            finished = true
-            Log.e(TAG, "UCOA_CAPCUT_SMOKE_FAILED $reason")
-            loopOrNullStop()
-        }
+    private fun fail(reason: String) {
+        if (finished) return
+        finished = true
+        Log.e(TAG, "UCOA_CAPCUT_SMOKE_FAILED $reason")
+        runCatching { if (::loop.isInitialized) loop.stop() }
         finish()
-        throw IllegalStateException(reason)
     }
-
-    private fun loopOrNullStop() { runCatching { if (::loop.isInitialized) loop.stop() } }
 
     companion object { private const val TAG = "UCOA_CAPCUT" }
 }
