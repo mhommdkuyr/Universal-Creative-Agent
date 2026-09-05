@@ -1,8 +1,9 @@
-"""Runtime compatibility shim for the public Qwen3-VL Gradio Space."""
+"""Runtime compatibility and resilience shim for the UCOA V3 brain."""
 from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import tempfile
 import time
@@ -80,5 +81,43 @@ def vision_space(prompt: str, image: str) -> str:
     raise RuntimeError(f"VLM Space request failed: {last_error}")
 
 
+_original_reasoning = app_v3.reasoning
+
+
+def reasoning_with_recovery(system: str, user: str):
+    """Keep live requests bounded; fall back to a safe deterministic repair path."""
+    previous_timeout = os.environ.get("UCOA_MODEL_TIMEOUT")
+    # Prevent a misbehaving local llama.cpp endpoint from holding an agent job
+    # indefinitely. HF/external providers have their own timeout parameters.
+    if not app_v3.HF_TOKEN and not app_v3.EXT_BASE:
+        os.environ["UCOA_MODEL_TIMEOUT"] = str(
+            min(int(previous_timeout or "45"), 45)
+        )
+    try:
+        return _original_reasoning(system, user)
+    except Exception:
+        if "UCOA planner" in system:
+            return json.dumps(
+                {
+                    "summary": "خطة آمنة قابلة للتحقق بعد تعذر الاستدلال المحلي.",
+                    "steps": [
+                        "افتح التطبيق أو الهدف المناسب.",
+                        "نفذ الإجراء المطلوب بحذر.",
+                        "تحقق من النتيجة قبل إعلان الاكتمال.",
+                    ],
+                },
+                ensure_ascii=False,
+            ), "repair-timeout"
+        # Force the V3 run_step() recovery branch, which is capability-aware and
+        # can choose a safe observation/click based on the current UI/VLM state.
+        return "RECOVERY_NO_JSON", "repair-timeout"
+    finally:
+        if previous_timeout is None:
+            os.environ.pop("UCOA_MODEL_TIMEOUT", None)
+        else:
+            os.environ["UCOA_MODEL_TIMEOUT"] = previous_timeout
+
+
+app_v3.reasoning = reasoning_with_recovery
 app_v3.vision_space = vision_space
 app = app_v3.app
