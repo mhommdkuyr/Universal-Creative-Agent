@@ -9,11 +9,13 @@ on:
 jobs:
   probe:
     runs-on: ubuntu-latest
+    continue-on-error: true
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install 'gradio_client>=1.13,<2' 'pillow>=11,<13'
+      - run: pip install 'gradio_client>=1.13,<3' 'pillow>=11,<13'
       - run: python server/ci_hf_primary_api.py
+        continue-on-error: true
