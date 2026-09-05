@@ -93,7 +93,7 @@ def auth(a: str|None)->None:
 def extract_json(t: str)->dict[str,Any]:
     t=t.strip(); t=re.sub(r"^```(?:json)?\s*|\s*```$","",t)
     try:
-        x=json.loads(t); 
+        x=json.loads(t)
         if isinstance(x,dict): return x
     except: pass
     m=re.search(r"\{.*\}",t,re.S)
@@ -106,7 +106,7 @@ def chat(base,key,model,system,user,image=None,timeout=120):
     if not base or not model: raise RuntimeError("provider not configured")
     content=user if not image else [{"type":"text","text":user},{"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{image}"}}]
     payload={"model":model,"temperature":0,"max_tokens":int(os.getenv("UCOA_MAX_TOKENS","96")),"messages":[{"role":"system","content":system},{"role":"user","content":content}]}
-    u=base if base.endswith("/chat/completions") else base+"/chat/completions"; h={"Content-Type":"application/json"};
+    u=base if base.endswith("/chat/completions") else base+"/chat/completions"; h={"Content-Type":"application/json"}
     if key: h["Authorization"]=f"Bearer {key}"
     try:
         with urlopen(Request(u,data=json.dumps(payload,ensure_ascii=False).encode(),headers=h,method="POST"),timeout=timeout) as r: body=json.loads(r.read().decode())
@@ -128,6 +128,11 @@ def visual(task,ui,image):
     raw=vision_space(sys+"\n"+prompt,image)
     try:return extract_json(raw),"huggingface-space"
     except:return {"screen_summary":re.sub(r"\s+"," ",raw)[:1200],"elements":[],"visible_goal_state":"unknown","confidence":0.35},"huggingface-space"
+
+# Backward-compatible provider hook used by the original test suite and
+# older integrations. The runtime entrypoint monkeypatches this path via the
+# V3 module, so tests can substitute deterministic visual observations.
+call_vision = visual
 
 def reasoning(system,user):
     if HF_TOKEN:
@@ -157,7 +162,8 @@ def independent_verify(task,action,before,after):
     return {"verified":ok,"changed":changed,"reasons":reasons,"verifier":"independent-rule-gate","verifier_version":"3.0"}
 
 def fallback_step(req,obs):
-    t=(obs.get("screen_summary","")+" "+req.ui_tree).lower()
+    text = obs.get("screen_summary","") if isinstance(obs,dict) else str(obs)
+    t=(text+" "+req.ui_tree).lower()
     for label in ["continue","التالي","متابعة","موافق","ok","تأكيد","submit","إرسال"]:
         if label in t:return {"action":"click_any_text","params":{"texts":[label]},"message":"اختيار زر ظاهر ثم التحقق","done":False,"wait_after_ms":700}
     return {"action":"observe","params":{},"message":"لا يوجد هدف مؤكد؛ إعادة الملاحظة","done":False,"wait_after_ms":500}
@@ -170,8 +176,7 @@ def submit(kind,fn):
         try:
             r=fn();
             with JOB_LOCK:JOBS[jid].update(status="completed",result=r)
-        except Exception as e:
-            with JOB_LOCK:JOBS[jid].update(status="failed",error=str(e))
+        except Exception as e: JOBS[jid].update(status="failed",error=str(e))
     EXECUTOR.submit(run); return {"job_id":jid,"status":"pending"}
 
 @app.get("/health")
@@ -180,7 +185,7 @@ def health():
 
 @app.post("/v1/agent/sessions")
 def create_session(req:SessionRequest,authorization:str|None=Header(default=None)):
-    auth(authorization); return {"session_id":ensure_session(req.session_id,req.title),"state":load_state(req.session_id)}
+    auth(authorization); sid=ensure_session(req.session_id,req.title); return {"session_id":sid,"state":load_state(sid)}
 @app.get("/v1/agent/sessions/{sid}")
 def get_session(sid:str,authorization:str|None=Header(default=None)):
     auth(authorization); return {"session_id":sid,"state":load_state(sid),"events":memory(sid,48)}
@@ -210,7 +215,7 @@ def run_plan(req):
     out["session_id"]=sid; remember(sid,"plan",out); save_state(sid,{"phase":"planned","task":req.task,"step":0,"plan":out}); return out
 @app.get("/v1/agent/jobs/{jid}")
 def get_job(jid:str,authorization:str|None=Header(default=None)):
-    auth(authorization); 
+    auth(authorization)
     with JOB_LOCK:x=dict(JOBS.get(jid,{}))
     if not x: raise HTTPException(404,"Unknown job")
     return x
@@ -220,7 +225,7 @@ def step(req:StepRequest,authorization:str|None=Header(default=None)):
 def run_step(req):
     sid=ensure_session(req.session_id); obs={"screen_summary":"No screenshot","elements":[],"confidence":0.0}; vp=None
     if req.screenshot_base64 and VISION_ENABLED:
-        try: obs,vp=visual(req.task,req.ui_tree,req.screenshot_base64); remember(sid,"visual_observation",obs)
+        try: obs,vp=call_vision(req.task,req.ui_tree,req.screenshot_base64); remember(sid,"visual_observation",obs)
         except Exception as e: remember(sid,"visual_error",{"error":str(e)})
     prompt=json.dumps({"task":req.task,"step":req.step,"history":req.history[-8:],"memory":memory(sid,16),"state":load_state(sid),"visual_observation":obs,"ui_tree":req.ui_tree[:14000],"installed_apps":req.installed_apps[:100],"capabilities":req.capabilities},ensure_ascii=False)
     try:
