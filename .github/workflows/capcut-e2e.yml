@@ -1,4 +1,5 @@
 name: CapCut E2E
+# Production acceptance: exercise the current main branch after the OmniRoute bridge change.
 on:
   workflow_dispatch:
   push:
