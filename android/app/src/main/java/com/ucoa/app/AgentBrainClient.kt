@@ -11,7 +11,7 @@ import java.net.URL
 import java.util.UUID
 import java.util.concurrent.Executors
 
-/** Network transport for the universal agent brain. Providers and models remain replaceable. */
+/** Network transport for UCOA. Provider/model choices remain server-side and replaceable. */
 class AgentBrainClient(private val context: Context) {
     data class Response(val ok: Boolean, val body: JSONObject?, val error: String? = null)
     private val executor = Executors.newSingleThreadExecutor()
@@ -30,6 +30,31 @@ class AgentBrainClient(private val context: Context) {
     }
     fun resetSession() { prefs.edit().remove("session_id").apply() }
     fun saveConfig(endpoint: String, token: String) { prefs.edit().putString("endpoint", endpoint.trim().trimEnd('/')).putString("token", token.trim()).apply() }
+
+    fun persistExecutionState(task: String, step: Int, history: JSONArray, status: String, callback: ((Response) -> Unit)? = null) {
+        val payload = JSONObject().apply {
+            put("session_id", sessionId())
+            put("state", JSONObject().apply {
+                put("task", task); put("step", step); put("status", status); put("history", history)
+            })
+        }
+        executor.execute {
+            try { callback?.invoke(Response(true, requestJson("POST", endpoint() + "/v1/agent/state", payload, 15000))) }
+            catch (e: Exception) { callback?.invoke(Response(false, null, e.message ?: e.javaClass.simpleName)) }
+        }
+    }
+
+    fun verifyResult(task: String, action: JSONObject, beforeUi: String, afterUi: String, beforeScreenshot: String?, afterScreenshot: String?, callback: (Response) -> Unit) {
+        val payload = JSONObject().apply {
+            put("task", task); put("action", action); put("before_ui_tree", beforeUi); put("after_ui_tree", afterUi); put("session_id", sessionId())
+            if (!beforeScreenshot.isNullOrBlank()) put("before_screenshot_base64", beforeScreenshot)
+            if (!afterScreenshot.isNullOrBlank()) put("after_screenshot_base64", afterScreenshot)
+        }
+        executor.execute {
+            try { callback(Response(true, requestJson("POST", endpoint() + "/v1/agent/verify-result", payload, 30000))) }
+            catch (e: Exception) { callback(Response(false, null, e.message ?: e.javaClass.simpleName)) }
+        }
+    }
 
     fun health(callback: (Boolean, String) -> Unit) {
         val base = endpoint(); if (base.isBlank()) { callback(false, "عنوان العقل غير مُعد"); return }
@@ -83,10 +108,7 @@ class AgentBrainClient(private val context: Context) {
                     callback(if (result != null) Response(true, result) else Response(false, null, "العقل أنهى المهمة بلا نتيجة"))
                 }
                 "failed" -> callback(Response(false, null, job.optString("error", "فشل تشغيل عقل AI")))
-                else -> {
-                    Thread.sleep(1000)
-                    pollJob(base, jobId, callback, attempt + 1)
-                }
+                else -> { Thread.sleep(1000); pollJob(base, jobId, callback, attempt + 1) }
             }
         } catch (e: Exception) { callback(Response(false, null, e.message ?: e.javaClass.simpleName)) }
     }
