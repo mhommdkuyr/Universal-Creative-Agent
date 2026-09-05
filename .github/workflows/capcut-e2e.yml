@@ -37,7 +37,8 @@ jobs:
           AVD_NAME=ucoa-capcut
           mkdir -p "$HOME/.android/avd"
           adb start-server
-          printf 'no\n' | avdmanager create avd --force --name "$AVD_NAME" --package 'system-images;android-35;default;x86_64'
+          avdmanager list device | sed -n '1,120p'
+          printf 'no\n' | avdmanager create avd --force --name "$AVD_NAME" --package 'system-images;android-35;default;x86_64' --device 'pixel_2'
           AVD_DIR="$HOME/.android/avd/${AVD_NAME}.avd"
           test -f "$AVD_DIR/config.ini"
           cat >> "$AVD_DIR/config.ini" <<'EOF'
