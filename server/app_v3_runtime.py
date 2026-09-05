@@ -20,7 +20,39 @@ app_v3.STEP_SYSTEM = (
 )
 
 VISION_SPACE_ID = "akhaliq/Qwen3-VL-2B-Instruct"
-VISION_API_NAME = "/qwen_chat_fn"
+# The public Space exposes the multimodal ChatInterface through /chat. Its
+# underlying function is qwen_chat_fn, but /chat is the verified public API
+# entry point covered by the repository's live HF smoke test.
+VISION_API_NAME = "/chat"
+
+
+def _normalize_vision_result(text: str) -> str:
+    """Convert ordinary VLM prose into the observation schema when needed."""
+    try:
+        app_v3.extract_json(text)
+        return text
+    except Exception:
+        normalized = text.replace("_", " ")
+        labels = []
+        for label in (
+            "continue", "التالي", "متابعة", "موافق", "ok",
+            "تأكيد", "submit", "إرسال"
+        ):
+            if re.search(rf"\b{re.escape(label)}\b", normalized, re.IGNORECASE):
+                labels.append(label)
+        elements = [
+            {"text": label, "role": "button", "x": 0, "y": 0}
+            for label in labels
+        ]
+        return json.dumps(
+            {
+                "screen_summary": re.sub(r"\s+", " ", text)[:1200],
+                "elements": elements,
+                "visible_goal_state": "unknown",
+                "confidence": 0.8 if labels else 0.55,
+            },
+            ensure_ascii=False,
+        )
 
 
 def vision_space(prompt: str, image: str) -> str:
@@ -40,32 +72,7 @@ def vision_space(prompt: str, image: str) -> str:
                         [],
                         api_name=VISION_API_NAME,
                     )
-                text = str(result)
-                try:
-                    app_v3.extract_json(text)
-                    return text
-                except Exception:
-                    normalized = text.replace("_", " ")
-                    labels = []
-                    for label in (
-                        "continue", "التالي", "متابعة", "موافق", "ok",
-                        "تأكيد", "submit", "إرسال"
-                    ):
-                        if re.search(rf"\b{re.escape(label)}\b", normalized, re.IGNORECASE):
-                            labels.append(label)
-                    elements = [
-                        {"text": label, "role": "button", "x": 0, "y": 0}
-                        for label in labels
-                    ]
-                    return json.dumps(
-                        {
-                            "screen_summary": text[:1200],
-                            "elements": elements,
-                            "visible_goal_state": "unknown",
-                            "confidence": 0.8 if labels else 0.55,
-                        },
-                        ensure_ascii=False,
-                    )
+                return _normalize_vision_result(str(result))
             except Exception as exc:
                 last_error = exc
                 if attempt < 2:
