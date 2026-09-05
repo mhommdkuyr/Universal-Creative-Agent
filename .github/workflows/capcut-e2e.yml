@@ -40,6 +40,12 @@ jobs:
           emulator-options: -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel off
           disable-animations: true
           script: |
+            set -euo pipefail
             adb wait-for-device
             adb shell settings put system screen_off_timeout 1800000 || true
+            AAPT_PATH="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)"
+            test -n "$AAPT_PATH"
+            export PATH="$(dirname "$AAPT_PATH"):$PATH"
+            echo "Using aapt: $(command -v aapt)"
+            aapt version
             bash ./server/ci_capcut_e2e.sh
