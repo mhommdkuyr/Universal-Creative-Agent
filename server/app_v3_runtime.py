@@ -6,6 +6,12 @@ import tempfile
 
 import app_v3
 
+# V3 currently uses this symbol in run_plan; define it here without rewriting the large module.
+app_v3.PLAN_SYSTEM = (
+    "You are UCOA planner. Return JSON {summary:string,steps:string[]}. "
+    "Create 2-5 ordered steps and include verification. Never claim success."
+)
+
 
 def vision_space(prompt: str, image: str) -> str:
     from gradio_client import Client, handle_file
