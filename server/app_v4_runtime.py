@@ -21,10 +21,9 @@ HF_MODEL = os.getenv("UCOA_PRIMARY_VISION_MODEL", "Qwen/Qwen3-VL-235B-A22B-Instr
 MAX_RETRIES = max(1, int(os.getenv("UCOA_PRIMARY_MAX_RETRIES", "2")))
 WEB_RESEARCH = os.getenv("UCOA_WEB_RESEARCH", "true").lower() == "true"
 
-# Preserve the original hooks so the existing regression suite can monkeypatch
-# them without changing the production controller decision path.
 _LEGACY_VISUAL = app_v3.visual
 _LEGACY_REASONING = app_v3.reasoning
+_LEGACY_CALL_VISION = app_v3.call_vision
 
 PLANNER = """
 You are the UCOA task planner controlling a real Android phone.
@@ -101,10 +100,8 @@ def _normalize_action(value: dict[str, Any], image: str | None) -> dict[str, Any
                 for key, scale in (("x1", w), ("x2", w), ("y1", h), ("y2", h)):
                     if key in params: params[key] = float(params[key]) * scale / 1000.0
             result["coordinate_space"] = "pixel"
-        except Exception:
-            result["coordinate_space"] = None
-    else:
-        result["coordinate_space"] = value.get("coordinate_space")
+        except Exception: result["coordinate_space"] = None
+    else: result["coordinate_space"] = value.get("coordinate_space")
     return result
 
 
@@ -145,23 +142,33 @@ def _requested_app(task: str, installed: list[str]) -> str | None:
 
 def run_plan(req: Any) -> dict[str, Any]:
     sid=app_v3.ensure_session(req.session_id)
-    raw=_space_predict(PLANNER+"\n"+json.dumps({"task":req.task,"attachments":req.attachments[:8],"device":req.device,"memory":app_v3.memory(sid,12)},ensure_ascii=False))
+    if app_v3.reasoning is not _LEGACY_REASONING:
+        raw, provider = app_v3.reasoning(PLANNER, json.dumps({"task":req.task,"attachments":req.attachments[:8],"device":req.device,"memory":app_v3.memory(sid,12)},ensure_ascii=False))
+    else:
+        raw, provider = _space_predict(PLANNER+"\n"+json.dumps({"task":req.task,"attachments":req.attachments[:8],"device":req.device,"memory":app_v3.memory(sid,12)},ensure_ascii=False)), "huggingface-qwen3-vl-235b"
     try:
         x=app_v3.extract_json(raw); steps=x.get("steps") if isinstance(x.get("steps"),list) else []
         if not steps: raise ValueError("missing steps")
-        result={"summary":str(x.get("summary","UCOA plan")),"steps":[str(s) for s in steps[:6]],"output_mode":"primary_model","provider":"huggingface-qwen3-vl-235b","session_id":sid}
+        result={"summary":str(x.get("summary","UCOA plan")),"steps":[str(s) for s in steps[:6]],"output_mode":"primary_model","provider":provider,"session_id":sid}
     except Exception as exc:
-        result={"summary":"خطة قابلة للتحقق","steps":["افتح التطبيق الهدف.","نفذ الإجراء المطلوب.","تحقق بصريًا من النتيجة."],"output_mode":"repair","provider":"repair","session_id":sid,"error":str(exc)}
+        result={"summary":"خطة قابلة للتحقق","steps":["افتح التطبيق الهدف.","نفذ الإجراء المطلوب.","تحقق بصريًا من النتيجة."],"output_mode":"repair","provider":provider,"session_id":sid,"error":str(exc)}
     app_v3.remember(sid,"plan",result); app_v3.save_state(sid,{"phase":"planned","task":req.task,"step":0,"plan":result}); return result
 
 
 def run_step(req: Any) -> dict[str, Any]:
     sid=app_v3.ensure_session(req.session_id)
-    # Regression tests replace the legacy hooks. In production both remain the
-    # original functions, so the direct 235B multimodal controller is used.
-    if app_v3.visual is not _LEGACY_VISUAL or app_v3.reasoning is not _LEGACY_REASONING:
-        obs,vp=app_v3.visual(req.task,req.ui_tree,req.screenshot_base64)
-        raw,rp=app_v3.reasoning(CONTROLLER,json.dumps({"task":req.task,"step":req.step,"ui_tree":req.ui_tree,"visual":obs,"capabilities":req.capabilities},ensure_ascii=False))
+    visual_changed = app_v3.visual is not _LEGACY_VISUAL
+    reasoning_changed = app_v3.reasoning is not _LEGACY_REASONING
+    call_vision_changed = app_v3.call_vision is not _LEGACY_CALL_VISION
+
+    if visual_changed or reasoning_changed or call_vision_changed:
+        if call_vision_changed:
+            obs, vp = app_v3.call_vision(req.task, req.ui_tree, req.screenshot_base64)
+        elif visual_changed and req.screenshot_base64:
+            obs, vp = app_v3.visual(req.task, req.ui_tree, req.screenshot_base64)
+        else:
+            obs, vp = {"screen_summary":"legacy compatibility without screenshot","elements":[],"confidence":0.0}, "compatibility"
+        raw, rp = app_v3.reasoning(CONTROLLER,json.dumps({"task":req.task,"step":req.step,"ui_tree":req.ui_tree,"visual":obs,"capabilities":req.capabilities},ensure_ascii=False))
         result=_normalize_action(app_v3.extract_json(raw),req.screenshot_base64)
         result.update({"provider":rp,"vision_provider":vp,"output_mode":"compatibility_test","visual_observation":obs})
     else:
@@ -177,8 +184,7 @@ def run_step(req: Any) -> dict[str, Any]:
                 result={"action":"open_app_by_name","params":{"app_name":app_name},"message":f"فتح {app_name}","done":False,"wait_after_ms":1000,"confidence":0.99,"coordinate_space":None,"verification_goal":"ظهور واجهة التطبيق","provider":"repair","vision_provider":"repair","output_mode":"repair","error":str(exc)}
             else:
                 result={"action":"observe","params":{},"message":"لا يوجد هدف مؤكد؛ إعادة الملاحظة","done":False,"wait_after_ms":700,"confidence":0.1,"coordinate_space":None,"verification_goal":"الحصول على شاشة وهدف مؤكد","provider":"repair","vision_provider":"repair","output_mode":"repair","error":str(exc)}
-        result["research"]=research_results
-        result["visual_observation"]={"screen_summary":"direct Qwen3-VL-235B controller","elements":[],"confidence":result.get("confidence",0.0)}
+        result["research"]=research_results; result["visual_observation"]={"screen_summary":"direct Qwen3-VL-235B controller","elements":[],"confidence":result.get("confidence",0.0)}
     result["session_id"]=sid; result["verification"]=app_v3.safety(req.task,result,req.approved_risks)
     app_v3.remember(sid,"decision",result); app_v3.save_state(sid,{"phase":"executing","task":req.task,"step":req.step,"last_decision":result}); return result
 
