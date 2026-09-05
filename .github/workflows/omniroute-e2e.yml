@@ -25,21 +25,22 @@ jobs:
           for i in $(seq 1 60); do
             code=$(curl -sS -o /tmp/models.json -w '%{http_code}' --max-time 10 "$OMNI_URL/v1/models" || true)
             echo "models HTTP $code"
-            cat /tmp/models.json || true
             if [ "$code" = "200" ]; then exit 0; fi
             sleep 5
           done
           exit 1
-      - name: Try keyless free-provider bootstrap
+      - name: Bootstrap OpenCode Free connection
         env:
           OMNI_URL: https://ucoa-omniroute-image.onrender.com
         run: |
-          set +e
-          curl -sS --max-time 30 -X POST "$OMNI_URL/api/providers" \
+          set -euo pipefail
+          code=$(curl -sS --max-time 30 -X POST "$OMNI_URL/api/providers" \
             -H 'Content-Type: application/json' \
-            --data '{"provider":"opencode-free","name":"UCOA OpenCode Free","apiKey":"","priority":1,"testStatus":"unknown"}' \
-            -o /tmp/provider.json -w '%{http_code}\n' | tee /tmp/provider.status
+            --data '{"provider":"opencode","name":"UCOA OpenCode Free","apiKey":"","priority":1,"testStatus":"unknown"}' \
+            -o /tmp/provider.json -w '%{http_code}')
+          echo "provider HTTP $code"
           cat /tmp/provider.json || true
+          case "$code" in 200|201|409) ;; *) exit 1 ;; esac
       - name: Exercise OpenAI-compatible multimodal inference
         env:
           OMNI_URL: https://ucoa-omniroute-image.onrender.com
@@ -48,7 +49,7 @@ jobs:
           import base64, json, os, urllib.request
           png = base64.b64encode(bytes.fromhex('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360f8cf00000003000100d2c4a4f70000000049454e44ae426082')).decode()
           body={"model":"auto","temperature":0,"max_tokens":64,"messages":[{"role":"user","content":[{"type":"text","text":"Return ONLY JSON: {\\"action\\":\\"observe\\",\\"confidence\\":number}. Confirm you can inspect this image."},{"type":"image_url","image_url":{"url":"data:image/png;base64,"+png}}]}]}
-          req=urllib.request.Request(os.environ['OMNI_URL']+'/v1/chat/completions',data=json.dumps(body).encode(),headers={'Content-Type':'application/json'},method='POST')
+          req=urllib.request.Request(os.environ['OMNI_URL']+'/v1/chat/completions',data=json.dumps(body).encode(),headers={'Content-Type':'application/json','Authorization':'Bearer sk_omniroute'},method='POST')
           with urllib.request.urlopen(req,timeout=120) as r: result=json.loads(r.read().decode())
           print(json.dumps(result,ensure_ascii=False))
           assert result.get('choices'), result
