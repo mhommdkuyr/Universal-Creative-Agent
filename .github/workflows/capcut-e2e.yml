@@ -38,7 +38,7 @@ jobs:
           mkdir -p "$HOME/.android/avd"
           adb start-server
           rm -rf "$HOME/.android/avd/${AVD_NAME}.avd" "$HOME/.android/avd/${AVD_NAME}.ini"
-          avdmanager create avd --force --name "$AVD_NAME" --package 'system-images;android-35;default;x86_64' --device 24
+          avdmanager create avd --force --name "$AVD_NAME" --package 'system-images;android-35;default;x86_64' --device 'pixel_2'
           AVD_DIR="$HOME/.android/avd/${AVD_NAME}.avd"
           test -f "$AVD_DIR/config.ini"
           cat >> "$AVD_DIR/config.ini" <<'EOF'
