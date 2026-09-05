@@ -37,7 +37,10 @@ jobs:
           AVD_NAME=ucoa-capcut
           mkdir -p "$HOME/.android/avd"
           adb start-server
-          echo no | avdmanager create avd --force --name "$AVD_NAME" --package 'system-images;android-35;default;x86_64' --device 'pixel_2'
+          DEVICE_ID="$(avdmanager list device | awk -F'"' '/id: / {print $2; exit}')"
+          test -n "$DEVICE_ID"
+          echo "Using AVD device profile: $DEVICE_ID"
+          printf 'no\n' | avdmanager create avd --force --name "$AVD_NAME" --package 'system-images;android-35;default;x86_64' --device "$DEVICE_ID"
           AVD_DIR="$HOME/.android/avd/${AVD_NAME}.avd"
           test -f "$AVD_DIR/config.ini"
           cat >> "$AVD_DIR/config.ini" <<'EOF'
