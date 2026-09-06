@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CAPCUT_APK_URL="https://sf16-sg.tiktokcdn.com/obj/eden-sg/nupkuhs_yvojuh_jj/ljhwZthlaukjlkulzlp/capcut_apk/cc_website_download.apk"
+CAPCUT_APK_URL="${CAPCUT_APK_URL:-https://sf16-sg.tiktokcdn.com/obj/eden-sg/nupkuhs_yvojuh_jj/ljhwZthlaukjlkulzlp/capcut_apk/cc_website_download.apk}"
 CAPCUT_APK_PATH="${CAPCUT_APK_PATH:-/tmp/capcut.apk}"
+UCOA_APK_PATH="${UCOA_APK_PATH:-android/app/build/outputs/apk/debug/app-debug.apk}"
 CAPCUT_PACKAGE="${CAPCUT_PACKAGE:-}"
 
 mkdir -p "$(dirname "$CAPCUT_APK_PATH")"
@@ -13,20 +14,30 @@ else
   echo "Using cached CapCut APK: $CAPCUT_APK_PATH"
 fi
 
-aapt dump badging "$CAPCUT_APK_PATH" | head -n 5 || true
-if [ -z "$CAPCUT_PACKAGE" ]; then
-  CAPCUT_PACKAGE="$(aapt dump badging "$CAPCUT_APK_PATH" | sed -n "s/^package: name='\\([^']*\\)'.*/\\1/p" | head -n1)"
+[ -s "$UCOA_APK_PATH" ]
+AAPT_BIN="${AAPT_BIN:-$(command -v aapt || true)}"
+if [ -z "$AAPT_BIN" ]; then
+  AAPT_BIN="$(find "${ANDROID_HOME:-$HOME/Android/Sdk}/build-tools" -type f -name aapt 2>/dev/null | sort -V | tail -n 1)"
 fi
-CAPCUT_LABEL="$(aapt dump badging "$CAPCUT_APK_PATH" | sed -n "s/.*application-label='\\([^']*\\)'.*/\\1/p" | head -n1)"
+[ -x "$AAPT_BIN" ]
+
+echo "UCOA_APK_PATH=$UCOA_APK_PATH"
+echo "AAPT_BIN=$AAPT_BIN"
+"$AAPT_BIN" dump badging "$CAPCUT_APK_PATH" | head -n 5 || true
+if [ -z "$CAPCUT_PACKAGE" ]; then
+  CAPCUT_PACKAGE="$("$AAPT_BIN" dump badging "$CAPCUT_APK_PATH" | sed -n "s/^package: name='\\([^']*\\)'.*/\\1/p" | head -n1)"
+fi
+CAPCUT_LABEL="$("$AAPT_BIN" dump badging "$CAPCUT_APK_PATH" | sed -n "s/.*application-label='\\([^']*\\)'.*/\\1/p" | head -n1)"
 [ -n "$CAPCUT_PACKAGE" ]
 echo "CAPCUT_PACKAGE=$CAPCUT_PACKAGE CAPCUT_LABEL=$CAPCUT_LABEL"
 
 START_MS="$(date +%s%3N)"
 adb install -r "$CAPCUT_APK_PATH"
-adb install -r apk/app-debug.apk
+adb install -r "$UCOA_APK_PATH"
 INSTALL_MS="$(date +%s%3N)"
-echo "CAPCUT_INSTALL_DURATION_MS=$((INSTALL_MS-START_MS))"
+echo "CAPCUT_AND_UCOA_INSTALL_DURATION_MS=$((INSTALL_MS-START_MS))"
 
+if [ -f server/ci_seed_media.sh ]; then bash server/ci_seed_media.sh || true; fi
 mkdir -p /tmp/ucoa_media
 if command -v ffmpeg >/dev/null 2>&1; then
   ffmpeg -y -f lavfi -i "color=c=black:s=360x640:d=2" -vf "drawtext=text='UCOA E2E':fontcolor=white:fontsize=28:x=(w-text_w)/2:y=(h-text_h)/2" -c:v libx264 -pix_fmt yuv420p /tmp/ucoa_media/ucoa_e2e.mp4 >/tmp/ffmpeg.log 2>&1 || true
