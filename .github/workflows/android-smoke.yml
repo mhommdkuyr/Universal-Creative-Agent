@@ -1,0 +1,45 @@
+name: Android Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'android/**'
+      - 'server/ci_android_smoke.sh'
+      - '.github/workflows/android-smoke.yml'
+  schedule:
+    - cron: '17 */6 * * *'
+
+concurrency:
+  group: android-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - uses: gradle/actions/setup-gradle@v4
+      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - run: gradle -p android assembleDebug --stacktrace
+      - name: Check hardware acceleration availability
+        run: |
+          if [ -e /dev/kvm ]; then echo "KVM_AVAILABLE=true"; else echo "KVM_AVAILABLE=false"; fi
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: default
+          profile: pixel_2
+          force-avd-creation: true
+          emulator-options: -no-window -noaudio -no-boot-anim -gpu swiftshader_indirect
+          disable-animations: true
+          script: bash ./server/ci_android_smoke.sh
