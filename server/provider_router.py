@@ -22,7 +22,6 @@ import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from observability import span, set_measurement
@@ -58,7 +57,8 @@ def _cfg(p: dict[str, Any]) -> tuple[str, str, str, bool]:
     key = os.getenv(p["key_env"], "").strip()
     if not key:
         raise RuntimeError("provider not configured")
-    base = (os.getenv(p["base_env"], "") if p["base_env"] else p["default_base"]).rstrip("/")
+    configured_base = os.getenv(p["base_env"], "").strip() if p["base_env"] else ""
+    base = (configured_base or p["default_base"]).rstrip("/")
     model = os.getenv(p["model_env"], p["default_model"]).strip()
     if not base or not model:
         raise RuntimeError("provider endpoint/model not configured")

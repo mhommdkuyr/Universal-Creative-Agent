@@ -1,0 +1,99 @@
+name: UCOA Autonomous Development
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: Optional engineering objective for this run
+        required: false
+        type: string
+        default: ""
+  schedule:
+    - cron: "17 2 * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: ucoa-autonomous-development
+  cancel-in-progress: true
+
+jobs:
+  develop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "UCOA Autonomous Developer"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Check for existing autonomous PR
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing="$(gh pr list --state open --json title --jq '[.[] | select(.title | startswith("[UCOA Autonomous]"))] | length')"
+          echo "count=$existing" >> "$GITHUB_OUTPUT"
+          if [ "$existing" != "0" ]; then
+            echo "An autonomous PR is already open; this cycle will stop before making changes."
+          fi
+
+      - name: Create isolated development branch
+        if: steps.existing.outputs.count == '0'
+        id: branch
+        run: |
+          BRANCH="ai/autonomous-$(date -u +%Y%m%d-%H%M%S)"
+          git switch -c "$BRANCH"
+          echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Run bounded OpenAI development loop
+        if: steps.existing.outputs.count == '0'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: gpt-5.6-sol
+          UCOA_AGENT_MAX_ROUNDS: "3"
+          UCOA_AUTONOMOUS_TASK: ${{ inputs.task || 'Inspect the repository and make the highest-impact safe improvement that materially advances production readiness. Prioritize known incomplete integrations, correctness, reliability, security, tests, and Android/runtime behavior. Do not make cosmetic-only changes.' }}
+        run: python scripts/ucoa_autonomous_dev.py
+
+      - name: Show resulting diff
+        if: steps.existing.outputs.count == '0'
+        run: |
+          git status --short
+          git diff --stat
+          git diff --check
+
+      - name: Commit changes
+        if: steps.existing.outputs.count == '0'
+        id: commit
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No changes produced."
+            exit 0
+          fi
+          git add --all
+          git diff --cached --check
+          git commit -m "feat(ai): autonomous production improvement"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Push development branch
+        if: steps.existing.outputs.count == '0' && steps.commit.outputs.changed == 'true'
+        run: git push --set-upstream origin "${{ steps.branch.outputs.name }}"
+
+      - name: Open Pull Request
+        if: steps.existing.outputs.count == '0' && steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr create \
+            --base main \
+            --head "${{ steps.branch.outputs.name }}" \
+            --title "[UCOA Autonomous] Production improvement" \
+            --body "## Autonomous development run\n\nOpenAI was used as a bounded coding agent. The agent inspected the repository, applied only allowlisted source changes, ran compile/tests and final Android/Docker validation, and stopped on the configured repair budget.\n\n**Security boundary:** the OpenAI API key is supplied only as the `OPENAI_API_KEY` GitHub Actions secret and is never written into the repository.\n\nReview the generated diff before merging."

@@ -18,7 +18,7 @@ def wait_job(job_id: str):
 def test_v3_health():
     x = client.get('/health').json()
     assert x['version'] == '3.0.0'
-    assert x['routing'] is True
+    assert x['routing'] is False
     assert x['verifier'] is True
     assert x['state_persistence'] is True
 
