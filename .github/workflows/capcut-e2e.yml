@@ -44,6 +44,8 @@ jobs:
           force-avd-creation: true
           emulator-options: -no-window -noaudio -no-boot-anim -gpu swiftshader_indirect
           disable-animations: true
+          env:
+          CAPCUT_APK_SHA256: ${{ secrets.CAPCUT_APK_SHA256 }}
           script: |
             set -euo pipefail
             adb wait-for-device
