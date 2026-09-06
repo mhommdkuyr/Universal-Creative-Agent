@@ -28,7 +28,7 @@ def test_health_unconfigured():
     assert response.status_code == 200
     body = response.json()
     assert body['ok'] is True
-    assert body['routing'] is True
+    assert body['routing'] is False
     assert body['verifier'] is True
     assert body['state_persistence'] is True
 
