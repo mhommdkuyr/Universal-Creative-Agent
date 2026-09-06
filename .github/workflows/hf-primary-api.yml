@@ -1,15 +1,16 @@
 name: HF Primary API Probe
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - 'server/ci_hf_primary_api.py'
-      - '.github/workflows/hf-primary-api.yml'
+  schedule:
+    - cron: '07 */12 * * *'
+
+concurrency:
+  group: hf-primary-api-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   probe:
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
@@ -18,4 +19,3 @@ jobs:
           python-version: '3.12'
       - run: pip install 'gradio_client>=1.13,<3' 'pillow>=11,<13'
       - run: python server/ci_hf_primary_api.py
-        continue-on-error: true
