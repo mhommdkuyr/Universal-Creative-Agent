@@ -51,6 +51,14 @@ jobs:
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 7
 
+  docker-backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build reproducible backend image
+        run: docker build -f server/Dockerfile server
+
   package-integrity:
     runs-on: ubuntu-latest
     timeout-minutes: 5
