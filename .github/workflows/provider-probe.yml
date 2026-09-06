@@ -1,39 +1,41 @@
 name: Live Provider Probe
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - 'server/provider_router.py'
-      - 'server/app.py'
-      - 'server/app_v4_runtime.py'
-      - '.github/workflows/provider-probe.yml'
+  schedule:
+    - cron: '13 */6 * * *'
+
+concurrency:
+  group: provider-probe-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   provider-probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 4
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Wait for production brain
         run: |
           set -euo pipefail
-          for i in $(seq 1 30); do
-            code="$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 10 https://ucoa-agent-brain.onrender.com/health || true)"
+          for i in $(seq 1 12); do
+            code="$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 5 https://ucoa-agent-brain.onrender.com/health || true)"
             if [ "$code" = "200" ]; then cat /tmp/health.json; exit 0; fi
-            sleep 5
+            sleep 2
           done
-          echo "Production health failed"
           cat /tmp/health.json || true
           exit 1
       - name: Probe configured providers
         run: |
           set -euo pipefail
-          curl -sS --fail --max-time 90 https://ucoa-agent-brain.onrender.com/v1/providers/probe | tee /tmp/providers.json
+          curl -sS --fail --max-time 30 https://ucoa-agent-brain.onrender.com/v1/providers/probe | tee /tmp/providers.json
           python - <<'PY'
           import json
           data=json.load(open('/tmp/providers.json'))
           ok=[p for p in data.get('providers',[]) if p.get('ok')]
-          print('usable providers:', len(ok))
+          assert ok, 'No configured provider returned a successful probe'
           for p in data.get('providers',[]):
               print(p.get('provider'), p.get('model'), p.get('vision'), p.get('ok'), p.get('latency_s'), p.get('error',''))
-          assert ok, 'No configured provider returned a successful probe'
           PY
