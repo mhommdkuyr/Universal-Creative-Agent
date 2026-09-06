@@ -1,6 +1,8 @@
 """Production entrypoint for UCOA V4 with live provider routing."""
 import base64
 import io
+import json
+import os
 import sys
 
 import app_v4_runtime  # noqa: F401,E402
@@ -32,7 +34,7 @@ def _provider_visual(task, ui_tree, image):
                 "Return ONLY valid JSON: {\"screen_summary\":string,\"elements\":[{\"text\":string,\"role\":string,\"x\":number,\"y\":number}],\"visible_goal_state\":string,\"confidence\":number}. "
                 "Never invent unseen elements. Coordinates must be normalized to 0..1000."
             )
-            user = __import__("json").dumps({"task": task, "ui_tree": ui_tree[:18000]}, ensure_ascii=False)
+            user = json.dumps({"task": task, "ui_tree": ui_tree[:18000]}, ensure_ascii=False)
             raw = openai_provider.visual(system, user, image)
             return app_v3.extract_json(raw), "openai"
         except Exception:
