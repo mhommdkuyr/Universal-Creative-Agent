@@ -5,6 +5,7 @@ CAPCUT_APK_URL="${CAPCUT_APK_URL:-https://sf16-sg.tiktokcdn.com/obj/eden-sg/nupk
 CAPCUT_APK_PATH="${CAPCUT_APK_PATH:-/tmp/capcut.apk}"
 UCOA_APK_PATH="${UCOA_APK_PATH:-android/app/build/outputs/apk/debug/app-debug.apk}"
 CAPCUT_PACKAGE="${CAPCUT_PACKAGE:-}"
+CAPCUT_APK_SHA256="${CAPCUT_APK_SHA256:-}"
 
 mkdir -p "$(dirname "$CAPCUT_APK_PATH")"
 if [ ! -s "$CAPCUT_APK_PATH" ]; then
