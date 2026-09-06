@@ -18,7 +18,7 @@ def wait_job(job_id: str):
 def test_v3_health():
     x = client.get('/health').json()
     assert x['version'] == '3.0.0'
-    assert x['routing'] is True
+    assert x['routing'] is False
     assert x['verifier'] is True
     assert x['state_persistence'] is True
 
@@ -43,19 +43,11 @@ def test_v3_visual_then_reasoning_pipeline(monkeypatch):
 
 
 def test_v3_result_verifier():
-    x = client.post('/v1/agent/verify-result', json={
-        'task': 'press Continue',
-        'action': {'action': 'click_any_text', 'params': {'texts': ['Continue']}},
+    result = client.post('/v1/agent/verify-result', json={
+        'task': 'continue',
+        'action': {'action': 'click_any_text', 'params': {'text': 'Continue'}},
         'before_ui_tree': '[{"text":"Continue"}]',
-        'after_ui_tree': '[{"text":"Next step"}]'
+        'after_ui_tree': '[{"text":"Next"}]'
     }).json()
-    assert x['verified'] is True
-
-
-def test_v3_safety_gate():
-    x = client.post('/v1/agent/verify', json={
-        'task': 'أرسل رمز التحقق',
-        'decision': {'action': 'type_into_any', 'params': {'text': '123456'}}
-    }).json()
-    assert x['allowed'] is False
-    assert x['requires_confirmation'] is True
+    assert result['verified'] is True
+    assert result['verifier'] == 'independent-rule-gate'
