@@ -1,17 +1,19 @@
-# Production acceptance run: this workflow intentionally exercises the live V4 brain.
+# Production acceptance run: this workflow intentionally exercises live AI providers.
 name: Vision Integration
 
 on:
-  push:
-    paths:
-      - 'server/**'
-      - '.github/workflows/vision-integration.yml'
   workflow_dispatch:
+  schedule:
+    - cron: '43 */6 * * *'
+
+concurrency:
+  group: vision-integration-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   huggingface-vlm:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,11 +21,10 @@ jobs:
           python-version: '3.12'
       - run: pip install pillow "gradio_client>=1.13,<2"
       - run: python server/ci_hf_vision_smoke.py
-        continue-on-error: true
 
   render-v3:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,12 +35,12 @@ jobs:
         env:
           BRAIN_URL: https://ucoa-agent-brain.onrender.com
         run: |
-          set -e
-          for i in $(seq 1 60); do
-            body=$(curl -fsS --max-time 10 "$BRAIN_URL/health" || true)
+          set -euo pipefail
+          for i in $(seq 1 18); do
+            body=$(curl -fsS --max-time 5 "$BRAIN_URL/health" || true)
             echo "$body"
-            if echo "$body" | grep -q '\"ok\":true'; then exit 0; fi
-            sleep 5
+            if echo "$body" | grep -q '"ok":true'; then exit 0; fi
+            sleep 2
           done
           exit 1
       - name: Verify plan job
