@@ -12,12 +12,12 @@ from pydantic import BaseModel, Field
 app = FastAPI(title="UCOA Universal Agent Brain", version="3.0.0")
 ACTIONS = ["open_url","open_app_by_name","click_any_text","type_into_any","share_attachment","tap","long_press","swipe","back","home","wait","observe","done"]
 LOCAL_BASE = os.getenv("UCOA_MODEL_BASE_URL", "").rstrip("/")
-LOCAL_MODEL = os.getenv("UCOA_MODEL_NAME", "Qwen2.5-0.5B-Instruct-Q2_K")
+LOCAL_MODEL = os.getenv("UCOA_MODEL_NAME", "")
 LOCAL_KEY = os.getenv("UCOA_MODEL_API_KEY", "")
 HF_BASE = os.getenv("UCOA_HF_ROUTER_URL", "https://router.huggingface.co/v1").rstrip("/")
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 REASONING_MODEL = os.getenv("UCOA_REASONING_MODEL", "Qwen/Qwen3-4B-Instruct-2507")
-VISION_MODEL = os.getenv("UCOA_VISION_MODEL", "Qwen/Qwen3-VL-2B-Instruct")
+VISION_MODEL = os.getenv("UCOA_VISION_MODEL", "Qwen/Qwen3-VL-235B-A22B-Instruct")
 VISION_SPACE = os.getenv("UCOA_VISION_SPACE_URL", "https://akhaliq-qwen3-vl-2b-instruct.hf.space").rstrip("/")
 VISION_ENABLED = os.getenv("UCOA_LOCAL_VISION", "true").lower() == "true"
 EXT_BASE = os.getenv("UCOA_FALLBACK_BASE_URL", "").rstrip("/")
@@ -130,7 +130,6 @@ def visual(task,ui,image):
     except:return {"screen_summary":re.sub(r"\s+"," ",raw)[:1200],"elements":[],"visible_goal_state":"unknown","confidence":0.35},"huggingface-space"
 
 def call_vision(task, ui, image):
-    """Backward-compatible hook that resolves the current visual function dynamically."""
     return visual(task, ui, image)
 
 def reasoning(system,user):
@@ -180,7 +179,10 @@ def submit(kind,fn):
 
 @app.get("/health")
 def health():
-    return {"ok":True,"brain_configured":bool(LOCAL_BASE and LOCAL_MODEL),"model":LOCAL_MODEL,"local_vision":VISION_ENABLED,"vision_model":VISION_MODEL,"reasoning_model":REASONING_MODEL,"reasoning_provider":"huggingface-router" if HF_TOKEN else "render-local-fallback","external_fallback_configured":bool(EXT_BASE and EXT_MODEL),"routing":True,"verifier":True,"state_persistence":True,"version":app.version}
+    external = []
+    for env_name, name in [("UCOA_GEMINI_API_KEY","gemini"),("UCOA_DEEPSEEK_API_KEY","deepseek"),("UCOA_CEREBRAS_API_KEY","cerebras"),("UCOA_GROQ_API_KEY","groq"),("UCOA_OMNIROUTE_API_KEY","omniroute")]:
+        if os.getenv(env_name, "").strip(): external.append(name)
+    return {"ok":True,"brain_configured":bool(HF_TOKEN or LOCAL_BASE),"model":LOCAL_MODEL,"local_vision":VISION_ENABLED,"vision_model":VISION_MODEL,"reasoning_model":REASONING_MODEL,"reasoning_provider":"provider-router" if external else ("huggingface-router" if HF_TOKEN else "unconfigured"),"configured_providers":external,"external_fallback_configured":bool(EXT_BASE and EXT_MODEL),"routing":bool(external),"verifier":True,"state_persistence":True,"version":app.version}
 
 @app.post("/v1/agent/sessions")
 def create_session(req:SessionRequest,authorization:str|None=Header(default=None)):
@@ -225,13 +227,13 @@ def run_step(req):
     sid=ensure_session(req.session_id); obs={"screen_summary":"No screenshot","elements":[],"confidence":0.0}; vp=None
     if req.screenshot_base64 and VISION_ENABLED:
         try: obs,vp=call_vision(req.task,req.ui_tree,req.screenshot_base64); remember(sid,"visual_observation",obs)
-        except Exception as e: remember(sid,"visual_error",{"error":str(e)})
+        except Exception as e: remember(sid,"visual_error",{"error":type(e).__name__})
     prompt=json.dumps({"task":req.task,"step":req.step,"history":req.history[-8:],"memory":memory(sid,16),"state":load_state(sid),"visual_observation":obs,"ui_tree":req.ui_tree[:14000],"installed_apps":req.installed_apps[:100],"capabilities":req.capabilities},ensure_ascii=False)
     try:
         raw,p=reasoning(STEP_SYSTEM,prompt); result=extract_json(raw); action=str(result.get("action","observe"));
         if action not in ACTIONS: raise ValueError("invalid action")
         result["action"]=action; result["params"]=result.get("params") if isinstance(result.get("params"),dict) else {}; result["done"]=bool(result.get("done",False)); result["wait_after_ms"]=max(150,min(5000,int(result.get("wait_after_ms",700)))); result["message"]=str(result.get("message","")); result["output_mode"]="model"
     except Exception as e:
-        result=fallback_step(req,obs); p="repair"; result["error"]=str(e)
+        result=fallback_step(req,obs); p="repair"; result["error"]=type(e).__name__
     result.update(provider=p,vision_provider=vp,visual_observation=obs,session_id=sid,verification=safety(req.task,result,req.approved_risks))
     remember(sid,"decision",result); save_state(sid,{"phase":"executing","task":req.task,"step":req.step,"last_decision":result}); return result
