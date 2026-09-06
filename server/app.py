@@ -6,7 +6,10 @@ import sys
 import app_v4_runtime  # noqa: F401,E402
 import app_v3
 import provider_router
+from observability import init_sentry
 from PIL import Image, ImageDraw
+
+init_sentry()
 
 
 def _provider_reasoning(system, user):
@@ -15,6 +18,7 @@ def _provider_reasoning(system, user):
 
 def _provider_visual(task, ui_tree, image):
     return provider_router.visual(task, ui_tree, image)
+
 
 # Import V4 before patching so its legacy references remain stable. Patch only
 # the normal reasoning/visual hooks; keep call_vision untouched so existing
