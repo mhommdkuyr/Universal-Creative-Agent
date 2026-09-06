@@ -1,15 +1,17 @@
 name: Render Brain Smoke
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - 'server/**'
-      - '.github/workflows/render-brain-smoke.yml'
+  schedule:
+    - cron: '31 */6 * * *'
+
+concurrency:
+  group: render-brain-smoke-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     env:
       BRAIN_URL: https://ucoa-agent-brain.onrender.com
     steps:
@@ -20,15 +22,15 @@ jobs:
       - name: Wait for production health
         run: |
           set -euo pipefail
-          for i in $(seq 1 50); do
-            code=$(curl -sS -o health.json -w '%{http_code}' --max-time 10 "$BRAIN_URL/health" || true)
+          for i in $(seq 1 12); do
+            code=$(curl -sS -o health.json -w '%{http_code}' --max-time 5 "$BRAIN_URL/health" || true)
             echo "health HTTP $code"
             cat health.json || true
             if [ "$code" = "200" ] && grep -q '"ok":true' health.json; then exit 0; fi
-            sleep 4
+            sleep 2
           done
           exit 1
-      - name: Run current lifecycle smoke
+      - name: Run production lifecycle smoke
         run: |
           set -euo pipefail
           BRAIN_URL="$BRAIN_URL" python server/ci_render_v3_smoke.py
