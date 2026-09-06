@@ -34,17 +34,19 @@ jobs:
           git config user.name "UCOA Autonomous Developer"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Stop when another autonomous PR is already open
+      - name: Check for existing autonomous PR
+        id: existing
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           existing="$(gh pr list --state open --json title --jq '[.[] | select(.title | startswith("[UCOA Autonomous]"))] | length')"
+          echo "count=$existing" >> "$GITHUB_OUTPUT"
           if [ "$existing" != "0" ]; then
-            echo "An autonomous PR is already open; skipping this cycle."
-            exit 0
+            echo "An autonomous PR is already open; this cycle will stop before making changes."
           fi
 
       - name: Create isolated development branch
+        if: steps.existing.outputs.count == '0'
         id: branch
         run: |
           BRANCH="ai/autonomous-$(date -u +%Y%m%d-%H%M%S)"
@@ -52,6 +54,7 @@ jobs:
           echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
 
       - name: Run bounded OpenAI development loop
+        if: steps.existing.outputs.count == '0'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: gpt-5.6-sol
@@ -60,12 +63,14 @@ jobs:
         run: python scripts/ucoa_autonomous_dev.py
 
       - name: Show resulting diff
+        if: steps.existing.outputs.count == '0'
         run: |
           git status --short
           git diff --stat
           git diff --check
 
       - name: Commit changes
+        if: steps.existing.outputs.count == '0'
         id: commit
         run: |
           if git diff --quiet; then
@@ -79,11 +84,11 @@ jobs:
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
       - name: Push development branch
-        if: steps.commit.outputs.changed == 'true'
+        if: steps.existing.outputs.count == '0' && steps.commit.outputs.changed == 'true'
         run: git push --set-upstream origin "${{ steps.branch.outputs.name }}"
 
       - name: Open Pull Request
-        if: steps.commit.outputs.changed == 'true'
+        if: steps.existing.outputs.count == '0' && steps.commit.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
