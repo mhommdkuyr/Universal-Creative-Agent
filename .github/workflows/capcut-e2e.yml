@@ -30,8 +30,8 @@ jobs:
         with:
           path: .cache/capcut
           key: capcut-apk-v1-${{ runner.os }}
-      - name: Prepare CapCut APK cache path
-        run: mkdir -p .cache/capcut
+      - name: Prepare cache and APK path
+        run: mkdir -p .cache/capcut && test -s android/app/build/outputs/apk/debug/app-debug.apk
       - name: Check KVM
         run: |
           if [ -e /dev/kvm ]; then echo "KVM_AVAILABLE=true"; else echo "KVM_AVAILABLE=false"; fi
@@ -52,4 +52,5 @@ jobs:
             export PATH="$(dirname "$AAPT_PATH"):$PATH"
             test "$(command -v aapt)" = "$(dirname "$AAPT_PATH")/aapt"
             export CAPCUT_APK_PATH="$GITHUB_WORKSPACE/.cache/capcut/capcut.apk"
+            export UCOA_APK_PATH="$GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug.apk"
             bash ./server/ci_capcut_e2e.sh
