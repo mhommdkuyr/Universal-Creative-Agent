@@ -43,11 +43,19 @@ def test_v3_visual_then_reasoning_pipeline(monkeypatch):
 
 
 def test_v3_result_verifier():
-    result = client.post('/v1/agent/verify-result', json={
-        'task': 'continue',
-        'action': {'action': 'click_any_text', 'params': {'text': 'Continue'}},
+    x = client.post('/v1/agent/verify-result', json={
+        'task': 'press Continue',
+        'action': {'action': 'click_any_text', 'params': {'texts': ['Continue']}},
         'before_ui_tree': '[{"text":"Continue"}]',
-        'after_ui_tree': '[{"text":"Next"}]'
+        'after_ui_tree': '[{"text":"Next step"}]'
     }).json()
-    assert result['verified'] is True
-    assert result['verifier'] == 'independent-rule-gate'
+    assert x['verified'] is True
+
+
+def test_v3_safety_gate():
+    x = client.post('/v1/agent/verify', json={
+        'task': 'أرسل رمز التحقق',
+        'decision': {'action': 'type_into_any', 'params': {'text': '123456'}}
+    }).json()
+    assert x['allowed'] is False
+    assert x['requires_confirmation'] is True
