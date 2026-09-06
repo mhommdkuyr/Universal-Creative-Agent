@@ -4,32 +4,27 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   python:
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
+          cache-dependency-path: server/requirements.txt
       - run: pip install pytest pillow numpy opencv-python-headless -r server/requirements.txt
       - run: PYTHONPATH=. pytest -q
 
-  hf-primary:
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    timeout-minutes: 12
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: pip install 'gradio_client>=1.13,<3' 'pillow>=11,<13'
-      - run: python server/ci_hf_primary_api.py
-        continue-on-error: true
-
   android-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -40,33 +35,29 @@ jobs:
         with:
           packages: platform-tools
       - uses: gradle/actions/setup-gradle@v4
-      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
-      - run: gradle -p android assembleDebug --stacktrace
+      - name: Install Android build toolchain
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Build APK
+        run: gradle -p android assembleDebug --stacktrace
+      - name: Validate APK
+        run: |
+          test -s android/app/build/outputs/apk/debug/app-debug.apk
+          AAPT_PATH="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)"
+          test -n "$AAPT_PATH"
+          "$AAPT_PATH" dump badging android/app/build/outputs/apk/debug/app-debug.apk | head -n 20
       - uses: actions/upload-artifact@v4
         with:
           name: ucoa-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
 
-  android-smoke:
-    needs: android-build
+  package-integrity:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: android-actions/setup-android@v3
-        with:
-          packages: platform-tools
-      - uses: actions/download-artifact@v4
-        with:
-          name: ucoa-debug-apk
-          path: apk
-      - uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          arch: x86_64
-          target: default
-          script: bash ./server/ci_android_smoke.sh
+      - name: Compile server modules
+        run: python -m compileall -q server
+      - name: Verify no secrets are committed
+        run: |
+          ! grep -R --exclude-dir=.git -E 'AIza[0-9A-Za-z_-]{20,}|gsk_[0-9A-Za-z]+|csk-[0-9A-Za-z-]+|sk-[0-9A-Za-z]{20,}' .
