@@ -12,7 +12,7 @@ from typing import Any, Iterator
 
 try:
     import sentry_sdk
-except Exception:  # pragma: no cover - optional dependency
+except Exception:  # pragma: no cover
     sentry_sdk = None  # type: ignore[assignment]
 
 _INITIALIZED = False
@@ -36,26 +36,26 @@ def init_sentry() -> bool:
 
 @contextmanager
 def span(op: str, description: str, **data: Any) -> Iterator[None]:
-    """Create an optional timing span without recording sensitive fields."""
     start = perf_counter()
-    tx = None
-    child = None
+    safe = {k: v for k, v in data.items() if k not in {"key", "token", "authorization", "image", "payload"}}
     try:
         init_sentry()
-        if sentry_sdk is not None and _INITIALIZED:
-            tx = sentry_sdk.Hub.current.scope.transaction if sentry_sdk.Hub.current.scope else None
-            if tx is not None:
-                child = tx.start_child(op=op, description=description, data={k: v for k, v in data.items() if k not in {"key", "token", "authorization", "image", "payload"}})
-                child.__enter__()
-        yield
+        if sentry_sdk is None or not _INITIALIZED:
+            yield
+            return
+        with sentry_sdk.start_span(op=op, description=description, data=safe) as current:
+            yield
+            try:
+                current.set_data("duration_ms", round((perf_counter() - start) * 1000, 2))
+            except Exception:
+                pass
     except Exception as exc:
         if sentry_sdk is not None and _INITIALIZED:
-            sentry_sdk.capture_exception(exc)
+            try:
+                sentry_sdk.capture_exception(exc)
+            except Exception:
+                pass
         raise
-    finally:
-        if child is not None:
-            child.set_data("duration_ms", round((perf_counter() - start) * 1000, 2))
-            child.__exit__(None, None, None)
 
 
 def set_measurement(name: str, value: float, unit: str = "millisecond") -> None:
