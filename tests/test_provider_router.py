@@ -91,26 +91,12 @@ def test_json_extraction():
 def test_vision_cache(monkeypatch):
     _configure(monkeypatch)
     image = base64.b64encode(b"fake-image").decode()
-    body = {
-        "candidates": [
-            {
-                "content": {
-                    "parts": [
-                        {
-                            "text": json.dumps(
-                                {
-                                    "screen_summary": "ok",
-                                    "elements": [],
-                                    "visible_goal_state": "x",
-                                    "confidence": 0.9,
-                                }
-                            )
-                        }
-                    ]
-                }
-            }
-        ]
-    }
+    body = {"choices": [{"message": {"content": json.dumps({
+        "screen_summary": "ok",
+        "elements": [],
+        "visible_goal_state": "x",
+        "confidence": 0.9,
+    })}}]}
     calls = _patch(monkeypatch, [body])
     first, p1 = pr.visual("task", "[]", image)
     second, p2 = pr.visual("task", "[]", image)
