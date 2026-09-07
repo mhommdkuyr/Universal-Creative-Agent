@@ -3,7 +3,7 @@
 
 The agent is intentionally repository-local and PR-based:
 1. snapshot the tracked text source,
-2. ask OpenAI-compatible model for concrete full-file edits,
+2. ask an OpenAI-compatible chat-completions model for concrete full-file edits,
 3. apply only allowlisted paths,
 4. run deterministic validation,
 5. feed failures back to the model,
@@ -25,8 +25,8 @@ ROOT = Path(__file__).resolve().parents[1]
 MAX_FILE_BYTES = int(os.getenv("UCOA_AGENT_MAX_FILE_BYTES", "40000"))
 MAX_CONTEXT_BYTES = int(os.getenv("UCOA_AGENT_MAX_CONTEXT_BYTES", "220000"))
 MAX_ROUNDS = max(1, min(5, int(os.getenv("UCOA_AGENT_MAX_ROUNDS", "3"))))
-MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-sol")
-BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+MODEL = os.getenv("EXPLABS_MODEL", os.getenv("OPENAI_MODEL", "claude-fable-5.1"))
+BASE_URL = os.getenv("EXPLABS_BASE_URL", os.getenv("OPENAI_BASE_URL", "https://api.experientiallabs.ai/v1")).rstrip("/")
 TASK = os.getenv(
     "UCOA_AUTONOMOUS_TASK",
     "Inspect the repository and make the highest-impact safe improvement that materially advances the product. Prefer fixing known gaps, failing tests, incomplete integrations, reliability, security, and production readiness. Do not make cosmetic-only changes.",
@@ -103,28 +103,36 @@ def snapshot(extra: str = "") -> str:
     return "\n".join(parts)
 
 
+def configured_key() -> str:
+    return os.getenv("EXPLABS_API_KEY", os.getenv("OPENAI_API_KEY", "")).strip()
+
+
 def call_openai(prompt: str) -> str:
-    key = os.getenv("OPENAI_API_KEY", "").strip()
+    key = configured_key()
     if not key:
-        raise RuntimeError("OPENAI_API_KEY is not configured")
+        raise RuntimeError("EXPLABS_API_KEY/OPENAI_API_KEY is not configured")
+
+    developer_instructions = (
+        "You are the UCOA senior software engineer. Work only on the supplied repository snapshot. "
+        "Return only edit blocks, with no markdown and no commentary. Each replacement must contain the "
+        "FULL new text of the file, not a patch. Never include secrets. Never edit .github workflows, "
+        "package locks, generated build outputs, or deployment credentials. Keep public APIs backward compatible "
+        "unless a change is required by the task. Prefer the smallest coherent change that solves a real problem. "
+        "When validation feedback is present, fix the underlying cause rather than hiding the failure. "
+        "Format exactly as: ===FILE path===\\n<full utf-8 file text>\\n===END FILE=== . "
+        "For deletions use ===DELETE path=== on its own line. Output zero or more blocks."
+    )
     body = {
         "model": MODEL,
-        "instructions": (
-            "You are the UCOA senior software engineer. Work only on the supplied repository snapshot. "
-            "Return only edit blocks, with no markdown and no commentary. Each replacement must contain the "
-            "FULL new text of the file, not a patch. Never include secrets. Never edit .github workflows, "
-            "package locks, generated build outputs, or deployment credentials. Keep public APIs backward compatible "
-            "unless a change is required by the task. Prefer the smallest coherent change that solves a real problem. "
-            "When validation feedback is present, fix the underlying cause rather than hiding the failure. "
-            "Format exactly as: ===FILE path===\\n<full utf-8 file text>\\n===END FILE=== . "
-            "For deletions use ===DELETE path=== on its own line. Output zero or more blocks."
-        ),
-        "input": prompt,
-        "reasoning": {"effort": "high"},
-        "max_output_tokens": 16000,
+        "stream": False,
+        "messages": [
+            {"role": "system", "content": developer_instructions},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": 16000,
     }
     req = urllib.request.Request(
-        f"{BASE_URL}/responses",
+        f"{BASE_URL}/chat/completions",
         data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         method="POST",
@@ -138,18 +146,14 @@ def call_openai(prompt: str) -> str:
     except (urllib.error.URLError, TimeoutError) as exc:
         raise RuntimeError(f"LLM request failed: {exc}") from exc
 
-    text = payload.get("output_text")
-    if isinstance(text, str) and text.strip():
-        return text.strip()
-    chunks: list[str] = []
-    for item in payload.get("output", []):
-        for content in item.get("content", []) if isinstance(item, dict) else []:
-            if isinstance(content, dict) and content.get("type") in {"output_text", "text"}:
-                chunks.append(str(content.get("text", "")))
-    text = "\n".join(chunks).strip()
-    if not text:
-        raise RuntimeError("LLM returned no editable output")
-    return text
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices:
+        message = choices[0].get("message", {})
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+
+    raise RuntimeError("LLM returned no editable chat-completions content")
 
 
 def safe_target(path: str) -> Path:
