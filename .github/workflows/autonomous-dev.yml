@@ -55,10 +55,11 @@ jobs:
           git switch -c "$BRANCH"
           echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
 
-      - name: Run bounded OpenAI development loop
+      - name: Run OpenAI-compatible autonomous development loop
         if: steps.existing.outputs.count == '0'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: https://api.experientiallabs.ai/v1
           OPENAI_MODEL: gpt-5.6-sol
           UCOA_AGENT_MAX_ROUNDS: "3"
           UCOA_AUTONOMOUS_TASK: ${{ inputs.task || 'Inspect the repository and make the highest-impact safe improvement that materially advances production readiness. Prioritize known incomplete integrations, correctness, reliability, security, tests, and Android/runtime behavior. Do not make cosmetic-only changes.' }}
@@ -98,4 +99,4 @@ jobs:
             --base main \
             --head "${{ steps.branch.outputs.name }}" \
             --title "[UCOA Autonomous] Production improvement" \
-            --body "## Autonomous development run\n\nOpenAI was used as a bounded coding agent. The agent inspected the repository, applied only allowlisted source changes, ran compile/tests and final Android/Docker validation, and stopped on the configured repair budget.\n\n**Security boundary:** the OpenAI API key is supplied only as the `OPENAI_API_KEY` GitHub Actions secret and is never written into the repository.\n\nReview the generated diff before merging."
+            --body "## Autonomous development run\n\nThe autonomous developer uses the OpenAI-compatible Experiential gateway for bounded coding. The agent inspects the repository, applies only allowlisted source changes, runs compile/tests and final Android/Docker validation, and stops on the configured repair budget.\n\n**Security boundary:** the gateway API key is supplied only as the `OPENAI_API_KEY` GitHub Actions secret and is never written into the repository.\n\nReview the generated diff before merging."
