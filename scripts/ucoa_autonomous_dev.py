@@ -3,7 +3,7 @@
 
 The agent is intentionally repository-local and PR-based:
 1. snapshot the tracked text source,
-2. ask OpenAI for a concrete set of full-file edits,
+2. ask OpenAI-compatible model for concrete full-file edits,
 3. apply only allowlisted paths,
 4. run deterministic validation,
 5. feed failures back to the model,
@@ -26,6 +26,7 @@ MAX_FILE_BYTES = int(os.getenv("UCOA_AGENT_MAX_FILE_BYTES", "40000"))
 MAX_CONTEXT_BYTES = int(os.getenv("UCOA_AGENT_MAX_CONTEXT_BYTES", "220000"))
 MAX_ROUNDS = max(1, min(5, int(os.getenv("UCOA_AGENT_MAX_ROUNDS", "3"))))
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-sol")
+BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 TASK = os.getenv(
     "UCOA_AUTONOMOUS_TASK",
     "Inspect the repository and make the highest-impact safe improvement that materially advances the product. Prefer fixing known gaps, failing tests, incomplete integrations, reliability, security, and production readiness. Do not make cosmetic-only changes.",
@@ -59,7 +60,6 @@ def tracked_files() -> list[Path]:
     if code:
         raise RuntimeError(out)
     raw = out.encode("utf-8", "surrogateescape")
-    # The output is safe to decode after the repository-level text-only filter below.
     names = raw.decode("utf-8", "replace").split("\x00")
     result: list[Path] = []
     total = 0
@@ -124,7 +124,7 @@ def call_openai(prompt: str) -> str:
         "max_output_tokens": 16000,
     }
     req = urllib.request.Request(
-        "https://api.openai.com/v1/responses",
+        f"{BASE_URL}/responses",
         data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         method="POST",
@@ -134,9 +134,9 @@ def call_openai(prompt: str) -> str:
             payload = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")[:4000]
-        raise RuntimeError(f"OpenAI HTTP {exc.code}: {detail}") from exc
+        raise RuntimeError(f"LLM HTTP {exc.code}: {detail}") from exc
     except (urllib.error.URLError, TimeoutError) as exc:
-        raise RuntimeError(f"OpenAI request failed: {exc}") from exc
+        raise RuntimeError(f"LLM request failed: {exc}") from exc
 
     text = payload.get("output_text")
     if isinstance(text, str) and text.strip():
@@ -148,7 +148,7 @@ def call_openai(prompt: str) -> str:
                 chunks.append(str(content.get("text", "")))
     text = "\n".join(chunks).strip()
     if not text:
-        raise RuntimeError("OpenAI returned no editable output")
+        raise RuntimeError("LLM returned no editable output")
     return text
 
 
