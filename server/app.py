@@ -69,5 +69,26 @@ def providers_probe():
     return result
 
 
+@app_v3.app.get("/v1/providers/models")
+def providers_models():
+    """Return non-secret provider/model metadata for deployment smoke tests."""
+    data = []
+    for p in provider_router.PROVIDERS:
+        key = os.getenv(p["key_env"], "").strip()
+        if not key:
+            continue
+        model = os.getenv(p["model_env"], p["default_model"]).strip()
+        base = (os.getenv(p["base_env"], "").strip() or p["default_base"]).rstrip("/")
+        data.append({
+            "id": f"{p['name']}:{model}",
+            "provider": p["name"],
+            "model": model,
+            "vision": bool(p["vision"]),
+            "configured": True,
+            "base_url": base,
+        })
+    return {"object": "list", "data": data}
+
+
 # Keep the conventional FastAPI export used by uvicorn and the test suite.
 app = app_v3.app
