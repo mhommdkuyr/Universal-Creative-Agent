@@ -14,7 +14,7 @@ concurrency:
 jobs:
   execution-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -25,9 +25,14 @@ jobs:
         with:
           packages: platform-tools
       - uses: gradle/actions/setup-gradle@v4
+      - name: Cache embedded local model
+        uses: actions/cache@v4
+        with:
+          path: android/app/src/main/assets/ucoa_local_model.litertlm
+          key: ucoa-qwen3-0.6b-mixed-int4-v1
       - name: Install Android build toolchain
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
-      - name: Build APK
+      - name: Build APK with embedded local model
         run: gradle -p android assembleDebug --stacktrace
       - name: Real accessibility execution test
         uses: reactivecircus/android-emulator-runner@v2
@@ -53,21 +58,24 @@ jobs:
             adb shell am start -n com.ucoa.app/.MainActivity --es smoke_task 'افتح الإعدادات' --ez smoke_local_only true
             EXEC_OK=false
             FG_OK=false
-            for i in $(seq 1 60); do
+            LOCAL_MODEL_OK=false
+            for i in $(seq 1 120); do
               if adb logcat -d -s UCOA_SMOKE:I '*:S' | grep -q 'UCOA_LOCAL_EXECUTION_OK app='; then EXEC_OK=true; fi
+              if adb logcat -d | grep -q 'LOCAL_BRAIN.*bundled=true'; then LOCAL_MODEL_OK=true; fi
               FG=$(adb shell dumpsys activity activities | tr '\n' ' ' || true)
               if printf '%s' "$FG" | grep -q 'com.android.settings'; then FG_OK=true; fi
-              if [ "$EXEC_OK" = true ] && [ "$FG_OK" = true ]; then break; fi
+              if [ "$EXEC_OK" = true ] && [ "$FG_OK" = true ] && [ "$LOCAL_MODEL_OK" = true ]; then break; fi
               sleep 1
             done
             mkdir -p "$GITHUB_WORKSPACE/smoke-diagnostics"
-            adb logcat -d -v threadtime | tail -n 2500 > "$GITHUB_WORKSPACE/smoke-diagnostics/ucoa_logcat.txt" || true
+            adb logcat -d -v threadtime | tail -n 4000 > "$GITHUB_WORKSPACE/smoke-diagnostics/ucoa_logcat.txt" || true
             adb shell dumpsys accessibility > "$GITHUB_WORKSPACE/smoke-diagnostics/ucoa_accessibility.txt" || true
             adb shell dumpsys activity activities > "$GITHUB_WORKSPACE/smoke-diagnostics/ucoa_activities.txt" || true
             adb logcat -d -s UCOA_SMOKE:I '*:S' | tee "$GITHUB_WORKSPACE/smoke-diagnostics/ucoa_smoke.log" || true
-            echo "EXEC_OK=$EXEC_OK FG_OK=$FG_OK"
+            echo "EXEC_OK=$EXEC_OK FG_OK=$FG_OK LOCAL_MODEL_OK=$LOCAL_MODEL_OK"
             test "$EXEC_OK" = true
             test "$FG_OK" = true
+            test "$LOCAL_MODEL_OK" = true
             echo 'UCOA_REAL_EXECUTION_SMOKE_OK'
       - name: Upload execution diagnostics
         if: always()
