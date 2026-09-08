@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app  # noqa: E402
+import app_v3  # noqa: E402
 
 client = TestClient(app.app)
 
@@ -34,7 +35,7 @@ def test_health_unconfigured():
 
 
 def test_step_rejects_invalid_model_result(monkeypatch):
-    monkeypatch.setattr(app, 'reasoning', lambda *args, **kwargs: ('{"action":"invented"}', 'test'))
+    monkeypatch.setattr(app_v3, 'reasoning', lambda *args, **kwargs: ('{"action":"invented"}', 'test'))
     response = client.post('/v1/agent/step', json={'task': 'افتح تطبيقًا', 'ui_tree': '[]'})
     assert response.status_code == 200
     job = wait_job(response.json()['job_id'])
@@ -43,7 +44,7 @@ def test_step_rejects_invalid_model_result(monkeypatch):
 
 
 def test_plan_parses_model_json(monkeypatch):
-    monkeypatch.setattr(app, 'reasoning', lambda *args, **kwargs: ('{"summary":"خطة عامة","steps":["افتح الهدف","نفذ المهمة","تحقق"]}', 'test'))
+    monkeypatch.setattr(app_v3, 'reasoning', lambda *args, **kwargs: ('{"summary":"خطة عامة","steps":["افتح الهدف","نفذ المهمة","تحقق"]}', 'test'))
     response = client.post('/v1/agent/plan', json={'task': 'نفذ مهمة'})
     assert response.status_code == 200
     result = wait_job(response.json()['job_id'])
@@ -68,9 +69,9 @@ def test_sensitive_action_requires_confirmation():
 
 
 def test_visual_observation_is_separate_from_action(monkeypatch):
-    monkeypatch.setattr(app, 'VISION_ENABLED', True)
-    monkeypatch.setattr(app, 'call_vision', lambda *args, **kwargs: ('زر Continue ظاهر في منتصف الشاشة', 'vision-test'))
-    monkeypatch.setattr(app, 'reasoning', lambda *args, **kwargs: ('{"action":"click_any_text","params":{"text":"Continue"},"message":"اختيار الزر","done":false}', 'reasoning-test'))
+    monkeypatch.setattr(app_v3, 'VISION_ENABLED', True)
+    monkeypatch.setattr(app_v3, 'call_vision', lambda *args, **kwargs: ('زر Continue ظاهر في منتصف الشاشة', 'vision-test'))
+    monkeypatch.setattr(app_v3, 'reasoning', lambda *args, **kwargs: ('{"action":"click_any_text","params":{"text":"Continue"},"message":"اختيار الزر","done":false}', 'reasoning-test'))
     response = client.post('/v1/agent/step', json={'task': 'تابع', 'ui_tree': '[]', 'screenshot_base64': 'aGVsbG8='})
     result = wait_job(response.json()['job_id'])
     assert result['visual_observation'] == 'زر Continue ظاهر في منتصف الشاشة'
