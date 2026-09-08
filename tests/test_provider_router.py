@@ -58,11 +58,11 @@ def test_gemini_text_call(monkeypatch):
 def test_failover_after_primary_error(monkeypatch):
     _configure(monkeypatch)
     monkeypatch.setenv("UCOA_CEREBRAS_API_KEY", "test-c")
-    responses = [RuntimeError("boom"), {"choices": [{"message": {"content": "ok"}}]}]
+    responses = [RuntimeError("gemini down"), {"choices": [{"message": {"content": "ok"}}]}]
     calls = _patch(monkeypatch, responses)
     raw, provider = pr.call("system", "user")
     assert raw == "ok"
-    assert provider == "gemini"
+    assert provider == "cerebras"
     assert len(calls) == 2
 
 
