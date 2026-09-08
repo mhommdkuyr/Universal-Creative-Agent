@@ -40,7 +40,8 @@ jobs:
           emulator-options: -no-window -noaudio -no-boot-anim -gpu swiftshader_indirect
           disable-animations: true
           script: |
-            set -euo pipefail
+            # android-emulator-runner executes the script with /bin/sh; keep this POSIX-compatible.
+            set -eu
             adb wait-for-device
             APK="android/app/build/outputs/apk/debug/app-debug.apk"
             test -s "$APK"
