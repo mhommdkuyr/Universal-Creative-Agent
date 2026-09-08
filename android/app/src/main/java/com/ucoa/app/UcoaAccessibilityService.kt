@@ -78,19 +78,22 @@ class UcoaAccessibilityService : AccessibilityService() {
         return known.entries.firstOrNull { q.contains(normalize(it.key)) }?.value
     }
 
-    fun openApp(pkg: String): Boolean = try {
-        val intent = packageManager.getLaunchIntentForPackage(pkg)
-        if (intent == null) {
-            UcoaDiagnostics.log("EXECUTOR", "لم نجد launch intent", "package=$pkg")
-            return false
+    fun openApp(pkg: String): Boolean {
+        return try {
+            val intent = packageManager.getLaunchIntentForPackage(pkg)
+            if (intent == null) {
+                UcoaDiagnostics.log("EXECUTOR", "لم نجد launch intent", "package=$pkg")
+                false
+            } else {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
+                UcoaDiagnostics.log("EXECUTOR", "تم استدعاء startActivity", "package=$pkg")
+                true
+            }
+        } catch (e: Exception) {
+            UcoaDiagnostics.log("EXECUTOR", "استثناء أثناء فتح التطبيق", "package=$pkg error=${e.javaClass.simpleName}: ${e.message}")
+            false
         }
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        startActivity(intent)
-        UcoaDiagnostics.log("EXECUTOR", "تم استدعاء startActivity", "package=$pkg")
-        true
-    } catch (e: Exception) {
-        UcoaDiagnostics.log("EXECUTOR", "استثناء أثناء فتح التطبيق", "package=$pkg error=${e.javaClass.simpleName}: ${e.message}")
-        false
     }
 
     fun openAppByName(query: String): Boolean {
