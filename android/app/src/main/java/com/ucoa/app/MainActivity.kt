@@ -33,10 +33,8 @@ class MainActivity : Activity() {
         brain = AgentBrainClient(this)
         setContentView(buildUi())
         refreshConnectionState()
-        if (BuildConfig.DEBUG) {
-            intent.getStringExtra("smoke_task")?.trim()?.takeIf { it.isNotEmpty() }?.let { task ->
-                window.decorView.postDelayed({ input.setText(task); analyzeTask() }, 1200L)
-            }
+        intent.getStringExtra("smoke_task")?.trim()?.takeIf { it.isNotEmpty() }?.let { task ->
+            window.decorView.postDelayed({ input.setText(task); analyzeTask() }, 1200L)
         }
     }
     override fun onResume() { super.onResume(); if (::status.isInitialized) refreshConnectionState() }
