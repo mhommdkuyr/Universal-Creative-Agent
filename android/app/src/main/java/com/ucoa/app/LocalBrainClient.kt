@@ -12,7 +12,7 @@ import java.util.concurrent.Executors
 /**
  * On-device intent brain.
  *
- * The model is packaged into the debug APK by the Gradle build and copied to
+ * The model is packaged into the APK by the Gradle build and copied to
  * internal storage on first use. The model is deliberately only a router:
  * it decides whether a request is a supported local action and returns a
  * strict JSON action. Anything it cannot classify is handed to the cloud brain.
@@ -47,7 +47,7 @@ class LocalBrainClient(private val context: Context) {
                     e.createConversation().use { conversation ->
                         val prompt = buildPrompt(task, apps)
                         val response = conversation.sendMessage(prompt)
-                        parse(response.text ?: response.toString())
+                        parse(response.toString())
                     }
                 }
             } catch (t: Throwable) {
@@ -98,38 +98,39 @@ class LocalBrainClient(private val context: Context) {
             Your job is ONLY to classify requests that can be executed locally.
             Supported local action: open_app.
             If the user asks to open/start/run an installed application, return JSON.
-            Otherwise return understood=false so the cloud brain can handle it.
-            You must output ONE JSON object and nothing else.
-            Schema:
-            {"understood":true,"action":"open_app","app":"YouTube","confidence":0.98}
-            or
-            {"understood":false,"action":null,"app":null,"confidence":0.0}
-            Never invent an application name. Prefer a name from the installed-app list.
-            Arabic and English user requests are supported.
-            Installed applications: [$appList]
+            Otherwise return JSON saying understood=false.
+            Never invent an app that is not in the installed-app list.
+            Output ONLY valid JSON in this schema:
+            {"understood":true,"action":"open_app","app":"exact installed label","confidence":0.99}
+            or {"understood":false,"action":null,"app":null,"confidence":0.0}
+            Installed apps: $appList
             User request: $task
         """.trimIndent()
     }
 
-    private fun parse(raw: String): Result {
-        val candidate = Regex("\\{[\\s\\S]*?\\}").find(raw)?.value ?: return Result(false, raw = raw)
+    private fun parse(rawResponse: String): Result {
+        val raw = rawResponse.trim()
+        val start = raw.indexOf('{')
+        val end = raw.lastIndexOf('}')
+        if (start < 0 || end <= start) return Result(false, raw = raw, error = "local_model_non_json")
         return try {
-            val json = JSONObject(candidate)
-            val understood = json.optBoolean("understood", false)
-            val action = json.optString("action", "").takeIf { it.isNotBlank() && it != "null" }
-            val app = json.optString("app", "").takeIf { it.isNotBlank() && it != "null" }
-            val confidence = json.optDouble("confidence", 0.0)
-            if (understood && action == "open_app" && !app.isNullOrBlank() && confidence >= MIN_CONFIDENCE) {
+            val o = JSONObject(raw.substring(start, end + 1))
+            val understood = o.optBoolean("understood", false)
+            val action = o.optString("action", null)
+            val app = o.optString("app", null)
+            val confidence = o.optDouble("confidence", 0.0)
+            if (understood && action == "open_app" && !app.isNullOrBlank() && confidence >= 0.50) {
                 Result(true, action, app, confidence, raw)
-            } else Result(false, action, app, confidence, raw)
-        } catch (_: Throwable) {
-            Result(false, raw = raw)
+            } else {
+                Result(false, action = action, app = app, confidence = confidence, raw = raw)
+            }
+        } catch (t: Throwable) {
+            Result(false, raw = raw, error = "local_model_json_error:${t.message}")
         }
     }
 
     companion object {
         private const val MODEL_ASSET = "ucoa_local_model.litertlm"
-        private const val MIN_MODEL_BYTES = 300_000_000L
-        private const val MIN_CONFIDENCE = 0.55
+        private const val MIN_MODEL_BYTES = 400_000_000L
     }
 }
