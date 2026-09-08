@@ -1,0 +1,72 @@
+name: Android Execution Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'android/**'
+      - '.github/workflows/android-execution-smoke.yml'
+
+concurrency:
+  group: android-execution-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  execution-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install Android build toolchain
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Build APK
+        run: gradle -p android assembleDebug --stacktrace
+      - name: Real accessibility execution test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: default
+          arch: x86_64
+          profile: pixel_2
+          force-avd-creation: true
+          emulator-options: -no-window -noaudio -no-boot-anim -gpu swiftshader_indirect
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            adb wait-for-device
+            APK="android/app/build/outputs/apk/debug/app-debug.apk"
+            test -s "$APK"
+            adb install -r "$APK"
+            adb shell settings put secure enabled_accessibility_services com.ucoa.app/.UcoaAccessibilityService
+            adb shell settings put secure accessibility_enabled 1
+            adb shell am force-stop com.ucoa.app || true
+            adb shell am force-stop com.android.settings || true
+            adb shell am start -n com.ucoa.app/.MainActivity --es smoke_task 'افتح الإعدادات'
+            EXEC_OK=false
+            FG_OK=false
+            for i in $(seq 1 40); do
+              if adb logcat -d -s UCOA_SMOKE:I '*:S' | grep -q 'UCOA_LOCAL_EXECUTION_OK app='; then EXEC_OK=true; fi
+              FG=$(adb shell dumpsys activity activities | tr '\n' ' ' || true)
+              if printf '%s' "$FG" | grep -q 'com.android.settings'; then FG_OK=true; fi
+              if [ "$EXEC_OK" = true ] && [ "$FG_OK" = true ]; then break; fi
+              sleep 1
+            done
+            adb logcat -d -s UCOA_SMOKE:I '*:S' | tee /tmp/ucoa_smoke.log
+            echo "EXEC_OK=$EXEC_OK FG_OK=$FG_OK"
+            test "$EXEC_OK" = true
+            test "$FG_OK" = true
+            echo 'UCOA_REAL_EXECUTION_SMOKE_OK'
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ucoa-debug-apk-execution-smoke
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
