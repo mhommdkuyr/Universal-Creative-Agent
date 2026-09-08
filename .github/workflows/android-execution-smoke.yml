@@ -40,10 +40,10 @@ jobs:
           emulator-options: -no-window -noaudio -no-boot-anim -gpu swiftshader_indirect
           disable-animations: true
           script: |
-            # android-emulator-runner executes the script with /bin/sh; keep this POSIX-compatible.
             set -eu
             adb wait-for-device
-            APK="$GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug.apk"
+            APK="$(find /home/runner/work -type f -path '*/android/app/build/outputs/apk/debug/app-debug.apk' -print -quit)"
+            test -n "$APK"
             test -s "$APK"
             adb install -r "$APK"
             adb shell settings put secure enabled_accessibility_services com.ucoa.app/.UcoaAccessibilityService
@@ -60,10 +60,11 @@ jobs:
               if [ "$EXEC_OK" = true ] && [ "$FG_OK" = true ]; then break; fi
               sleep 1
             done
-            adb logcat -d -v threadtime | tail -n 2500 > /tmp/ucoa_logcat.txt || true
-            adb shell dumpsys accessibility > /tmp/ucoa_accessibility.txt || true
-            adb shell dumpsys activity activities > /tmp/ucoa_activities.txt || true
-            adb logcat -d -s UCOA_SMOKE:I '*:S' | tee /tmp/ucoa_smoke.log || true
+            mkdir -p "$GITHUB_WORKSPACE/smoke-diagnostics"
+            adb logcat -d -v threadtime | tail -n 2500 > "$GITHUB_WORKSPACE/smoke-diagnostics/ucoa_logcat.txt" || true
+            adb shell dumpsys accessibility > "$GITHUB_WORKSPACE/smoke-diagnostics/ucoa_accessibility.txt" || true
+            adb shell dumpsys activity activities > "$GITHUB_WORKSPACE/smoke-diagnostics/ucoa_activities.txt" || true
+            adb logcat -d -s UCOA_SMOKE:I '*:S' | tee "$GITHUB_WORKSPACE/smoke-diagnostics/ucoa_smoke.log" || true
             echo "EXEC_OK=$EXEC_OK FG_OK=$FG_OK"
             test "$EXEC_OK" = true
             test "$FG_OK" = true
@@ -73,11 +74,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ucoa-execution-diagnostics
-          path: |
-            /tmp/ucoa_logcat.txt
-            /tmp/ucoa_accessibility.txt
-            /tmp/ucoa_activities.txt
-            /tmp/ucoa_smoke.log
+          path: smoke-diagnostics/
           if-no-files-found: ignore
           retention-days: 7
       - name: Upload APK
