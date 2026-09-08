@@ -4,3 +4,4 @@ minSdk=26
 targetSdk=35
 localBrain=Qwen3-0.6B-LiteRT-mixed-int4
 localBrainRouting=local-first-cloud-fallback
+acceptance=embedded-model-accessibility-foreground
