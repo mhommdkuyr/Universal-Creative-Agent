@@ -1,5 +1,8 @@
 name: Android Execution Smoke
 
+# Acceptance gate: APK + embedded local model + Accessibility + real foreground verification.
+# local brain acceptance v2
+
 on:
   workflow_dispatch:
   push:
@@ -34,6 +37,11 @@ jobs:
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - name: Build APK with embedded local model
         run: gradle -p android assembleDebug --stacktrace
+      - name: Verify model is physically packaged in APK
+        run: |
+          set -eu
+          test -s android/app/build/outputs/apk/debug/app-debug.apk
+          unzip -l android/app/build/outputs/apk/debug/app-debug.apk | grep -q 'assets/ucoa_local_model.litertlm'
       - name: Real accessibility execution test
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -59,23 +67,26 @@ jobs:
             EXEC_OK=false
             FG_OK=false
             LOCAL_MODEL_OK=false
-            for i in $(seq 1 120); do
-              if adb logcat -d -s UCOA_SMOKE:I '*:S' | grep -q 'UCOA_LOCAL_EXECUTION_OK app='; then EXEC_OK=true; fi
-              if adb logcat -d | grep -q 'LOCAL_BRAIN.*bundled=true'; then LOCAL_MODEL_OK=true; fi
+            LOCAL_ROUTE_OK=false
+            for i in $(seq 1 150); do
+              LOG=$(adb logcat -d || true)
+              if printf '%s' "$LOG" | grep -q 'UCOA_LOCAL_EXECUTION_OK app='; then EXEC_OK=true; fi
+              if printf '%s' "$LOG" | grep -q 'LOCAL_BRAIN.*bundled=true'; then LOCAL_MODEL_OK=true; fi
+              if printf '%s' "$LOG" | grep -q 'LOCAL_BRAIN.*العقل المحلي فهم المهمة'; then LOCAL_ROUTE_OK=true; fi
               FG=$(adb shell dumpsys activity activities | tr '\n' ' ' || true)
               if printf '%s' "$FG" | grep -q 'com.android.settings'; then FG_OK=true; fi
-              if [ "$EXEC_OK" = true ] && [ "$FG_OK" = true ] && [ "$LOCAL_MODEL_OK" = true ]; then break; fi
+              if [ "$EXEC_OK" = true ] && [ "$FG_OK" = true ] && [ "$LOCAL_MODEL_OK" = true ] && [ "$LOCAL_ROUTE_OK" = true ]; then break; fi
               sleep 1
             done
             mkdir -p "$GITHUB_WORKSPACE/smoke-diagnostics"
-            adb logcat -d -v threadtime | tail -n 4000 > "$GITHUB_WORKSPACE/smoke-diagnostics/ucoa_logcat.txt" || true
+            adb logcat -d -v threadtime | tail -n 5000 > "$GITHUB_WORKSPACE/smoke-diagnostics/ucoa_logcat.txt" || true
             adb shell dumpsys accessibility > "$GITHUB_WORKSPACE/smoke-diagnostics/ucoa_accessibility.txt" || true
             adb shell dumpsys activity activities > "$GITHUB_WORKSPACE/smoke-diagnostics/ucoa_activities.txt" || true
-            adb logcat -d -s UCOA_SMOKE:I '*:S' | tee "$GITHUB_WORKSPACE/smoke-diagnostics/ucoa_smoke.log" || true
-            echo "EXEC_OK=$EXEC_OK FG_OK=$FG_OK LOCAL_MODEL_OK=$LOCAL_MODEL_OK"
+            echo "EXEC_OK=$EXEC_OK FG_OK=$FG_OK LOCAL_MODEL_OK=$LOCAL_MODEL_OK LOCAL_ROUTE_OK=$LOCAL_ROUTE_OK"
             test "$EXEC_OK" = true
             test "$FG_OK" = true
             test "$LOCAL_MODEL_OK" = true
+            test "$LOCAL_ROUTE_OK" = true
             echo 'UCOA_REAL_EXECUTION_SMOKE_OK'
       - name: Upload execution diagnostics
         if: always()
