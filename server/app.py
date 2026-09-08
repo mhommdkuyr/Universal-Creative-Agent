@@ -16,6 +16,12 @@ init_sentry()
 
 OPENAI_PRIMARY = os.getenv("UCOA_OPENAI_PRIMARY", "true").lower() == "true"
 
+# Preserve the original V3 provider hooks before replacing them. This keeps
+# Hugging Face/local Render routing available whenever the fast external router
+# has no configured provider or is temporarily unavailable.
+_LEGACY_REASONING = app_v3.reasoning
+_LEGACY_VISUAL = app_v3.visual
+
 
 def _provider_reasoning(system, user):
     if OPENAI_PRIMARY and openai_provider.configured():
@@ -23,7 +29,10 @@ def _provider_reasoning(system, user):
             return openai_provider.reasoning(system, user), "openai"
         except Exception:
             pass
-    return provider_router.reasoning(system, user)
+    try:
+        return provider_router.reasoning(system, user)
+    except Exception:
+        return _LEGACY_REASONING(system, user)
 
 
 def _provider_visual(task, ui_tree, image):
@@ -39,7 +48,10 @@ def _provider_visual(task, ui_tree, image):
             return app_v3.extract_json(raw), "openai"
         except Exception:
             pass
-    return provider_router.visual(task, ui_tree, image)
+    try:
+        return provider_router.visual(task, ui_tree, image)
+    except Exception:
+        return _LEGACY_VISUAL(task, ui_tree, image)
 
 
 # Import V4 before patching so its legacy references remain stable. Patch only
@@ -51,14 +63,20 @@ app_v3.visual = _provider_visual
 
 @app_v3.app.get("/v1/providers/probe")
 def providers_probe():
+    """Exercise the same reasoning path production traffic uses."""
     result = provider_router.safe_text_probe()
-    if OPENAI_PRIMARY and openai_provider.configured():
-        try:
-            openai_provider.reasoning("Return ONLY JSON.", "Return exactly {\"ok\":true}.")
-            result["openai"] = {"ok": True, "model": openai_provider.MODEL}
-            result["ok"] = True
-        except Exception as exc:
-            result["openai"] = {"ok": False, "model": openai_provider.MODEL, "error": type(exc).__name__}
+    try:
+        raw, provider = _provider_reasoning(
+            "Return ONLY JSON.",
+            "Return exactly {\"ok\":true}.",
+        )
+        actual = {"ok": True, "provider": provider}
+        if provider == "openai":
+            actual["model"] = openai_provider.MODEL
+        result["runtime"] = actual
+        result["ok"] = True
+    except Exception as exc:
+        result["runtime"] = {"ok": False, "error": type(exc).__name__}
     return result
 
 
