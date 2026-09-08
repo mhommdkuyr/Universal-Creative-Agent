@@ -8,9 +8,9 @@ android {
     kotlinOptions { jvmTarget = '17' }
 }
 
-def localModelUrl = 'https://huggingface.co/litert-community/Qwen3-0.6B/resolve/main/qwen3_0_6b_mixed_int4.litertlm'
+def localModelUrl = 'https://huggingface.co/litert-community/Qwen3-0.6B-int4/resolve/main/qwen3_0.6b_nothink_q4_block32_ekv1280.litertlm'
 def localModelFile = file("$projectDir/src/main/assets/ucoa_local_model.litertlm")
-def localModelMinBytes = 400_000_000L
+def localModelMinBytes = 300_000_000L
 
 tasks.register('downloadUcoaLocalModel') {
     outputs.file(localModelFile)
@@ -18,7 +18,7 @@ tasks.register('downloadUcoaLocalModel') {
     doLast {
         localModelFile.parentFile.mkdirs()
         if (!localModelFile.exists() || localModelFile.length() < localModelMinBytes) {
-            logger.lifecycle("Downloading UCOA embedded local model (~475 MB)…")
+            logger.lifecycle("Downloading UCOA embedded local model (~332 MB, no-think INT4)…")
             def connection = new URL(localModelUrl).openConnection()
             connection.setConnectTimeout(60_000)
             connection.setReadTimeout(300_000)
@@ -32,16 +32,12 @@ tasks.register('downloadUcoaLocalModel') {
                     while ((read = input.read(buffer)) != -1) {
                         output.write(buffer, 0, read)
                         total += read
-                        if (total % (50L * 1024L * 1024L) < read) {
-                            logger.lifecycle("Local model downloaded: ${total / (1024 * 1024)} MB")
-                        }
+                        if (total % (50L * 1024L * 1024L) < read) logger.lifecycle("Local model downloaded: ${total / (1024 * 1024)} MB")
                     }
                 }
             }
         }
-        if (!localModelFile.exists() || localModelFile.length() < localModelMinBytes) {
-            throw new GradleException("Embedded local model download is incomplete: ${localModelFile.length()} bytes")
-        }
+        if (!localModelFile.exists() || localModelFile.length() < localModelMinBytes) throw new GradleException("Embedded local model download is incomplete: ${localModelFile.length()} bytes")
         logger.lifecycle("Embedded local model ready: ${localModelFile.length()} bytes")
     }
 }
