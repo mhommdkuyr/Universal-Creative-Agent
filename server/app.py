@@ -1,24 +1,17 @@
 """Production entrypoint for UCOA V4 with live provider routing."""
-import base64
-import io
 import json
 import os
-import sys
 
 import app_v4_runtime  # noqa: F401,E402
 import app_v3
 import openai_provider
 import provider_router
 from observability import init_sentry
-from PIL import Image, ImageDraw
 
 init_sentry()
 
-OPENAI_PRIMARY = os.getenv("UCOA_OPENAI_PRIMARY", "true").lower() == "true"
-
-# Preserve the original V3 provider hooks before replacing them. This keeps
-# Hugging Face/local Render routing available whenever the fast external router
-# has no configured provider or is temporarily unavailable.
+# Gemini/provider-router is the production cloud path. OpenAI is explicit opt-in.
+OPENAI_PRIMARY = os.getenv("UCOA_OPENAI_PRIMARY", "false").lower() == "true"
 _LEGACY_REASONING = app_v3.reasoning
 _LEGACY_VISUAL = app_v3.visual
 
@@ -54,53 +47,19 @@ def _provider_visual(task, ui_tree, image):
         return _LEGACY_VISUAL(task, ui_tree, image)
 
 
-# Import V4 before patching so its legacy references remain stable. Patch only
-# the normal reasoning/visual hooks; keep call_vision untouched so existing
-# tests and downstream integrations can override it safely.
 app_v3.reasoning = _provider_reasoning
 app_v3.visual = _provider_visual
 
 
 @app_v3.app.get("/v1/providers/probe")
 def providers_probe():
-    """Exercise the same reasoning path production traffic uses."""
     result = provider_router.safe_text_probe()
     try:
-        raw, provider = _provider_reasoning(
-            "Return ONLY JSON.",
-            "Return exactly {\"ok\":true}.",
-        )
-        actual = {"ok": True, "provider": provider}
+        _, provider = _provider_reasoning("Return ONLY JSON.", "Return exactly {\"ok\":true}.")
+        result["runtime"] = {"ok": True, "provider": provider}
         if provider == "openai":
-            actual["model"] = openai_provider.MODEL
-        result["runtime"] = actual
+            result["runtime"]["model"] = openai_provider.MODEL
         result["ok"] = True
     except Exception as exc:
         result["runtime"] = {"ok": False, "error": type(exc).__name__}
     return result
-
-
-@app_v3.app.get("/v1/providers/probe-vision")
-def providers_probe_vision():
-    """Live multimodal probe using a synthetic Android-like screen."""
-    image = Image.new("RGB", (640, 360), "white")
-    draw = ImageDraw.Draw(image)
-    draw.rectangle((0, 0, 640, 64), fill="black")
-    draw.text((24, 20), "UCOA Vision Test", fill="white")
-    draw.rounded_rectangle((220, 150, 420, 215), radius=12, fill="#dddddd", outline="black")
-    draw.text((295, 172), "CONTINUE", fill="black")
-    buf = io.BytesIO()
-    image.save(buf, format="JPEG", quality=85)
-    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
-    task = "Find the visible primary button in this Android-like screen. Return JSON only."
-    tree = '[{"text":"CONTINUE","role":"button"}]'
-    try:
-        result, provider = _provider_visual(task, tree, encoded)
-        labels = [str(e.get("text", "")) for e in result.get("elements", []) if isinstance(e, dict)] if isinstance(result, dict) else []
-        found = any("continue" in x.lower() for x in labels) or "continue" in str(result).lower()
-        return {"ok": bool(found), "provider": provider, "detected_target": "CONTINUE" if found else None, "confidence": result.get("confidence") if isinstance(result, dict) else None}
-    except Exception as exc:
-        return {"ok": False, "provider": None, "error": type(exc).__name__}
-
-
-sys.modules[__name__] = app_v3
