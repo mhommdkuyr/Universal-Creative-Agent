@@ -1,4 +1,4 @@
-name: Production Vision Probe
+name: Production Gemini Probe
 on:
   workflow_dispatch:
   push:
@@ -8,35 +8,44 @@ on:
       - '.github/workflows/production-vision-probe.yml'
 
 jobs:
-  vision-probe:
+  gemini-probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 5
+    env:
+      GEMINI_API_KEY: ${{ secrets.UCOA_GEMINI_API_KEY }}
+      GEMINI_MODEL: gemini-3.8-flash
     steps:
-      - name: Wait for Render deployment
+      - name: Verify Gemini text API
         shell: bash
         run: |
           set -euo pipefail
-          for i in $(seq 1 36); do
-            if curl -fsS --max-time 10 https://ucoa-agent-brain.onrender.com/health >/tmp/health.json; then
-              cat /tmp/health.json
-              exit 0
-            fi
-            sleep 5
-          done
-          cat /tmp/health.json || true
-          exit 1
-      - name: Run live vision probe
+          test -n "$GEMINI_API_KEY"
+          curl -fsS --max-time 60 \
+            https://generativelanguage.googleapis.com/v1beta/openai/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $GEMINI_API_KEY" \
+            -d "{\"model\":\"$GEMINI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Return exactly OK.\"}],\"temperature\":0,"max_tokens":16}" \
+            | tee /tmp/gemini-text.json
+          grep -q 'OK' /tmp/gemini-text.json
+
+      - name: Verify Gemini vision API
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsS --max-time 120 https://ucoa-agent-brain.onrender.com/v1/providers/probe-vision | tee /tmp/vision.json
+          python -m pip install -q pillow
           python - <<'PY'
-          import json
-          d=json.load(open('/tmp/vision.json'))
-          assert d.get('ok'), d
-          assert d.get('provider'), d
-          assert d.get('detected_target') == 'CONTINUE', d
-          print('vision provider:', d['provider'])
-          print('detected target:', d['detected_target'])
-          print('confidence:', d.get('confidence'))
+          from PIL import Image, ImageDraw
+          img=Image.new('RGB',(320,180),'white')
+          d=ImageDraw.Draw(img)
+          d.rectangle((100,65,220,115),fill='#dddddd',outline='black')
+          d.text((127,82),'CONTINUE',fill='black')
+          img.save('/tmp/continue.jpg',format='JPEG',quality=90)
           PY
+          IMAGE_B64="$(base64 -w0 /tmp/continue.jpg)"
+          curl -fsS --max-time 90 \
+            https://generativelanguage.googleapis.com/v1beta/openai/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $GEMINI_API_KEY" \
+            -d "{\"model\":\"$GEMINI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Return exactly CONTINUE if the button labeled CONTINUE is visible.\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/jpeg;base64,$IMAGE_B64\"}}]}],\"temperature\":0,"max_tokens":16}" \
+            | tee /tmp/gemini-vision.json
+          grep -q 'CONTINUE' /tmp/gemini-vision.json
