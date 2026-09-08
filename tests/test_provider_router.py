@@ -40,9 +40,9 @@ def _configure(monkeypatch):
     monkeypatch.delenv("UCOA_DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("UCOA_CEREBRAS_API_KEY", raising=False)
     monkeypatch.delenv("UCOA_GROQ_API_KEY", raising=False)
-    for name, state in pr._BREAKERS.items():
-        state.failures = 0
-        state.opened_at = 0.0
+    for state in pr._BREAKERS.values():
+        state[0] = 0
+        state[1] = 0.0
     pr._VISION_CACHE.clear()
 
 
@@ -58,8 +58,6 @@ def test_gemini_text_call(monkeypatch):
 def test_failover_after_primary_error(monkeypatch):
     _configure(monkeypatch)
     monkeypatch.setenv("UCOA_CEREBRAS_API_KEY", "test-c")
-    # Text order is Cerebras -> Groq -> Gemini. Groq is unconfigured, so a
-    # Cerebras failure falls through to Gemini.
     responses = [RuntimeError("boom"), {"choices": [{"message": {"content": "ok"}}]}]
     calls = _patch(monkeypatch, responses)
     raw, provider = pr.call("system", "user")
@@ -73,7 +71,7 @@ def test_circuit_breaker_skips_open_provider(monkeypatch):
     monkeypatch.setenv("UCOA_CEREBRAS_API_KEY", "test-c")
     import time
 
-    pr._BREAKERS["cerebras"].opened_at = time.monotonic()
+    pr._BREAKERS["cerebras"][1] = time.monotonic()
     responses = [{"choices": [{"message": {"content": "ok"}}]}]
     calls = _patch(monkeypatch, responses)
     raw, provider = pr.call("system", "user")
