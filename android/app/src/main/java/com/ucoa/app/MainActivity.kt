@@ -40,7 +40,7 @@ class MainActivity : Activity() {
         top.addView(title); top.addView(status); top.addView(settings); top.addView(connectButton); root.addView(top)
         val scroll = ScrollView(this).apply { setFillViewport(true); layoutParams = LinearLayout.LayoutParams(-1, 0, 1f) }
         chat = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(22, 12, 22, 22) }
-        addAssistantBubble("أنا جاهز. اكتب أي مهمة تريد تنفيذها على الهاتف أو المتصفح أو أي تطبيق. سأفهم المطلوب، أبني خطة، ثم أنفذها تلقائيًا بعد التحقق من صلاحية التحكم.")
+        addAssistantBubble("أنا جاهز. اكتب المهمة وسأبني الخطة ثم أنفذها تلقائيًا بعد التحقق من صلاحية التحكم.")
         scroll.addView(chat); root.addView(scroll)
         val composer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(12, 8, 12, 14) }
         val attach = ImageButton(this).apply { setImageResource(android.R.drawable.ic_menu_add); contentDescription = "رفع الوسائط"; setBackgroundColor(Color.TRANSPARENT); setOnClickListener { chooseMedia() } }
@@ -54,7 +54,7 @@ class MainActivity : Activity() {
     private fun refreshConnectionState() {
         val enabled = PermissionCoordinator.isAccessibilityEnabled(this); val live = PermissionCoordinator.isServiceLive(); val brainText = if (brain.configured()) " • عقل AI: مُعد" else " • عقل AI: غير مُعد"
         status.text = when { live -> "● الهاتف متصل — التحكم والمراقبة متاحان$brainText"; enabled -> "● الصلاحية مفعلة — جارٍ انتظار الخدمة$brainText"; else -> "○ غير متصل — فعّل الوصول مرة واحدة$brainText" }
-        connectButton.text = when { live -> "الهاتف متصل"; enabled -> "إعادة فتح إعدادات الوصول"; else -> "ربط الهاتف بنقرة واحدة" }; connectButton.isEnabled = !live || enabled
+        connectButton.text = when { live -> "الهاتف متصل"; enabled -> "إعادة فتح إعدادات الوصول"; else -> "ربط الهاتف بنقرة واحدة" }
     }
 
     private fun showBrainSettings() {
@@ -65,10 +65,7 @@ class MainActivity : Activity() {
         val dialog = AlertDialog.Builder(this).setTitle("ربط عقل AI العالمي").setView(box).setNegativeButton("إلغاء", null).setPositiveButton("حفظ") { _, _ -> brain.saveConfig(endpoint.text.toString(), token.text.toString()); refreshConnectionState(); addAssistantBubble("تم حفظ اتصال عقل AI العالمي.") }.create()
         dialog.setButton(AlertDialog.BUTTON_NEUTRAL, "اختبار الاتصال") { _, _ -> }
         dialog.show()
-        dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener {
-            brain.saveConfig(endpoint.text.toString(), token.text.toString()); status.text = "يجري اختبار اتصال عقل AI…"
-            brain.health { ok, detail -> runOnUiThread { status.text = if (ok) "● تم الوصول إلى خادم عقل AI — $detail" else "○ فشل الاتصال: $detail" } }
-        }
+        dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener { brain.saveConfig(endpoint.text.toString(), token.text.toString()); status.text = "يجري اختبار اتصال عقل AI…"; brain.health { ok, detail -> runOnUiThread { status.text = if (ok) "● تم الوصول إلى خادم عقل AI — $detail" else "○ فشل الاتصال: $detail" } } }
     }
 
     private fun connectPhone() { PermissionCoordinator.openAccessibilitySettings(this); Toast.makeText(this, "فعّل Universal Creative Agent في خدمات الوصول ثم ارجع إلى التطبيق.", Toast.LENGTH_LONG).show() }
@@ -80,7 +77,7 @@ class MainActivity : Activity() {
         latestTaskText = input.text.toString().trim(); if (latestTaskText.isEmpty()) return
         addUserBubble(latestTaskText + if (selectedMedia.isNotEmpty()) "\n📎 ${selectedMedia.size} ملف" else ""); input.setText("")
         val fallback = TaskInterpreter().analyze(latestTaskText, selectedMedia); latestPlan = fallback
-        addAssistantBubble(if (brain.configured()) "أحلل المهمة ثم سأبدأ التنفيذ تلقائيًا بعد التأكد من اتصال الهاتف…" else "عقل AI غير مُعد؛ سأحاول التنفيذ المحلي المباشر للأوامر المدعومة، أو اطلب إعداد عقل AI للمهام العامة.")
+        addAssistantBubble(if (brain.configured()) "أحلل المهمة ثم أبدأ التنفيذ تلقائيًا…" else "عقل AI غير مُعد؛ سأحاول الأمر المحلي المدعوم مباشرة.")
         if (brain.configured()) {
             brain.plan(latestTaskText, selectedMedia) { r -> runOnUiThread {
                 val p = r.body
@@ -92,29 +89,26 @@ class MainActivity : Activity() {
                     addAssistantBubble("الخطة جاهزة. بدء التنفيذ تلقائيًا…")
                     executePlan(latestPlanCard!!)
                 } else {
-                    addAssistantBubble("تعذر بناء الخطة من العقل الآن: ${r.error ?: "خطأ غير معروف"}")
-                    addPlanCard(latestPlan!!)
-                    autoExecuteLocal(latestPlan!!)
+                    addAssistantBubble("تعذر بناء الخطة من العقل: ${r.error ?: "خطأ غير معروف"}")
+                    addPlanCard(latestPlan!!); autoExecuteLocal()
                 }
             } }
         } else {
-            addPlanCard(latestPlan!!)
-            autoExecuteLocal(latestPlan!!)
+            addPlanCard(latestPlan!!); autoExecuteLocal()
             if (selectedMedia.isNotEmpty()) queueBackgroundPreparation(latestTaskText)
         }
     }
 
-    private fun autoExecuteLocal(plan: TaskInterpreter.PlanResult) {
-        if (!PermissionCoordinator.isServiceLive()) { addAssistantBubble("لا أستطيع التحكم بالتطبيقات بعد: فعّل خدمة الوصول من زر ربط الهاتف."); connectPhone(); return }
+    private fun autoExecuteLocal() {
+        if (!PermissionCoordinator.isServiceLive()) { addAssistantBubble("لا أستطيع التحكم بالتطبيقات: فعّل خدمة الوصول من زر ربط الهاتف."); connectPhone(); return }
         val app = Regex("(?:افتح|فتح|شغل|شغّل)\\s+(واتساب|whatsapp|يوتيوب|youtube|كاب ?كات|capcut|كانفا|canva|كروم|chrome|انستجرام|instagram|تليجرام|telegram)", RegexOption.IGNORE_CASE).find(latestTaskText)?.groupValues?.getOrNull(1)
-        if (app != null) {
-            val ok = UcoaAccessibilityService.instance?.openAppByName(app) == true
-            addAssistantBubble(if (ok) "✅ تم فتح $app فعليًا." else "❌ تعذر فتح $app. تأكد من تثبيت التطبيق ومن تفعيل خدمة الوصول.")
-        } else addAssistantBubble("المهمة تحتاج عقل AI متصلًا؛ لم أنفذ إجراءً غير محدد محليًا.")
+        if (app != null) { val ok = UcoaAccessibilityService.instance?.openAppByName(app) == true; addAssistantBubble(if (ok) "✅ تم فتح $app فعليًا." else "❌ تعذر فتح $app. تأكد من تثبيته وتفعيل خدمة الوصول.") }
+        else addAssistantBubble("المهمة تحتاج عقل AI متصلًا؛ لم أنفذ إجراءً غير محدد محليًا.")
     }
 
     private fun queueBackgroundPreparation(task: String) { val data = Data.Builder().putString("task", task).putInt("media_count", selectedMedia.size).putStringArray("media_uris", selectedMedia.toTypedArray()).build(); WorkManager.getInstance(this).enqueue(OneTimeWorkRequestBuilder<MediaBackgroundWorker>().setInputData(data).build()) }
-    private fun addAssistantBubble(text: String) = addBubble(text, false); private fun addUserBubble(text: String) = addBubble(text, true)
+    private fun addAssistantBubble(text: String) = addBubble(text, false)
+    private fun addUserBubble(text: String) = addBubble(text, true)
     private fun addBubble(text: String, user: Boolean) { val tv = TextView(this).apply { this.text = text; textSize = 16f; setTextColor(if (user) Color.WHITE else Color.DKGRAY); setPadding(18, 18, 18, 18); setBackgroundColor(if (user) 0xFF222222.toInt() else 0xFFF2F2F2.toInt()) }; chat.addView(tv, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, 0, 0, 16) }) }
 
     private fun addPlanCard(plan: TaskInterpreter.PlanResult) {
@@ -126,7 +120,8 @@ class MainActivity : Activity() {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val review = Button(this).apply { text = "مراجعة وتعديل"; setOnClickListener { showReview(latestPlan!!) } }
         val execute = Button(this).apply { text = "تنفيذ عالمي"; setOnClickListener { executePlan(card) } }
-        row.addView(execute, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)); row.addView(review, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        row.addView(execute, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(review, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         card.addView(heading); card.addView(summary); card.addView(steps); card.addView(row); chat.addView(card, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, 0, 0, 16) }); latestPlanCard = card
     }
 
@@ -142,7 +137,7 @@ class MainActivity : Activity() {
         card.isEnabled = false; addAssistantBubble("بدأ الوكيل العالمي: ملاحظة الشاشة ← قرار AI ← تنفيذ ← تحقق.")
         UniversalAgentLoop(brain).start(taskForAgent, object : UniversalAgentLoop.Listener {
             override fun onEvent(text: String) { runOnUiThread { status.text = text.take(260); if (text.contains("—") || text.startsWith("العقل") || text.startsWith("التنفيذ") || text.startsWith("التحقق")) addAssistantBubble(text.take(900)) } }
-            override fun onFinished(success: Boolean) { runOnUiThread { card.isEnabled = true; addAssistantBubble(if (success) "✅ اكتملت المهمة بعد التحقق." else "⚠️ توقفت الدورة قبل إثبات الاكتمال. راجع آخر حالة.") } }
+            override fun onFinished(success: Boolean) { runOnUiThread { card.isEnabled = true; addAssistantBubble(if (success) "✅ اكتملت المهمة بعد التحقق." else "⚠️ توقفت الدورة قبل إثبات الاكتمال.") } }
         }, selectedMedia.toList())
     }
 }
