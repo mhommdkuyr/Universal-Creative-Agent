@@ -25,6 +25,7 @@ class MainActivity : Activity() {
     private lateinit var input: EditText
     private lateinit var connectButton: Button
     private lateinit var brain: AgentBrainClient
+    private lateinit var localBrain: LocalBrainClient
     private var unsubscribeDiagnostics: (() -> Unit)? = null
     private val selectedMedia = mutableListOf<String>()
     private var latestPlan: TaskInterpreter.PlanResult? = null
@@ -37,9 +38,11 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         UcoaDiagnostics.init(this)
         brain = AgentBrainClient(this)
+        localBrain = LocalBrainClient(this)
         UcoaDiagnostics.log("APP", "بدأت MainActivity", "android=${android.os.Build.VERSION.SDK_INT} device=${android.os.Build.MODEL}")
+        UcoaDiagnostics.log("LOCAL_BRAIN", "العقل المحلي", "bundled=${localBrain.isBundled()} model=Qwen3-0.6B-LiteRT")
         setContentView(buildUi())
-        unsubscribeDiagnostics = UcoaDiagnostics.subscribe { event ->
+        unsubscribeDiagnostics = UcoaDiagnostics.subscribe { _ ->
             runOnUiThread {
                 debugLog.text = UcoaDiagnostics.recentText()
                 debugLog.post { (debugLog.parent?.parent as? ScrollView)?.fullScroll(View.FOCUS_DOWN) }
@@ -61,6 +64,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         unsubscribeDiagnostics?.invoke()
         unsubscribeDiagnostics = null
+        if (::localBrain.isInitialized) localBrain.close()
         super.onDestroy()
     }
 
@@ -172,38 +176,82 @@ class MainActivity : Activity() {
         input.setText("")
         val fallback = TaskInterpreter().analyze(latestTaskText, selectedMedia); latestPlan = fallback
         UcoaDiagnostics.log("PLANNER", "الخطة المحلية الأولية جاهزة", "steps=${fallback.steps.size}")
-        if (intent.getBooleanExtra("smoke_local_only", false)) {
-            addAssistantBubble("اختبار تنفيذ حقيقي: تجاوز عقل الشبكة للتأكد من أن طبقة التحكم تنفذ الأمر.")
-            UcoaDiagnostics.log("SMOKE", "الوضع المحلي فقط مفعل")
-            addPlanCard(fallback); autoExecuteLocal(); return
+        routeThroughLocalBrain(fallback)
+    }
+
+    private fun routeThroughLocalBrain(fallback: TaskInterpreter.PlanResult) {
+        if (!PermissionCoordinator.isServiceLive()) {
+            UcoaDiagnostics.log("LOCAL_BRAIN", "الخدمة غير متصلة؛ لن أبدأ التنفيذ المحلي", "service_live=false")
         }
-        addAssistantBubble("أتحقق من جاهزية عقل AI ثم أختار مسار التنفيذ…")
+        addAssistantBubble("أفحص العقل المحلي أولًا…")
+        val apps = AppDiscovery.installedLabels(this)
+        UcoaDiagnostics.log("LOCAL_BRAIN", "بدء التصنيف المحلي", "apps=${apps.size} task=$latestTaskText")
+        localBrain.classify(latestTaskText, apps) { result ->
+            runOnUiThread {
+                UcoaDiagnostics.log(
+                    "LOCAL_BRAIN",
+                    if (result.understood) "العقل المحلي فهم المهمة" else "العقل المحلي لم يفهم المهمة — تحويل للسحابة",
+                    "action=${result.action} app=${result.app} confidence=${result.confidence} error=${result.error ?: "none"}"
+                )
+                if (result.understood && result.action == "open_app" && !result.app.isNullOrBlank()) {
+                    addAssistantBubble("العقل المحلي فهم الأمر. سأفتحه محليًا بدون إرسال المهمة إلى السحابة.")
+                    addPlanCard(fallback.copy(summary = "تنفيذ محلي بواسطة العقل الموجود داخل التطبيق", steps = listOf("فتح ${result.app}")))
+                    executeLocalApp(result.app)
+                    return@runOnUiThread
+                }
+                if (intent.getBooleanExtra("smoke_local_only", false)) {
+                    addAssistantBubble("اختبار محلي: لم ينتج العقل المحلي إجراءً صالحًا، سأستخدم منفذ الأوامر المحلي كاختبار تحكم احتياطي.")
+                    addPlanCard(fallback); autoExecuteLocal(); return@runOnUiThread
+                }
+                continueCloudRoute(fallback)
+            }
+        }
+    }
+
+    private fun continueCloudRoute(fallback: TaskInterpreter.PlanResult) {
+        addAssistantBubble("المهمة خارج نطاق العقل المحلي؛ أحولها الآن إلى Cloud Brain.")
+        UcoaDiagnostics.log("ROUTER", "LOCAL→CLOUD", "reason=local_brain_no_action")
         UcoaDiagnostics.log("BRAIN_HEALTH", "فحص جاهزية Brain قبل التخطيط")
         brain.readiness { transportOk, ready, detail -> runOnUiThread {
             UcoaDiagnostics.log("BRAIN_HEALTH", "نتيجة فحص الجاهزية", "transport=$transportOk ready=$ready detail=$detail")
             if (!transportOk || !ready) {
-                addAssistantBubble("Brain غير جاهز: $detail\nسأستخدم التنفيذ المحلي فقط عندما يكون الأمر محددًا وقابلًا للتحقق.")
-                addPlanCard(latestPlan!!); autoExecuteLocal()
+                addAssistantBubble("Cloud Brain غير جاهز: $detail")
+                addPlanCard(fallback)
+                autoExecuteLocal()
                 if (selectedMedia.isNotEmpty()) queueBackgroundPreparation(latestTaskText)
                 return@runOnUiThread
             }
-            addAssistantBubble("Brain جاهز. أرسل المهمة إلى المخطط…")
+            addAssistantBubble("Cloud Brain جاهز. أرسل المهمة إلى المخطط…")
             brain.plan(latestTaskText, selectedMedia) { r -> runOnUiThread {
-                UcoaDiagnostics.log("PLANNER", if (r.ok) "استلمت خطة من Brain" else "فشل التخطيط من Brain", r.error ?: "ok")
+                UcoaDiagnostics.log("PLANNER", if (r.ok) "استلمت خطة من Cloud Brain" else "فشل التخطيط من Cloud Brain", r.error ?: "ok")
                 val p = r.body
                 if (r.ok && p != null) {
                     val steps = mutableListOf<String>(); p.optJSONArray("steps")?.let { a -> for (i in 0 until a.length()) steps += a.optString(i) }
                     if (steps.isNotEmpty()) latestPlan = fallback.copy(summary = p.optString("summary", fallback.summary), steps = steps)
                     addPlanCard(latestPlan!!)
                     if (selectedMedia.isNotEmpty()) queueBackgroundPreparation(latestTaskText)
-                    addAssistantBubble("الخطة جاهزة. بدء التنفيذ تلقائيًا…")
+                    addAssistantBubble("الخطة السحابية جاهزة. بدء التنفيذ تلقائيًا…")
                     executePlan(latestPlanCard!!)
                 } else {
-                    addAssistantBubble("تعذر بناء الخطة من العقل: ${r.error ?: "خطأ غير معروف"}")
+                    addAssistantBubble("تعذر بناء الخطة من Cloud Brain: ${r.error ?: "خطأ غير معروف"}")
                     addPlanCard(latestPlan!!); autoExecuteLocal()
                 }
             } }
         } }
+    }
+
+    private fun executeLocalApp(app: String) {
+        val service = UcoaAccessibilityService.instance
+        if (service == null) {
+            UcoaDiagnostics.log("EXECUTOR", "فشل التنفيذ المحلي", "accessibility_service_live=false")
+            addAssistantBubble("❌ خدمة التحكم غير متصلة. فعّل صلاحية الوصول ثم أعد المحاولة.")
+            connectPhone(); return
+        }
+        UcoaDiagnostics.log("EXECUTOR", "تنفيذ قرار العقل المحلي", "action=open_app requested=$app before=${service.foregroundPackageName()}")
+        val ok = service.openAppByName(app)
+        UcoaDiagnostics.log("EXECUTOR", if (ok) "تم إرسال أمر فتح التطبيق" else "فشل إرسال أمر فتح التطبيق", "requested=$app foreground_now=${service.foregroundPackageName()}")
+        if (ok) Log.i("UCOA_SMOKE", "UCOA_LOCAL_EXECUTION_OK app=$app")
+        verifyForegroundAfterOpen(app)
     }
 
     private fun autoExecuteLocal() {
@@ -215,14 +263,10 @@ class MainActivity : Activity() {
         }
         val app = Regex("(?:افتح|فتح|شغل|شغّل)\\s+(واتساب|whatsapp|يوتيوب|youtube|كاب ?كات|capcut|كانفا|canva|كروم|chrome|انستجرام|instagram|تليجرام|telegram|الإعدادات|اعدادات|settings|الضبط)", RegexOption.IGNORE_CASE).find(latestTaskText)?.groupValues?.getOrNull(1)
         if (app != null) {
-            UcoaDiagnostics.log("EXECUTOR", "إرسال أمر فتح تطبيق", "requested=$app before=${service.foregroundPackageName()}")
-            val ok = service.openAppByName(app)
-            if (ok) Log.i("UCOA_SMOKE", "UCOA_LOCAL_EXECUTION_OK app=$app")
-            UcoaDiagnostics.log("EXECUTOR", if (ok) "startActivity تم بنجاح" else "فشل فتح التطبيق", "requested=$app foreground_now=${service.foregroundPackageName()}")
-            verifyForegroundAfterOpen(app)
+            executeLocalApp(app)
         } else {
             UcoaDiagnostics.log("EXECUTOR", "لا يوجد منفذ محلي لهذه المهمة", "brain_required=true")
-            addAssistantBubble("المهمة تحتاج عقل AI متصلًا؛ لم أنفذ إجراءً غير محدد محليًا.")
+            addAssistantBubble("المهمة تحتاج Cloud Brain؛ لم أنفذ إجراءً غير محدد محليًا.")
         }
     }
 
@@ -273,7 +317,7 @@ class MainActivity : Activity() {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val review = Button(this).apply { text = "مراجعة وتعديل"; setOnClickListener { showReview(latestPlan!!) } }
         val execute = Button(this).apply { text = "تنفيذ عالمي"; setOnClickListener { executePlan(card) } }
-        row.addView(execute, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)); row.addView(review, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(execute, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)); row.addView(review, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         card.addView(heading); card.addView(summary); card.addView(steps); card.addView(row); chat.addView(card, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, 0, 0, 16) }); latestPlanCard = card
     }
 
