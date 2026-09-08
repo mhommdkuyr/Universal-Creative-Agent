@@ -63,3 +63,7 @@ def providers_probe():
     except Exception as exc:
         result["runtime"] = {"ok": False, "error": type(exc).__name__}
     return result
+
+
+# Keep the conventional FastAPI export used by uvicorn and the test suite.
+app = app_v3.app
