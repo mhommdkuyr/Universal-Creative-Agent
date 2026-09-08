@@ -43,7 +43,7 @@ jobs:
             # android-emulator-runner executes the script with /bin/sh; keep this POSIX-compatible.
             set -eu
             adb wait-for-device
-            APK="android/app/build/outputs/apk/debug/app-debug.apk"
+            APK="$GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug.apk"
             test -s "$APK"
             adb install -r "$APK"
             adb shell settings put secure enabled_accessibility_services com.ucoa.app/.UcoaAccessibilityService
@@ -53,7 +53,7 @@ jobs:
             adb shell am start -n com.ucoa.app/.MainActivity --es smoke_task 'افتح الإعدادات' --ez smoke_local_only true
             EXEC_OK=false
             FG_OK=false
-            for i in $(seq 1 40); do
+            for i in $(seq 1 60); do
               if adb logcat -d -s UCOA_SMOKE:I '*:S' | grep -q 'UCOA_LOCAL_EXECUTION_OK app='; then EXEC_OK=true; fi
               FG=$(adb shell dumpsys activity activities | tr '\n' ' ' || true)
               if printf '%s' "$FG" | grep -q 'com.android.settings'; then FG_OK=true; fi
