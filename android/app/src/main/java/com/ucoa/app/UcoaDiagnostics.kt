@@ -29,14 +29,13 @@ object UcoaDiagnostics {
             if (appContext != null) return
             appContext = context.applicationContext
             val saved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY, "").orEmpty()
-            events = saved.lineSequence().mapNotNull { parse(it) }.takeLast(MAX_EVENTS).toMutableList()
+            events = saved.lines().mapNotNull { parse(it) }.takeLast(MAX_EVENTS).toMutableList()
         }
     }
 
     fun log(stage: String, message: String, details: String = "") {
-        val safe = sanitize(details)
         val event = synchronized(lock) {
-            val created = Event(format.format(Date()), stage, sanitize(message), safe)
+            val created = Event(format.format(Date()), stage, sanitize(message), sanitize(details))
             events.add(created)
             if (events.size > MAX_EVENTS) events = events.takeLast(MAX_EVENTS).toMutableList()
             persistLocked()
