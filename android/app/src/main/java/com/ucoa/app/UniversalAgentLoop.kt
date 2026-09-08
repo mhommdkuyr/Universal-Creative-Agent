@@ -21,42 +21,52 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
     private var attachments: List<String> = emptyList()
 
     fun start(taskText: String, listener: Listener, selectedAttachments: List<String> = emptyList()) {
-        if (running) return
-        if (UcoaAccessibilityService.instance == null) { listener.onEvent("العقل: خدمة التحكم غير متاحة"); listener.onFinished(false); return }
+        if (running) { UcoaDiagnostics.log("AGENT", "تم رفض بدء دورة جديدة", "already_running=true"); return }
+        if (UcoaAccessibilityService.instance == null) { UcoaDiagnostics.log("AGENT", "فشل البدء", "service_live=false"); listener.onEvent("العقل: خدمة التحكم غير متاحة"); listener.onFinished(false); return }
         running = true; task = taskText; step = 0; history = JSONArray(); this.listener = listener; attachments = selectedAttachments
+        UcoaDiagnostics.log("AGENT", "بدأت دورة الوكيل", "task=${task.take(500)}")
         listener.onEvent("العقل العالمي: الإدراك البصري ← التفكير ← الأمان ← التنفيذ ← التحقق.")
         persist("running"); next()
     }
 
-    fun stop() { running = false; persist("stopped"); listener?.onEvent("العقل العالمي: تم إيقاف المهمة.") }
+    fun stop() { running = false; persist("stopped"); UcoaDiagnostics.log("AGENT", "أوقف المستخدم الدورة"); listener?.onEvent("العقل العالمي: تم إيقاف المهمة.") }
 
     private fun next() {
         if (!running) return
         if (step >= 60) { finish(false, "وصلت المهمة إلى الحد الآمن لخطوات التنفيذ."); return }
         val service = UcoaAccessibilityService.instance ?: run { finish(false, "فقدت خدمة التحكم."); return }
+        UcoaDiagnostics.log("OBSERVE", "بدء دورة ملاحظة", "step=$step foreground=${service.foregroundPackageName()}")
 
         // Explicit app bootstrap is a local deterministic operation. We do it before
         // asking the cloud model so a slow/unavailable planner cannot prevent the
         // agent from ever reaching the requested application.
         if (step == 0) {
             val requestedApp = requestedAppName(task)
-            if (requestedApp != null && service.openAppByName(requestedApp)) {
-                listener?.onEvent("التنفيذ المحلي: فتح $requestedApp")
-                history.put(JSONObject().apply { put("step", 0); put("action", "open_app_by_name"); put("ok", true); put("detail", requestedApp) })
-                persist("opened_$requestedApp")
-                step = 1
-                main.postDelayed({ next() }, 1200L)
-                return
+            if (requestedApp != null) {
+                UcoaDiagnostics.log("EXECUTOR", "العثور على تطبيق مطلوب في النص", "requested=$requestedApp")
+                if (service.openAppByName(requestedApp)) {
+                    listener?.onEvent("التنفيذ المحلي: فتح $requestedApp")
+                    history.put(JSONObject().apply { put("step", 0); put("action", "open_app_by_name"); put("ok", true); put("detail", requestedApp) })
+                    persist("opened_$requestedApp")
+                    step = 1
+                    main.postDelayed({ next() }, 1200L)
+                    return
+                }
+                UcoaDiagnostics.log("EXECUTOR", "تعذر فتح التطبيق المطلوب محليًا", "requested=$requestedApp")
             }
         }
 
         service.captureScreenshotBase64 { beforeScreenshot ->
             if (!running) return@captureScreenshotBase64
             val beforeUi = service.observeUi(320)
+            UcoaDiagnostics.log("OBSERVE", "اكتملت الملاحظة قبل القرار", "step=$step ui_chars=${beforeUi.length} screenshot=${!beforeScreenshot.isNullOrBlank()}")
             brain.step(task, step, history, beforeUi, beforeScreenshot, service.installedAppLabels(), attachments, false) { response ->
                 main.post {
                     if (!running) return@post
-                    if (!response.ok || response.body == null) { finish(false, "تعذر الوصول إلى عقل AI: ${response.error ?: "استجابة غير صالحة"}"); return@post }
+                    if (!response.ok || response.body == null) {
+                        UcoaDiagnostics.log("DECIDE", "فشل قرار Brain", response.error ?: "invalid_response")
+                        finish(false, "تعذر الوصول إلى عقل AI: ${response.error ?: "استجابة غير صالحة"}"); return@post
+                    }
                     val decision = response.body
                     val vp = decision.optString("vision_provider").trim()
                     val visualSummary = decision.optJSONObject("visual_observation")?.optString("screen_summary", "")?.trim().orEmpty()
@@ -65,9 +75,11 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
                     val verification = decision.optJSONObject("verification")
                     if (verification?.optBoolean("requires_confirmation", false) == true) {
                         val reasons = verification.optJSONArray("reasons")?.let { a -> (0 until a.length()).joinToString(", ") { a.optString(it) } } ?: "policy"
+                        UcoaDiagnostics.log("SAFETY", "إيقاف بانتظار تأكيد", reasons)
                         listener?.onConfirmationRequired(reasons); finish(false, "تم إيقاف التنفيذ الآلي حفاظًا على الأمان."); return@post
                     }
                     val action = decision.optString("action").trim(); val params = decision.optJSONObject("params") ?: decision
+                    UcoaDiagnostics.log("DECIDE", "استلمت قرار Brain", "step=$step action=$action vision=$vp")
                     if (decision.optBoolean("done", false) || action.equals("done", true)) { finish(true, decision.optString("message", "اكتملت المهمة.")); return@post }
                     if (action.isBlank()) { finish(false, "العقل أعاد قرارًا بلا فعل."); return@post }
                     execute(action, params) { ok, detail -> main.post { afterAction(beforeUi, beforeScreenshot, action, decision, ok, detail) } }
@@ -79,13 +91,14 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
     private fun requestedAppName(text: String): String? {
         val t = text.lowercase()
         val aliases = listOf(
-            "capcut" to "CapCut", "كاب كات" to "CapCut",
+            "capcut" to "CapCut", "كاب كات" to "CapCut", "كابكات" to "CapCut",
             "youtube" to "YouTube", "يوتيوب" to "YouTube",
             "canva" to "Canva", "كانفا" to "Canva",
             "chrome" to "Chrome", "كروم" to "Chrome",
-            "instagram" to "Instagram", "انستجرام" to "Instagram",
+            "instagram" to "Instagram", "انستجرام" to "Instagram", "انستغرام" to "Instagram",
             "whatsapp" to "WhatsApp", "واتساب" to "WhatsApp",
-            "telegram" to "Telegram", "تليجرام" to "Telegram"
+            "telegram" to "Telegram", "تليجرام" to "Telegram",
+            "settings" to "Settings", "الإعدادات" to "Settings", "اعدادات" to "Settings", "الضبط" to "Settings"
         )
         return aliases.firstOrNull { t.contains(it.first) }?.second
     }
@@ -93,20 +106,24 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
     private fun afterAction(beforeUi: String, beforeScreenshot: String?, action: String, decision: JSONObject, ok: Boolean, detail: String) {
         val service = UcoaAccessibilityService.instance ?: run { finish(false, "فقدت خدمة التحكم أثناء التحقق."); return }
         history.put(JSONObject().apply { put("step", step); put("action", action); put("ok", ok); put("detail", detail.take(700)) })
+        UcoaDiagnostics.log("EXECUTOR", "نتيجة الإجراء المحلي", "step=$step action=$action ok=$ok detail=${detail.take(500)}")
         listener?.onEvent("التنفيذ: $action — ${if (ok) "أُرسل" else "فشل محليًا"}")
         persist("step_$step")
         if (!ok) { step++; main.postDelayed({ next() }, 400L); return }
         service.captureScreenshotBase64 { afterScreenshot ->
             val afterUi = service.observeUi(320)
+            UcoaDiagnostics.log("VERIFY", "جمع حالة ما بعد الإجراء", "step=$step ui_chars=${afterUi.length} screenshot=${!afterScreenshot.isNullOrBlank()}")
             brain.verifyResult(task, decision, beforeUi, afterUi, beforeScreenshot, afterScreenshot) { result ->
                 main.post {
                     if (!running) return@post
                     val verified = result.ok && (result.body?.optBoolean("verified", false) ?: false)
                     if (verified) {
+                        UcoaDiagnostics.log("VERIFY", "نجح تحقق Brain", "step=$step")
                         listener?.onEvent("التحقق: نجح وتغيرت حالة الشاشة.")
                         step++; persist("verified_$step")
                         main.postDelayed({ next() }, decision.optLong("wait_after_ms", 700L).coerceIn(150L, 5000L))
                     } else {
+                        UcoaDiagnostics.log("VERIFY", "فشل تحقق Brain", "step=$step error=${result.error ?: "not_verified"}")
                         listener?.onEvent("التحقق: لم يثبت نجاح الإجراء؛ سأعيد الملاحظة بدل إعلان الاكتمال.")
                         step++; persist("verification_failed_$step")
                         main.postDelayed({ next() }, 600L)
@@ -141,5 +158,11 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
     }
 
     private fun persist(status: String) { brain.persistExecutionState(task, step, history, status) }
-    private fun finish(success: Boolean, message: String) { running = false; persist(if (success) "completed" else "failed"); if (message.isNotBlank()) listener?.onEvent(message); listener?.onFinished(success) }
+    private fun finish(success: Boolean, message: String) {
+        running = false
+        persist(if (success) "completed" else "failed")
+        UcoaDiagnostics.log("AGENT", if (success) "اكتملت دورة الوكيل" else "فشلت دورة الوكيل", "success=$success message=${message.take(700)}")
+        if (message.isNotBlank()) listener?.onEvent(message)
+        listener?.onFinished(success)
+    }
 }
