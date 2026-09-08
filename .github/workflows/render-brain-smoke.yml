@@ -1,6 +1,10 @@
 name: Render Brain Smoke
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'server/**'
+      - '.github/workflows/render-brain-smoke.yml'
   schedule:
     - cron: '31 */6 * * *'
 
