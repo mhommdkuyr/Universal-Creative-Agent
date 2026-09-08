@@ -25,6 +25,19 @@ object AppDiscovery {
         }
     }
 
+    fun installedLabels(context: Context): List<String> {
+        val pm = context.packageManager
+        @Suppress("DEPRECATION")
+        val apps = if (Build.VERSION.SDK_INT >= 33) {
+            pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
+        } else {
+            pm.getInstalledApplications(0)
+        }
+        return apps.mapNotNull { info ->
+            runCatching { pm.getApplicationLabel(info).toString() }.getOrNull()
+        }.filter { it.isNotBlank() }.distinct().sorted()
+    }
+
     private fun normalize(value: String): String = value
         .replace(" ", "")
         .replace("-", "")
