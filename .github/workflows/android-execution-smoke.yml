@@ -49,7 +49,7 @@ jobs:
             adb shell settings put secure accessibility_enabled 1
             adb shell am force-stop com.ucoa.app || true
             adb shell am force-stop com.android.settings || true
-            adb shell am start -n com.ucoa.app/.MainActivity --es smoke_task 'افتح الإعدادات'
+            adb shell am start -n com.ucoa.app/.MainActivity --es smoke_task 'افتح الإعدادات' --ez smoke_local_only true
             EXEC_OK=false
             FG_OK=false
             for i in $(seq 1 40); do
