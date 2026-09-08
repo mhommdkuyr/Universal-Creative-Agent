@@ -55,13 +55,23 @@ class AgentBrainClient(private val context: Context) {
     }
 
     fun health(callback: (Boolean, String) -> Unit) {
-        val base = endpoint(); if (base.isBlank()) { callback(false, "عنوان العقل غير مُعد"); return }
+        readiness { transportOk, _, detail -> callback(transportOk, detail) }
+    }
+
+    /** True only when the server is reachable AND reports a configured reasoning provider. */
+    fun readiness(callback: (transportOk: Boolean, ready: Boolean, detail: String) -> Unit) {
+        val base = endpoint()
+        if (base.isBlank()) { callback(false, false, "عنوان العقل غير مُعد"); return }
         executor.execute {
             try {
                 val body = requestJson("GET", base + "/health", null, 15000)
                 val vision = body.optString("vision_model", "غير متاح")
-                callback(true, if (body.optBoolean("brain_configured", false)) "العقل متصل: ${body.optString("reasoning_model", body.optString("model", "primary"))} | الرؤية: $vision" else "الخادم متصل لكن النموذج غير مهيأ")
-            } catch (e: Exception) { callback(false, e.message ?: e.javaClass.simpleName) }
+                val ready = body.optBoolean("brain_configured", false)
+                val reasoning = body.optString("reasoning_model", body.optString("model", "primary"))
+                val providers = body.opt("providers")?.toString()?.take(800).orEmpty()
+                val detail = if (ready) "العقل جاهز: $reasoning | الرؤية: $vision" else "الخادم متصل لكن النموذج غير مهيأ | reasoning=$reasoning | providers=$providers"
+                callback(true, ready, detail)
+            } catch (e: Exception) { callback(false, false, e.message ?: e.javaClass.simpleName) }
         }
     }
 
@@ -70,6 +80,7 @@ class AgentBrainClient(private val context: Context) {
             put("task", task); put("attachments", JSONArray(attachments)); put("session_id", sessionId())
             put("device", JSONObject().apply { put("manufacturer", Build.MANUFACTURER); put("model", Build.MODEL); put("android", Build.VERSION.SDK_INT) })
         }
+        UcoaDiagnostics.log("BRAIN_HTTP", "إرسال طلب تخطيط", "endpoint=${endpoint()}/v1/agent/plan")
         submitJob("/v1/agent/plan", payload, callback)
     }
 
@@ -84,6 +95,7 @@ class AgentBrainClient(private val context: Context) {
             val dm = context.resources.displayMetrics
             put("screen_width", dm.widthPixels); put("screen_height", dm.heightPixels)
         }
+        UcoaDiagnostics.log("BRAIN_HTTP", "إرسال خطوة للوكيل", "step=$step fg=${UcoaAccessibilityService.instance?.foregroundPackageName()}")
         submitJob("/v1/agent/step", payload, callback)
     }
 
@@ -93,21 +105,30 @@ class AgentBrainClient(private val context: Context) {
             try {
                 val submitted = requestJson("POST", base + path, payload, 20000)
                 val jobId = submitted.optString("job_id").takeIf { it.isNotBlank() } ?: throw IllegalStateException("Brain did not return a job_id")
+                UcoaDiagnostics.log("BRAIN_HTTP", "Brain أنشأ job", "path=$path job_id=$jobId")
                 pollJob(base, jobId, callback, 0)
-            } catch (e: Exception) { callback(Response(false, null, e.message ?: e.javaClass.simpleName)) }
+            } catch (e: Exception) { UcoaDiagnostics.log("BRAIN_HTTP", "فشل طلب Brain", e.message ?: e.javaClass.simpleName); callback(Response(false, null, e.message ?: e.javaClass.simpleName)) }
         }
     }
 
     private fun pollJob(base: String, jobId: String, callback: (Response) -> Unit, attempt: Int) {
-        if (attempt >= 240) { callback(Response(false, null, "انتهت مهلة انتظار عقل AI")); return }
+        if (attempt >= 240) { UcoaDiagnostics.log("BRAIN_HTTP", "انتهت مهلة job", "job_id=$jobId"); callback(Response(false, null, "انتهت مهلة انتظار عقل AI")); return }
         try {
             val job = requestJson("GET", base + "/v1/agent/jobs/$jobId", null, 15000)
             when (job.optString("status")) {
-                "completed" -> { val result = job.optJSONObject("result"); callback(if (result != null) Response(true, result) else Response(false, null, "العقل أنهى المهمة بلا نتيجة")) }
-                "failed" -> callback(Response(false, null, job.optString("error", "فشل تشغيل عقل AI")))
+                "completed" -> {
+                    val result = job.optJSONObject("result")
+                    UcoaDiagnostics.log("BRAIN_HTTP", "اكتمل job", "job_id=$jobId result=${result != null}")
+                    callback(if (result != null) Response(true, result) else Response(false, null, "العقل أنهى المهمة بلا نتيجة"))
+                }
+                "failed" -> {
+                    val error = job.optString("error", "فشل تشغيل عقل AI")
+                    UcoaDiagnostics.log("BRAIN_HTTP", "فشل job", "job_id=$jobId error=$error")
+                    callback(Response(false, null, error))
+                }
                 else -> { Thread.sleep(1000); pollJob(base, jobId, callback, attempt + 1) }
             }
-        } catch (e: Exception) { callback(Response(false, null, e.message ?: e.javaClass.simpleName)) }
+        } catch (e: Exception) { UcoaDiagnostics.log("BRAIN_HTTP", "فشل polling", "job_id=$jobId error=${e.message}"); callback(Response(false, null, e.message ?: e.javaClass.simpleName)) }
     }
 
     private fun requestJson(method: String, url: String, payload: JSONObject?, timeout: Int): JSONObject {
@@ -122,7 +143,7 @@ class AgentBrainClient(private val context: Context) {
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val text = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
-            if (code !in 200..299) throw IllegalStateException("HTTP $code: $text")
+            if (code !in 200..299) throw IllegalStateException("HTTP $code: ${text.take(1200)}")
             return JSONObject(text)
         } finally { conn?.disconnect() }
     }
