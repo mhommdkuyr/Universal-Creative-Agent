@@ -1,22 +1,17 @@
 package com.ucoa.app
 
 import android.content.Context
-import org.json.JSONObject
 import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
+import com.google.ai.edge.litertlm.SamplerConfig
+import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
-/**
- * On-device intent brain.
- *
- * The model is packaged into the APK by the Gradle build and copied to
- * internal storage on first use. The model is deliberately only a router:
- * it decides whether a request is a supported local action and returns a
- * strict JSON action. Anything it cannot classify is handed to the cloud brain.
- */
+/** On-device intent router. Unknown requests are delegated to Cloud Brain. */
 class LocalBrainClient(private val context: Context) {
     data class Result(
         val understood: Boolean,
@@ -29,24 +24,26 @@ class LocalBrainClient(private val context: Context) {
 
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private var engine: Engine? = null
-    private var modelPath: String? = null
 
     fun isBundled(): Boolean = try {
         context.assets.open(MODEL_ASSET).use { true }
-    } catch (_: Exception) {
-        false
-    }
+    } catch (_: Exception) { false }
 
     fun classify(task: String, apps: List<String>, callback: (Result) -> Unit) {
         executor.execute {
             val result = try {
-                if (!isBundled()) {
-                    Result(false, raw = "", error = "local_model_asset_missing")
-                } else {
+                if (!isBundled()) Result(false, error = "local_model_asset_missing")
+                else {
                     val e = getEngine()
-                    e.createConversation().use { conversation ->
-                        val prompt = buildPrompt(task, apps)
-                        val response = conversation.sendMessage(prompt)
+                    e.createConversation(
+                        ConversationConfig(
+                            samplerConfig = SamplerConfig(topK = 20, topP = 0.90, temperature = 0.10),
+                            systemInstruction = com.google.ai.edge.litertlm.Contents.of(
+                                "Return only JSON. You are a fast Android local intent router. Supported action: open_app. If the request is not a simple installed-app launch, return understood=false."
+                            ),
+                        )
+                    ).use { conversation ->
+                        val response = conversation.sendMessage(buildPrompt(task, apps))
                         parse(response.toString())
                     }
                 }
@@ -58,20 +55,18 @@ class LocalBrainClient(private val context: Context) {
     }
 
     fun close() {
-        executor.execute {
-            try { engine?.close() } catch (_: Throwable) {}
-            engine = null
-        }
-        executor.shutdown()
+        try { engine?.close() } catch (_: Throwable) {}
+        engine = null
+        executor.shutdownNow()
     }
 
     private fun getEngine(): Engine {
         engine?.let { return it }
         val path = ensureModelFile()
-        modelPath = path
         val config = EngineConfig(
             modelPath = path,
-            backend = Backend.CPU(),
+            backend = Backend.CPU(threadCount = 4),
+            maxNumTokens = 128,
             cacheDir = context.cacheDir.absolutePath,
         )
         return Engine(config).also {
@@ -92,20 +87,9 @@ class LocalBrainClient(private val context: Context) {
     }
 
     private fun buildPrompt(task: String, apps: List<String>): String {
-        val appList = apps.take(80).joinToString(", ")
-        return """
-            You are the local intent router for an Android automation agent.
-            Your job is ONLY to classify requests that can be executed locally.
-            Supported local action: open_app.
-            If the user asks to open/start/run an installed application, return JSON.
-            Otherwise return JSON saying understood=false.
-            Never invent an app that is not in the installed-app list.
-            Output ONLY valid JSON in this schema:
-            {"understood":true,"action":"open_app","app":"exact installed label","confidence":0.99}
-            or {"understood":false,"action":null,"app":null,"confidence":0.0}
-            Installed apps: $appList
-            User request: $task
-        """.trimIndent()
+        // Keep the prompt tiny: local routing must be fast on phone CPU.
+        val appList = apps.take(35).joinToString(", ")
+        return "Request: $task\nInstalled apps: $appList\nReturn ONLY JSON: {\"understood\":true,\"action\":\"open_app\",\"app\":\"exact label\",\"confidence\":0.99} OR {\"understood\":false,\"action\":null,\"app\":null,\"confidence\":0.0}"
     }
 
     private fun parse(rawResponse: String): Result {
@@ -121,9 +105,7 @@ class LocalBrainClient(private val context: Context) {
             val confidence = o.optDouble("confidence", 0.0)
             if (understood && action == "open_app" && !app.isNullOrBlank() && confidence >= 0.50) {
                 Result(true, action, app, confidence, raw)
-            } else {
-                Result(false, action = action, app = app, confidence = confidence, raw = raw)
-            }
+            } else Result(false, action, app, confidence, raw)
         } catch (t: Throwable) {
             Result(false, raw = raw, error = "local_model_json_error:${t.message}")
         }
@@ -131,6 +113,6 @@ class LocalBrainClient(private val context: Context) {
 
     companion object {
         private const val MODEL_ASSET = "ucoa_local_model.litertlm"
-        private const val MIN_MODEL_BYTES = 400_000_000L
+        private const val MIN_MODEL_BYTES = 300_000_000L
     }
 }
