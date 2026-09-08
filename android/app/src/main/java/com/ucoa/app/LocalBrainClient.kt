@@ -35,15 +35,16 @@ class LocalBrainClient(private val context: Context) {
                 if (!isBundled()) Result(false, error = "local_model_asset_missing")
                 else {
                     val e = getEngine()
+                    val candidates = relevantApps(task, apps)
                     e.createConversation(
                         ConversationConfig(
-                            samplerConfig = SamplerConfig(topK = 20, topP = 0.90, temperature = 0.10),
+                            samplerConfig = SamplerConfig(topK = 10, topP = 0.85, temperature = 0.05),
                             systemInstruction = com.google.ai.edge.litertlm.Contents.of(
-                                "Return only JSON. You are a fast Android local intent router. Supported action: open_app. If the request is not a simple installed-app launch, return understood=false."
+                                "Android router. Output ONLY JSON. For simple open/start app requests use action open_app; otherwise understood=false. Never invent an app."
                             ),
                         )
                     ).use { conversation ->
-                        val response = conversation.sendMessage(buildPrompt(task, apps))
+                        val response = conversation.sendMessage("$task\nCandidates: ${candidates.joinToString(", ")}\nJSON:")
                         parse(response.toString())
                     }
                 }
@@ -65,8 +66,8 @@ class LocalBrainClient(private val context: Context) {
         val path = ensureModelFile()
         val config = EngineConfig(
             modelPath = path,
-            backend = Backend.CPU(threadCount = 4),
-            maxNumTokens = 128,
+            backend = Backend.CPU(threadCount = 2),
+            maxNumTokens = 48,
             cacheDir = context.cacheDir.absolutePath,
         )
         return Engine(config).also {
@@ -86,10 +87,13 @@ class LocalBrainClient(private val context: Context) {
         return target.absolutePath
     }
 
-    private fun buildPrompt(task: String, apps: List<String>): String {
-        // Keep the prompt tiny: local routing must be fast on phone CPU.
-        val appList = apps.take(35).joinToString(", ")
-        return "Request: $task\nInstalled apps: $appList\nReturn ONLY JSON: {\"understood\":true,\"action\":\"open_app\",\"app\":\"exact label\",\"confidence\":0.99} OR {\"understood\":false,\"action\":null,\"app\":null,\"confidence\":0.0}"
+    private fun relevantApps(task: String, apps: List<String>): List<String> {
+        val normalized = task.lowercase()
+        val scored = apps.map { label ->
+            val score = label.lowercase().count { c -> normalized.contains(c) }
+            label to score
+        }
+        return scored.sortedByDescending { it.second }.take(12).map { it.first }
     }
 
     private fun parse(rawResponse: String): Result {
@@ -103,9 +107,8 @@ class LocalBrainClient(private val context: Context) {
             val action = o.optString("action", null)
             val app = o.optString("app", null)
             val confidence = o.optDouble("confidence", 0.0)
-            if (understood && action == "open_app" && !app.isNullOrBlank() && confidence >= 0.50) {
-                Result(true, action, app, confidence, raw)
-            } else Result(false, action, app, confidence, raw)
+            if (understood && action == "open_app" && !app.isNullOrBlank() && confidence >= 0.50) Result(true, action, app, confidence, raw)
+            else Result(false, action, app, confidence, raw)
         } catch (t: Throwable) {
             Result(false, raw = raw, error = "local_model_json_error:${t.message}")
         }
