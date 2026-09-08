@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 adb wait-for-device
 APK_PATH="android/app/build/outputs/apk/debug/app-debug.apk"
 test -s "$APK_PATH"
@@ -33,7 +32,7 @@ echo '--- Real execution smoke: Accessibility -> app launch -> foreground verifi
 adb shell am force-stop com.ucoa.app || true
 adb shell settings put secure enabled_accessibility_services com.ucoa.app/.UcoaAccessibilityService
 adb shell settings put secure accessibility_enabled 1
-adb shell am start -n com.ucoa.app/.MainActivity --es smoke_task 'افتح الإعدادات' >/tmp/ucoa-exec-start.txt 2>&1
+adb shell am start -n com.ucoa.app/.MainActivity --es smoke_task 'افتح الإعدادات' --ez smoke_local_only true >/tmp/ucoa-exec-start.txt 2>&1
 EXEC_OK=false
 FG_OK=false
 for i in $(seq 1 45); do

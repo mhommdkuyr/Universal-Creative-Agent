@@ -86,6 +86,12 @@ class MainActivity : Activity() {
         latestTaskText = input.text.toString().trim(); if (latestTaskText.isEmpty()) return
         addUserBubble(latestTaskText + if (selectedMedia.isNotEmpty()) "\n📎 ${selectedMedia.size} ملف" else ""); input.setText("")
         val fallback = TaskInterpreter().analyze(latestTaskText, selectedMedia); latestPlan = fallback
+        if (intent.getBooleanExtra("smoke_local_only", false)) {
+            addAssistantBubble("اختبار تنفيذ حقيقي: تجاوز عقل الشبكة للتأكد من أن طبقة التحكم تنفذ الأمر.")
+            addPlanCard(fallback)
+            autoExecuteLocal()
+            return
+        }
         addAssistantBubble(if (brain.configured()) "أحلل المهمة ثم أبدأ التنفيذ تلقائيًا…" else "عقل AI غير مُعد؛ سأحاول الأمر المحلي المدعوم مباشرة.")
         if (brain.configured()) {
             brain.plan(latestTaskText, selectedMedia) { r -> runOnUiThread {
