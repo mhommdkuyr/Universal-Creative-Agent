@@ -16,7 +16,7 @@ class AgentBrainClient(private val context: Context) {
     data class Response(val ok: Boolean, val body: JSONObject?, val error: String? = null)
     private val executor = Executors.newSingleThreadExecutor()
     private val prefs get() = context.getSharedPreferences("ucoa_brain", Context.MODE_PRIVATE)
-    private val defaultEndpoint = "https://ucoa-agent-brain-local2.onrender.com"
+    private val defaultEndpoint = "https://ucoa-agent-brain.onrender.com"
 
     fun configured(): Boolean = endpoint().isNotBlank()
     fun endpoint(): String = prefs.getString("endpoint", defaultEndpoint)?.trim().orEmpty().trimEnd('/')
@@ -34,9 +34,7 @@ class AgentBrainClient(private val context: Context) {
     fun persistExecutionState(task: String, step: Int, history: JSONArray, status: String, callback: ((Response) -> Unit)? = null) {
         val payload = JSONObject().apply {
             put("session_id", sessionId())
-            put("state", JSONObject().apply {
-                put("task", task); put("step", step); put("status", status); put("history", history)
-            })
+            put("state", JSONObject().apply { put("task", task); put("step", step); put("status", status); put("history", history) })
         }
         executor.execute {
             try { callback?.invoke(Response(true, requestJson("POST", endpoint() + "/v1/agent/state", payload, 15000))) }
@@ -94,8 +92,7 @@ class AgentBrainClient(private val context: Context) {
         executor.execute {
             try {
                 val submitted = requestJson("POST", base + path, payload, 20000)
-                val jobId = submitted.optString("job_id").takeIf { it.isNotBlank() }
-                    ?: throw IllegalStateException("Brain did not return a job_id")
+                val jobId = submitted.optString("job_id").takeIf { it.isNotBlank() } ?: throw IllegalStateException("Brain did not return a job_id")
                 pollJob(base, jobId, callback, 0)
             } catch (e: Exception) { callback(Response(false, null, e.message ?: e.javaClass.simpleName)) }
         }
@@ -106,10 +103,7 @@ class AgentBrainClient(private val context: Context) {
         try {
             val job = requestJson("GET", base + "/v1/agent/jobs/$jobId", null, 15000)
             when (job.optString("status")) {
-                "completed" -> {
-                    val result = job.optJSONObject("result")
-                    callback(if (result != null) Response(true, result) else Response(false, null, "العقل أنهى المهمة بلا نتيجة"))
-                }
+                "completed" -> { val result = job.optJSONObject("result"); callback(if (result != null) Response(true, result) else Response(false, null, "العقل أنهى المهمة بلا نتيجة")) }
                 "failed" -> callback(Response(false, null, job.optString("error", "فشل تشغيل عقل AI")))
                 else -> { Thread.sleep(1000); pollJob(base, jobId, callback, attempt + 1) }
             }
