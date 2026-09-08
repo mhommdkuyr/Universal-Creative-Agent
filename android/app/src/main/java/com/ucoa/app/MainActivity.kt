@@ -6,6 +6,7 @@ import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import android.speech.RecognizerIntent
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -27,7 +28,17 @@ class MainActivity : Activity() {
     private val pickMedia = 401
     private val speech = 402
 
-    override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState); brain = AgentBrainClient(this); setContentView(buildUi()); refreshConnectionState() }
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        brain = AgentBrainClient(this)
+        setContentView(buildUi())
+        refreshConnectionState()
+        if (BuildConfig.DEBUG) {
+            intent.getStringExtra("smoke_task")?.trim()?.takeIf { it.isNotEmpty() }?.let { task ->
+                window.decorView.postDelayed({ input.setText(task); analyzeTask() }, 1200L)
+            }
+        }
+    }
     override fun onResume() { super.onResume(); if (::status.isInitialized) refreshConnectionState() }
 
     private fun buildUi(): View {
@@ -101,9 +112,12 @@ class MainActivity : Activity() {
 
     private fun autoExecuteLocal() {
         if (!PermissionCoordinator.isServiceLive()) { addAssistantBubble("لا أستطيع التحكم بالتطبيقات: فعّل خدمة الوصول من زر ربط الهاتف."); connectPhone(); return }
-        val app = Regex("(?:افتح|فتح|شغل|شغّل)\\s+(واتساب|whatsapp|يوتيوب|youtube|كاب ?كات|capcut|كانفا|canva|كروم|chrome|انستجرام|instagram|تليجرام|telegram)", RegexOption.IGNORE_CASE).find(latestTaskText)?.groupValues?.getOrNull(1)
-        if (app != null) { val ok = UcoaAccessibilityService.instance?.openAppByName(app) == true; addAssistantBubble(if (ok) "✅ تم فتح $app فعليًا." else "❌ تعذر فتح $app. تأكد من تثبيته وتفعيل خدمة الوصول.") }
-        else addAssistantBubble("المهمة تحتاج عقل AI متصلًا؛ لم أنفذ إجراءً غير محدد محليًا.")
+        val app = Regex("(?:افتح|فتح|شغل|شغّل)\\s+(واتساب|whatsapp|يوتيوب|youtube|كاب ?كات|capcut|كانفا|canva|كروم|chrome|انستجرام|instagram|تليجرام|telegram|الإعدادات|اعدادات|settings|الضبط)", RegexOption.IGNORE_CASE).find(latestTaskText)?.groupValues?.getOrNull(1)
+        if (app != null) {
+            val ok = UcoaAccessibilityService.instance?.openAppByName(app) == true
+            if (ok) Log.i("UCOA_SMOKE", "UCOA_LOCAL_EXECUTION_OK app=$app")
+            addAssistantBubble(if (ok) "✅ تم فتح $app فعليًا." else "❌ تعذر فتح $app. تأكد من تثبيته وتفعيل خدمة الوصول.")
+        } else addAssistantBubble("المهمة تحتاج عقل AI متصلًا؛ لم أنفذ إجراءً غير محدد محليًا.")
     }
 
     private fun queueBackgroundPreparation(task: String) { val data = Data.Builder().putString("task", task).putInt("media_count", selectedMedia.size).putStringArray("media_uris", selectedMedia.toTypedArray()).build(); WorkManager.getInstance(this).enqueue(OneTimeWorkRequestBuilder<MediaBackgroundWorker>().setInputData(data).build()) }
