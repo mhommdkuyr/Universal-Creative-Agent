@@ -10,10 +10,10 @@ on:
 jobs:
   gemini-probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     env:
       GEMINI_API_KEY: ${{ secrets.UCOA_GEMINI_API_KEY }}
-      GEMINI_MODEL: gemini-3.8-flash
+      GEMINI_MODEL: gemini-2.5-flash
     steps:
       - name: Verify Gemini text API
         shell: bash
@@ -49,3 +49,10 @@ jobs:
             -d "{\"model\":\"$GEMINI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Return exactly CONTINUE if the button labeled CONTINUE is visible.\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/jpeg;base64,$IMAGE_B64\"}}]}],\"temperature\":0,"max_tokens":16}" \
             | tee /tmp/gemini-vision.json
           grep -q 'CONTINUE' /tmp/gemini-vision.json
+
+      - name: Verify UCOA runtime contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -q pytest pillow numpy opencv-python-headless -r server/requirements.txt
+          PYTHONPATH=. pytest -q
