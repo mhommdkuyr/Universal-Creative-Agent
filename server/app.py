@@ -14,6 +14,7 @@ init_sentry()
 OPENAI_PRIMARY = os.getenv("UCOA_OPENAI_PRIMARY", "false").lower() == "true"
 _LEGACY_REASONING = app_v3.reasoning
 _LEGACY_VISUAL = app_v3.visual
+VISION_ENABLED = app_v3.VISION_ENABLED
 
 
 def _provider_reasoning(system, user):
@@ -47,15 +48,18 @@ def _provider_visual(task, ui_tree, image):
         return _LEGACY_VISUAL(task, ui_tree, image)
 
 
-app_v3.reasoning = _provider_reasoning
-app_v3.visual = _provider_visual
+# Public compatibility hooks retained for the existing test/runtime contract.
+reasoning = _provider_reasoning
+call_vision = _provider_visual
+app_v3.reasoning = lambda system, user: reasoning(system, user)
+app_v3.visual = lambda task, ui_tree, image: call_vision(task, ui_tree, image)
 
 
 @app_v3.app.get("/v1/providers/probe")
 def providers_probe():
     result = provider_router.safe_text_probe()
     try:
-        _, provider = _provider_reasoning("Return ONLY JSON.", "Return exactly {\"ok\":true}.")
+        _, provider = reasoning("Return ONLY JSON.", "Return exactly {\"ok\":true}.")
         result["runtime"] = {"ok": True, "provider": provider}
         if provider == "openai":
             result["runtime"]["model"] = openai_provider.MODEL
