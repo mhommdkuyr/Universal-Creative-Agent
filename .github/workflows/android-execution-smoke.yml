@@ -59,14 +59,31 @@ jobs:
               if [ "$EXEC_OK" = true ] && [ "$FG_OK" = true ]; then break; fi
               sleep 1
             done
-            adb logcat -d -s UCOA_SMOKE:I '*:S' | tee /tmp/ucoa_smoke.log
+            adb logcat -d -v threadtime | tail -n 2500 > /tmp/ucoa_logcat.txt || true
+            adb shell dumpsys accessibility > /tmp/ucoa_accessibility.txt || true
+            adb shell dumpsys activity activities > /tmp/ucoa_activities.txt || true
+            adb logcat -d -s UCOA_SMOKE:I '*:S' | tee /tmp/ucoa_smoke.log || true
             echo "EXEC_OK=$EXEC_OK FG_OK=$FG_OK"
             test "$EXEC_OK" = true
             test "$FG_OK" = true
             echo 'UCOA_REAL_EXECUTION_SMOKE_OK'
+      - name: Upload execution diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ucoa-execution-diagnostics
+          path: |
+            /tmp/ucoa_logcat.txt
+            /tmp/ucoa_accessibility.txt
+            /tmp/ucoa_activities.txt
+            /tmp/ucoa_smoke.log
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Upload APK
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ucoa-debug-apk-execution-smoke
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
           retention-days: 7
