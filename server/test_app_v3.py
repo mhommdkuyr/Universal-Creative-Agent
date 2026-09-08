@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+import time
 
 import app_v3
 
@@ -6,12 +7,15 @@ client = TestClient(app_v3.app)
 
 
 def wait_job(job_id: str):
-    for _ in range(200):
+    # The endpoint queues work on a background ThreadPoolExecutor. Poll with a
+    # small delay so TestClient does not busy-loop before the worker runs.
+    for _ in range(1000):
         x = client.get(f'/v1/agent/jobs/{job_id}').json()
         if x['status'] == 'completed':
             return x['result']
         if x['status'] == 'failed':
             raise AssertionError(x.get('error'))
+        time.sleep(0.01)
     raise AssertionError('timeout')
 
 
