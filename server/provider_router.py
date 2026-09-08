@@ -35,6 +35,10 @@ CB_FAILURES = max(1, int(os.getenv("UCOA_PROVIDER_CB_FAILURES", "3")))
 CB_COOLDOWN = max(1.0, float(os.getenv("UCOA_PROVIDER_CB_COOLDOWN", "30")))
 
 PROVIDERS = [
+    # Hugging Face is the preferred production path for both reasoning and vision.
+    # Inference Providers exposes an OpenAI-compatible Chat Completions API.
+    {"name": "huggingface-text", "key_env": "HF_TOKEN", "base_env": "HF_BASE_URL", "model_env": "HF_MODEL", "default_base": "https://router.huggingface.co/v1", "default_model": "Qwen/Qwen3-4B-Instruct-2507:fastest", "vision": False},
+    {"name": "huggingface-vision", "key_env": "HF_TOKEN", "base_env": "HF_BASE_URL", "model_env": "HF_VISION_MODEL", "default_base": "https://router.huggingface.co/v1", "default_model": "Qwen/Qwen3-VL-2B-Instruct:fastest", "vision": True},
     {"name": "gemini", "key_env": "UCOA_GEMINI_API_KEY", "base_env": "UCOA_GEMINI_BASE_URL", "model_env": "UCOA_GEMINI_MODEL", "default_base": "https://generativelanguage.googleapis.com/v1beta/openai", "default_model": "gemini-3.8-flash", "vision": True},
     {"name": "deepseek", "key_env": "UCOA_DEEPSEEK_API_KEY", "base_env": "UCOA_DEEPSEEK_BASE_URL", "model_env": "UCOA_DEEPSEEK_MODEL", "default_base": "https://api.deepseek.com", "default_model": "deepseek-v4-flash-vision-exp", "vision": True},
     {"name": "omniroute", "key_env": "UCOA_OMNIROUTE_API_KEY", "base_env": "UCOA_OMNIROUTE_BASE_URL", "model_env": "UCOA_OMNIROUTE_MODEL", "default_base": "", "default_model": "auto", "vision": True},
@@ -134,7 +138,10 @@ def _ordered(image: str | None) -> list[str]:
             configured.add(p["name"])
         except Exception:
             continue
-    preferred = ["gemini", "deepseek", "omniroute", "cerebras", "groq"] if image else ["cerebras", "groq", "gemini", "omniroute", "deepseek"]
+    if image:
+        preferred = ["huggingface-vision", "gemini", "deepseek", "omniroute", "huggingface-text"]
+    else:
+        preferred = ["huggingface-text", "cerebras", "groq", "gemini", "omniroute", "deepseek"]
     return [n for n in preferred if n in configured and not _is_open(n)]
 
 
