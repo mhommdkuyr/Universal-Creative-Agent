@@ -56,3 +56,6 @@ jobs:
           set -euo pipefail
           python -m pip install -q pytest pillow numpy opencv-python-headless -r server/requirements.txt
           PYTHONPATH=. pytest -q
+
+      - name: Release validation marker
+        run: echo "Gemini text + vision + UCOA runtime contract passed"
