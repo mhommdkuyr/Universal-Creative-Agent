@@ -180,19 +180,12 @@ class MainActivity : Activity() {
     }
 
     private fun routeThroughLocalBrain(fallback: TaskInterpreter.PlanResult) {
-        if (!PermissionCoordinator.isServiceLive()) {
-            UcoaDiagnostics.log("LOCAL_BRAIN", "الخدمة غير متصلة؛ لن أبدأ التنفيذ المحلي", "service_live=false")
-        }
         addAssistantBubble("أفحص العقل المحلي أولًا…")
         val apps = AppDiscovery.installedLabels(this)
         UcoaDiagnostics.log("LOCAL_BRAIN", "بدء التصنيف المحلي", "apps=${apps.size} task=$latestTaskText")
         localBrain.classify(latestTaskText, apps) { result ->
             runOnUiThread {
-                UcoaDiagnostics.log(
-                    "LOCAL_BRAIN",
-                    if (result.understood) "العقل المحلي فهم المهمة" else "العقل المحلي لم يفهم المهمة — تحويل للسحابة",
-                    "action=${result.action} app=${result.app} confidence=${result.confidence} error=${result.error ?: "none"}"
-                )
+                UcoaDiagnostics.log("LOCAL_BRAIN", if (result.understood) "العقل المحلي فهم المهمة" else "العقل المحلي لم يفهم المهمة — تحويل للسحابة", "action=${result.action} app=${result.app} confidence=${result.confidence} error=${result.error ?: "none"}")
                 if (result.understood && result.action == "open_app" && !result.app.isNullOrBlank()) {
                     addAssistantBubble("العقل المحلي فهم الأمر. سأفتحه محليًا بدون إرسال المهمة إلى السحابة.")
                     addPlanCard(fallback.copy(summary = "تنفيذ محلي بواسطة العقل الموجود داخل التطبيق", steps = listOf("فتح ${result.app}")))
@@ -216,8 +209,7 @@ class MainActivity : Activity() {
             UcoaDiagnostics.log("BRAIN_HEALTH", "نتيجة فحص الجاهزية", "transport=$transportOk ready=$ready detail=$detail")
             if (!transportOk || !ready) {
                 addAssistantBubble("Cloud Brain غير جاهز: $detail")
-                addPlanCard(fallback)
-                autoExecuteLocal()
+                addPlanCard(fallback); autoExecuteLocal()
                 if (selectedMedia.isNotEmpty()) queueBackgroundPreparation(latestTaskText)
                 return@runOnUiThread
             }
@@ -262,9 +254,7 @@ class MainActivity : Activity() {
             connectPhone(); return
         }
         val app = Regex("(?:افتح|فتح|شغل|شغّل)\\s+(واتساب|whatsapp|يوتيوب|youtube|كاب ?كات|capcut|كانفا|canva|كروم|chrome|انستجرام|instagram|تليجرام|telegram|الإعدادات|اعدادات|settings|الضبط)", RegexOption.IGNORE_CASE).find(latestTaskText)?.groupValues?.getOrNull(1)
-        if (app != null) {
-            executeLocalApp(app)
-        } else {
+        if (app != null) executeLocalApp(app) else {
             UcoaDiagnostics.log("EXECUTOR", "لا يوجد منفذ محلي لهذه المهمة", "brain_required=true")
             addAssistantBubble("المهمة تحتاج Cloud Brain؛ لم أنفذ إجراءً غير محدد محليًا.")
         }
@@ -285,9 +275,8 @@ class MainActivity : Activity() {
             if (actual == expected) {
                 addAssistantBubble("✅ تم فتح $requested والتحقق من ظهوره فعليًا على الشاشة.")
                 UcoaDiagnostics.log("VERIFY", "نجح التحقق النهائي", "package=$expected elapsed_ms=${System.currentTimeMillis() - started}")
-            } else if (attempt < 20) {
-                window.decorView.postDelayed({ poll(attempt + 1) }, 250L)
-            } else {
+            } else if (attempt < 20) window.decorView.postDelayed({ poll(attempt + 1) }, 250L)
+            else {
                 addAssistantBubble("❌ أمر الفتح أُرسل لكن التحقق لم يثبت ظهور $requested. آخر package=$actual")
                 UcoaDiagnostics.log("VERIFY", "فشل التحقق النهائي", "expected=$expected actual=$actual elapsed_ms=${System.currentTimeMillis() - started}")
             }
@@ -317,7 +306,7 @@ class MainActivity : Activity() {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val review = Button(this).apply { text = "مراجعة وتعديل"; setOnClickListener { showReview(latestPlan!!) } }
         val execute = Button(this).apply { text = "تنفيذ عالمي"; setOnClickListener { executePlan(card) } }
-        row.addView(execute, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)); row.addView(review, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        row.addView(execute, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)); row.addView(review, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         card.addView(heading); card.addView(summary); card.addView(steps); card.addView(row); chat.addView(card, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, 0, 0, 16) }); latestPlanCard = card
     }
 
