@@ -6,6 +6,7 @@ import app_v4_runtime  # noqa: F401,E402
 import app_v3
 import openai_provider
 import provider_router
+import durable_state
 from observability import init_sentry
 
 init_sentry()
@@ -40,6 +41,18 @@ call_vision=_provider_visual
 app_v3.reasoning=lambda system,user: reasoning(system,user)
 app_v3.visual=lambda task,ui_tree,image: call_vision(task,ui_tree,image)
 
+# Keep the existing in-memory runtime while adding durable Neon persistence when DATABASE_URL is present.
+_legacy_save_state=app_v3.save_state
+
+def _durable_save_state(session_id, state):
+    _legacy_save_state(session_id, state)
+    try:
+        task=str(state.get("task", "")); step=int(state.get("step", 0)); status=str(state.get("phase", "unknown"))
+        durable_state.save_state(session_id, session_id, task, step, status, state)
+    except Exception:
+        pass
+app_v3.save_state=_durable_save_state
+
 @app_v3.app.get("/v1/providers/probe")
 def providers_probe():
     result=provider_router.safe_text_probe()
@@ -59,5 +72,17 @@ def providers_models():
         except Exception:continue
         data.append({"id":f"{p['name']}:{model}","provider":p["name"],"model":model,"vision":vision,"configured":True,"base_url":base})
     return {"object":"list","data":data}
+
+@app_v3.app.get("/v1/agent/state/{session_id}")
+def get_agent_state(session_id: str):
+    return durable_state.load_state(session_id) or {"task_id":session_id,"status":"not_found"}
+
+@app_v3.app.get("/v1/agent/state/{session_id}/events")
+def get_agent_events(session_id: str):
+    return {"events":durable_state.recent_events(session_id)}
+
+@app_v3.app.get("/v1/storage/status")
+def storage_status():
+    return {"durable_storage":durable_state.configured()}
 
 app=app_v3.app
