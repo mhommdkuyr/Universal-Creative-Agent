@@ -36,6 +36,20 @@ jobs:
             sleep 2
           done
           exit 1
+      - name: Verify provider models contract
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o models.json -w '%{http_code}' --max-time 30 "$BRAIN_URL/v1/providers/models")
+          cat models.json
+          test "$code" = "200"
+          python - <<'PY'
+          import json
+          x=json.load(open('models.json'))
+          assert x.get('object') == 'list'
+          assert isinstance(x.get('data'), list)
+          assert all({'provider','model','vision','configured','base_url'} <= set(item) for item in x['data'])
+          print(f"provider models contract passed: {len(x['data'])} providers")
+          PY
       - name: Run state and verifier smoke
         run: |
           set -euo pipefail
