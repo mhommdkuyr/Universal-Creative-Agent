@@ -12,6 +12,8 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.UCOA_GEMINI_API_KEY || secrets.GEMINI_API_KEY }}
       GEMINI_MODEL: gemini-3.8-flash
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
       - name: Check Gemini credentials
         id: gemini_config
         shell: bash
@@ -48,7 +50,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install -q pytest pillow numpy opencv-python-headless -r server/requirements.txt
+          python -m pip install -q pytest pillow numpy opencv-python-headless
+          if [[ -f requirements.txt ]]; then python -m pip install -q -r requirements.txt; fi
+          if [[ -f server/requirements.txt ]]; then python -m pip install -q -r server/requirements.txt; fi
           PYTHONPATH=. pytest -q
       - name: Release validation marker
         if: steps.gemini_config.outputs.available == 'true'
