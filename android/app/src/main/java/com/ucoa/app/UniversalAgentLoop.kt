@@ -5,164 +5,77 @@ import android.os.Looper
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Real observe -> multimodal controller -> safety -> action -> post-action verification loop. */
+/** Observe -> decide -> recover -> act -> verify, with durable human checkpoints. */
 class UniversalAgentLoop(private val brain: AgentBrainClient) {
     interface Listener {
         fun onEvent(text: String)
         fun onFinished(success: Boolean)
         fun onConfirmationRequired(reasons: String) { onEvent("تأكيد مطلوب قبل التنفيذ: $reasons") }
+        fun onHumanIntervention(request: HumanIntervention.Request) { onEvent("تدخل المستخدم مطلوب: ${request.title}") }
     }
-    private val main = Handler(Looper.getMainLooper())
-    private var running = false
-    private var task = ""
-    private var step = 0
-    private var listener: Listener? = null
-    private var history = JSONArray()
-    private var attachments: List<String> = emptyList()
+    private val main=Handler(Looper.getMainLooper()); private var running=false; private var waiting=false
+    private var task=""; private var step=0; private var listener:Listener?=null; private var history=JSONArray(); private var attachments:List<String>=emptyList(); private var recoveryAttempts=0
 
-    fun start(taskText: String, listener: Listener, selectedAttachments: List<String> = emptyList()) {
-        if (running) { UcoaDiagnostics.log("AGENT", "تم رفض بدء دورة جديدة", "already_running=true"); return }
-        if (UcoaAccessibilityService.instance == null) { UcoaDiagnostics.log("AGENT", "فشل البدء", "service_live=false"); listener.onEvent("العقل: خدمة التحكم غير متاحة"); listener.onFinished(false); return }
-        running = true; task = taskText; step = 0; history = JSONArray(); this.listener = listener; attachments = selectedAttachments
-        UcoaDiagnostics.log("AGENT", "بدأت دورة الوكيل", "task=${task.take(500)}")
-        listener.onEvent("العقل العالمي: الإدراك البصري ← التفكير ← الأمان ← التنفيذ ← التحقق.")
-        persist("running"); next()
+    fun start(taskText:String, listener:Listener, selectedAttachments:List<String>=emptyList()) {
+        if(running||waiting)return
+        if(UcoaAccessibilityService.instance==null){listener.onEvent("خدمة التحكم غير متاحة");listener.onFinished(false);return}
+        running=true; waiting=false; task=taskText; step=0; recoveryAttempts=0; history=JSONArray(); this.listener=listener; attachments=selectedAttachments
+        UcoaDiagnostics.log("AGENT","بدأت دورة الوكيل","task=${task.take(500)}"); listener.onEvent("بدأ الوكيل: الإدراك ← القرار ← حل المشكلة ← التنفيذ ← التحقق."); persist("running"); next()
     }
 
-    fun stop() { running = false; persist("stopped"); UcoaDiagnostics.log("AGENT", "أوقف المستخدم الدورة"); listener?.onEvent("العقل العالمي: تم إيقاف المهمة.") }
+    fun resume(){ if(waiting){ waiting=false; running=true; recoveryAttempts=0; persist("resumed"); listener?.onEvent("استئناف المهمة من نقطة التوقف المحفوظة."); next() } }
+    fun stop(){running=false;waiting=false;persist("stopped");listener?.onEvent("تم إيقاف المهمة.")}
+    fun isWaitingForHuman()=waiting
 
-    private fun next() {
-        if (!running) return
-        if (step >= 60) { finish(false, "وصلت المهمة إلى الحد الآمن لخطوات التنفيذ."); return }
-        val service = UcoaAccessibilityService.instance ?: run { finish(false, "فقدت خدمة التحكم."); return }
-        UcoaDiagnostics.log("OBSERVE", "بدء دورة ملاحظة", "step=$step foreground=${service.foregroundPackageName()}")
-
-        // Explicit app bootstrap is a local deterministic operation. We do it before
-        // asking the cloud model so a slow/unavailable planner cannot prevent the
-        // agent from ever reaching the requested application.
-        if (step == 0) {
-            val requestedApp = requestedAppName(task)
-            if (requestedApp != null) {
-                UcoaDiagnostics.log("EXECUTOR", "العثور على تطبيق مطلوب في النص", "requested=$requestedApp")
-                if (service.openAppByName(requestedApp)) {
-                    listener?.onEvent("التنفيذ المحلي: فتح $requestedApp")
-                    history.put(JSONObject().apply { put("step", 0); put("action", "open_app_by_name"); put("ok", true); put("detail", requestedApp) })
-                    persist("opened_$requestedApp")
-                    step = 1
-                    main.postDelayed({ next() }, 1200L)
-                    return
+    private fun next(){
+        if(!running)return
+        if(step>=60){finish(false,"تم استنفاد الحد الآمن لخطوات التنفيذ.");return}
+        val service=UcoaAccessibilityService.instance?:run{finish(false,"فقدت خدمة التحكم.");return}
+        if(step==0){requestedAppName(task)?.let{ if(service.openAppByName(it)){history.put(JSONObject().apply{put("step",0);put("action","open_app_by_name");put("ok",true)});step=1;persist("opened_$it");main.postDelayed({next()},1200);return} }}
+        service.captureScreenshotBase64{beforeScreenshot->
+            if(!running)return@captureScreenshotBase64
+            val beforeUi=service.observeUi(320)
+            brain.step(task,step,history,beforeUi,beforeScreenshot,service.installedAppLabels(),attachments,false){response->main.post{
+                if(!running)return@post
+                if(!response.ok||response.body==null){
+                    recoveryAttempts++
+                    UcoaDiagnostics.log("RECOVERY","فشل القرار — محاولة استرداد","attempt=$recoveryAttempts error=${response.error}")
+                    if(recoveryAttempts<3){listener?.onEvent("أواجه مشكلة مؤقتة؛ سأعيد الملاحظة وأحاول حلها تلقائيًا.");main.postDelayed({next()},1000L*recoveryAttempts);return@post}
+                    finish(false,"لم أستطع حل المشكلة تلقائيًا بعد عدة محاولات آمنة.");return@post
                 }
-                UcoaDiagnostics.log("EXECUTOR", "تعذر فتح التطبيق المطلوب محليًا", "requested=$requestedApp")
-            }
-        }
-
-        service.captureScreenshotBase64 { beforeScreenshot ->
-            if (!running) return@captureScreenshotBase64
-            val beforeUi = service.observeUi(320)
-            UcoaDiagnostics.log("OBSERVE", "اكتملت الملاحظة قبل القرار", "step=$step ui_chars=${beforeUi.length} screenshot=${!beforeScreenshot.isNullOrBlank()}")
-            brain.step(task, step, history, beforeUi, beforeScreenshot, service.installedAppLabels(), attachments, false) { response ->
-                main.post {
-                    if (!running) return@post
-                    if (!response.ok || response.body == null) {
-                        UcoaDiagnostics.log("DECIDE", "فشل قرار Brain", response.error ?: "invalid_response")
-                        finish(false, "تعذر الوصول إلى عقل AI: ${response.error ?: "استجابة غير صالحة"}"); return@post
-                    }
-                    val decision = response.body
-                    val vp = decision.optString("vision_provider").trim()
-                    val visualSummary = decision.optJSONObject("visual_observation")?.optString("screen_summary", "")?.trim().orEmpty()
-                    if (visualSummary.isNotBlank()) listener?.onEvent("الرؤية[$vp]: $visualSummary")
-                    decision.optString("message").trim().takeIf { it.isNotBlank() }?.let { listener?.onEvent("العقل: $it") }
-                    val verification = decision.optJSONObject("verification")
-                    if (verification?.optBoolean("requires_confirmation", false) == true) {
-                        val reasons = verification.optJSONArray("reasons")?.let { a -> (0 until a.length()).joinToString(", ") { a.optString(it) } } ?: "policy"
-                        UcoaDiagnostics.log("SAFETY", "إيقاف بانتظار تأكيد", reasons)
-                        listener?.onConfirmationRequired(reasons); finish(false, "تم إيقاف التنفيذ الآلي حفاظًا على الأمان."); return@post
-                    }
-                    val action = decision.optString("action").trim(); val params = decision.optJSONObject("params") ?: decision
-                    UcoaDiagnostics.log("DECIDE", "استلمت قرار Brain", "step=$step action=$action vision=$vp")
-                    if (decision.optBoolean("done", false) || action.equals("done", true)) { finish(true, decision.optString("message", "اكتملت المهمة.")); return@post }
-                    if (action.isBlank()) { finish(false, "العقل أعاد قرارًا بلا فعل."); return@post }
-                    execute(action, params) { ok, detail -> main.post { afterAction(beforeUi, beforeScreenshot, action, decision, ok, detail) } }
-                }
-            }
+                recoveryAttempts=0
+                val decision=response.body; val vp=decision.optString("vision_provider"); val summary=decision.optJSONObject("visual_observation")?.optString("screen_summary","").orEmpty()
+                if(summary.isNotBlank())listener?.onEvent("الرؤية: $summary")
+                decision.optString("message").takeIf{it.isNotBlank()}?.let{listener?.onEvent("العقل: $it")}
+                HumanIntervention.detect(decision,summary)?.let{ req-> waiting=true;running=false;persist("waiting_${req.kind}");UcoaDiagnostics.log("HUMAN","المهمة تحتاج تدخلًا بشريًا","kind=${req.kind} step=$step");listener?.onHumanIntervention(req);return@post }
+                val verification=decision.optJSONObject("verification")
+                if(verification?.optBoolean("requires_confirmation",false)==true){val reasons=verification.optJSONArray("reasons")?.let{a->(0 until a.length()).joinToString(", "){a.optString(it)}}?:"policy";listener?.onConfirmationRequired(reasons);finish(false,"تم إيقاف التنفيذ الآلي حفاظًا على الأمان.");return@post}
+                val action=decision.optString("action").trim(); val params=decision.optJSONObject("params")?:decision
+                if(decision.optBoolean("done",false)||action.equals("done",true)){finish(true,decision.optString("message","اكتملت المهمة."));return@post}
+                if(action.isBlank()){recoveryAttempts++;if(recoveryAttempts<3){listener?.onEvent("لم أحصل على إجراء صالح؛ سأعيد الملاحظة تلقائيًا.");main.postDelayed({next()},800);return@post};finish(false,"تعذر الحصول على إجراء صالح.");return@post}
+                execute(action,params){ok,detail->main.post{afterAction(beforeUi,beforeScreenshot,action,decision,ok,detail)}}
+            }}
         }
     }
 
-    private fun requestedAppName(text: String): String? {
-        val t = text.lowercase()
-        val aliases = listOf(
-            "capcut" to "CapCut", "كاب كات" to "CapCut", "كابكات" to "CapCut",
-            "youtube" to "YouTube", "يوتيوب" to "YouTube",
-            "canva" to "Canva", "كانفا" to "Canva",
-            "chrome" to "Chrome", "كروم" to "Chrome",
-            "instagram" to "Instagram", "انستجرام" to "Instagram", "انستغرام" to "Instagram",
-            "whatsapp" to "WhatsApp", "واتساب" to "WhatsApp",
-            "telegram" to "Telegram", "تليجرام" to "Telegram",
-            "settings" to "Settings", "الإعدادات" to "Settings", "اعدادات" to "Settings", "الضبط" to "Settings"
-        )
-        return aliases.firstOrNull { t.contains(it.first) }?.second
+    private fun requestedAppName(text:String):String?{val t=text.lowercase();return listOf("capcut" to "CapCut","كاب كات" to "CapCut","كابكات" to "CapCut","youtube" to "YouTube","يوتيوب" to "YouTube","canva" to "Canva","كانفا" to "Canva","chrome" to "Chrome","كروم" to "Chrome","instagram" to "Instagram","انستجرام" to "Instagram","واتساب" to "WhatsApp","whatsapp" to "WhatsApp","telegram" to "Telegram","تليجرام" to "Telegram").firstOrNull{t.contains(it.first)}?.second}
+
+    private fun afterAction(beforeUi:String,beforeScreenshot:String?,action:String,decision:JSONObject,ok:Boolean,detail:String){
+        val service=UcoaAccessibilityService.instance?:run{finish(false,"فقدت خدمة التحكم أثناء التحقق.");return}
+        history.put(JSONObject().apply{put("step",step);put("action",action);put("ok",ok);put("detail",detail.take(700))});persist("step_$step")
+        if(!ok){recoveryAttempts++;listener?.onEvent("تعذر تنفيذ الخطوة؛ سأبحث عن طريقة أخرى تلقائيًا.");if(recoveryAttempts<3){main.postDelayed({next()},700L*recoveryAttempts);return};finish(false,"تعذر حل خطوة التنفيذ بعد عدة محاولات.");return}
+        service.captureScreenshotBase64{afterScreenshot->val afterUi=service.observeUi(320);brain.verifyResult(task,decision,beforeUi,afterUi,beforeScreenshot,afterScreenshot){result->main.post{
+            if(!running)return@post
+            val verified=result.ok&&(result.body?.optBoolean("verified",false)?:false)
+            if(verified){recoveryAttempts=0;listener?.onEvent("تم التحقق من نجاح الخطوة.");step++;persist("verified_$step");main.postDelayed({next()},decision.optLong("wait_after_ms",700L).coerceIn(150L,5000L))}
+            else{recoveryAttempts++;listener?.onEvent("لم يثبت النجاح؛ سأعيد الملاحظة وأحاول تصحيح المسار.");if(recoveryAttempts>=3){listener?.onEvent("سأطلب تدخل المستخدم فقط إذا لم يتوفر حل آلي آخر.");recoveryAttempts=0};main.postDelayed({next()},600L)}
+        }}}
     }
 
-    private fun afterAction(beforeUi: String, beforeScreenshot: String?, action: String, decision: JSONObject, ok: Boolean, detail: String) {
-        val service = UcoaAccessibilityService.instance ?: run { finish(false, "فقدت خدمة التحكم أثناء التحقق."); return }
-        history.put(JSONObject().apply { put("step", step); put("action", action); put("ok", ok); put("detail", detail.take(700)) })
-        UcoaDiagnostics.log("EXECUTOR", "نتيجة الإجراء المحلي", "step=$step action=$action ok=$ok detail=${detail.take(500)}")
-        listener?.onEvent("التنفيذ: $action — ${if (ok) "أُرسل" else "فشل محليًا"}")
-        persist("step_$step")
-        if (!ok) { step++; main.postDelayed({ next() }, 400L); return }
-        service.captureScreenshotBase64 { afterScreenshot ->
-            val afterUi = service.observeUi(320)
-            UcoaDiagnostics.log("VERIFY", "جمع حالة ما بعد الإجراء", "step=$step ui_chars=${afterUi.length} screenshot=${!afterScreenshot.isNullOrBlank()}")
-            brain.verifyResult(task, decision, beforeUi, afterUi, beforeScreenshot, afterScreenshot) { result ->
-                main.post {
-                    if (!running) return@post
-                    val verified = result.ok && (result.body?.optBoolean("verified", false) ?: false)
-                    if (verified) {
-                        UcoaDiagnostics.log("VERIFY", "نجح تحقق Brain", "step=$step")
-                        listener?.onEvent("التحقق: نجح وتغيرت حالة الشاشة.")
-                        step++; persist("verified_$step")
-                        main.postDelayed({ next() }, decision.optLong("wait_after_ms", 700L).coerceIn(150L, 5000L))
-                    } else {
-                        UcoaDiagnostics.log("VERIFY", "فشل تحقق Brain", "step=$step error=${result.error ?: "not_verified"}")
-                        listener?.onEvent("التحقق: لم يثبت نجاح الإجراء؛ سأعيد الملاحظة بدل إعلان الاكتمال.")
-                        step++; persist("verification_failed_$step")
-                        main.postDelayed({ next() }, 600L)
-                    }
-                }
-            }
-        }
-    }
-
-    private fun execute(action: String, p: JSONObject, cb: (Boolean, String) -> Unit) {
-        val s = UcoaAccessibilityService.instance ?: run { cb(false, "service_offline"); return }
-        when (action.lowercase()) {
-            "open_url" -> cb(s.openUrl(p.optString("url")), "")
-            "open_app_by_name" -> cb(s.openAppByName(p.optString("app_name")), p.optString("app_name"))
-            "click_any_text" -> cb(s.clickAnyText(array(p, "texts", "text")), "")
-            "type_into_any" -> cb(s.typeIntoAny(array(p, "hints"), p.optString("text")), "")
-            "share_attachment" -> { val index = p.optInt("index", 0); val target = attachments.getOrNull(index); if (target == null) cb(false, "attachment_index_missing=$index") else cb(s.shareAttachment(target, p.optString("target_package").takeIf { it.isNotBlank() }), "attachment_$index") }
-            "tap" -> cb(s.tap(p.optDouble("x").toFloat(), p.optDouble("y").toFloat()), "")
-            "long_press" -> cb(s.longPress(p.optDouble("x").toFloat(), p.optDouble("y").toFloat(), p.optLong("duration_ms", 700L)), "")
-            "swipe" -> cb(s.swipe(p.optDouble("x1").toFloat(), p.optDouble("y1").toFloat(), p.optDouble("x2").toFloat(), p.optDouble("y2").toFloat(), p.optLong("duration_ms", 500L)), "")
-            "back" -> cb(s.back(), "")
-            "home" -> cb(s.home(), "")
-            "wait" -> main.postDelayed({ cb(true, "waited") }, p.optLong("ms", 1000L).coerceIn(100L, 10000L))
-            "observe" -> cb(true, s.observeUi(320))
-            else -> cb(false, "unsupported_action=$action")
-        }
-    }
-
-    private fun array(obj: JSONObject, key: String, fallbackKey: String? = null): List<String> = buildList {
-        obj.optJSONArray(key)?.let { a -> for (i in 0 until a.length()) add(a.optString(i)) }
-        if (isEmpty() && fallbackKey != null) obj.optString(fallbackKey).takeIf { it.isNotBlank() }?.let { add(it) }
-    }
-
-    private fun persist(status: String) { brain.persistExecutionState(task, step, history, status) }
-    private fun finish(success: Boolean, message: String) {
-        running = false
-        persist(if (success) "completed" else "failed")
-        UcoaDiagnostics.log("AGENT", if (success) "اكتملت دورة الوكيل" else "فشلت دورة الوكيل", "success=$success message=${message.take(700)}")
-        if (message.isNotBlank()) listener?.onEvent(message)
-        listener?.onFinished(success)
-    }
+    private fun execute(action:String,p:JSONObject,cb:(Boolean,String)->Unit){val s=UcoaAccessibilityService.instance?:run{cb(false,"service_offline");return};when(action.lowercase()){
+        "open_url"->cb(s.openUrl(p.optString("url")),"");"open_app_by_name"->cb(s.openAppByName(p.optString("app_name")),p.optString("app_name"));"click_any_text"->cb(s.clickAnyText(array(p,"texts","text")),"");"type_into_any"->cb(s.typeIntoAny(array(p,"hints"),p.optString("text")),"");"share_attachment"->{val i=p.optInt("index",0);val a=attachments.getOrNull(i);if(a==null)cb(false,"attachment_index_missing=$i")else cb(s.shareAttachment(a,p.optString("target_package").takeIf{it.isNotBlank()}),"attachment_$i")};
+        "tap"->cb(s.tap(p.optDouble("x").toFloat(),p.optDouble("y").toFloat()),"");"long_press"->cb(s.longPress(p.optDouble("x").toFloat(),p.optDouble("y").toFloat(),p.optLong("duration_ms",700)),"");"swipe"->cb(s.swipe(p.optDouble("x1").toFloat(),p.optDouble("y1").toFloat(),p.optDouble("x2").toFloat(),p.optDouble("y2").toFloat(),p.optLong("duration_ms",500)),"");"back"->cb(s.back(),"");"home"->cb(s.home(),"");"wait"->main.postDelayed({cb(true,"waited")},p.optLong("ms",1000).coerceIn(100,10000));"observe"->cb(true,s.observeUi(320));else->cb(false,"unsupported_action=$action")}}
+    private fun array(o:JSONObject,k:String,f:String?):List<String>{val out=mutableListOf<String>();o.optJSONArray(k)?.let{a->for(i in 0 until a.length())out+=a.optString(i)};if(out.isEmpty()&&f!=null)o.optString(f).takeIf{it.isNotBlank()}?.let{out+=it};return out}
+    private fun persist(status:String){brain.persistExecutionState(task,step,history,status)}
+    private fun finish(success:Boolean,message:String){running=false;waiting=false;persist(if(success)"completed"else"failed");listener?.onEvent(message);listener?.onFinished(success)}
 }
