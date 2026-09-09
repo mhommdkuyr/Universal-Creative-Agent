@@ -1,18 +1,19 @@
-"""Production provider router for UCOA with multi-key Gemini failover."""
+"""Production provider router for UCOA with Gemini multi-key failover and open-source fallback."""
 from __future__ import annotations
-import hashlib, json, os, re, time
+import base64, hashlib, io, json, os, re, tempfile, time
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from observability import span, set_measurement
 
-CONNECT_TIMEOUT=float(os.getenv("UCOA_PROVIDER_CONNECT_TIMEOUT","2")); TEXT_TIMEOUT=float(os.getenv("UCOA_PROVIDER_TEXT_TIMEOUT","12")); VISION_TIMEOUT=float(os.getenv("UCOA_PROVIDER_VISION_TIMEOUT","20")); MAX_TOKENS=int(os.getenv("UCOA_PROVIDER_MAX_TOKENS","256")); CACHE_TTL=max(0.0,float(os.getenv("UCOA_VISION_CACHE_TTL","3"))); CB_FAILURES=max(1,int(os.getenv("UCOA_PROVIDER_CB_FAILURES","3"))); CB_COOLDOWN=max(1.0,float(os.getenv("UCOA_PROVIDER_CB_COOLDOWN","30")))
+CONNECT_TIMEOUT=float(os.getenv("UCOA_PROVIDER_CONNECT_TIMEOUT","2")); TEXT_TIMEOUT=float(os.getenv("UCOA_PROVIDER_TEXT_TIMEOUT","30")); VISION_TIMEOUT=float(os.getenv("UCOA_PROVIDER_VISION_TIMEOUT","45")); MAX_TOKENS=int(os.getenv("UCOA_PROVIDER_MAX_TOKENS","256")); CACHE_TTL=max(0.0,float(os.getenv("UCOA_VISION_CACHE_TTL","3"))); CB_FAILURES=max(1,int(os.getenv("UCOA_PROVIDER_CB_FAILURES","3"))); CB_COOLDOWN=max(1.0,float(os.getenv("UCOA_PROVIDER_CB_COOLDOWN","30"))); VISION_SPACE=os.getenv("UCOA_VISION_SPACE_URL","https://akhaliq-qwen3-vl-2b-instruct.hf.space").rstrip("/")
 
 PROVIDERS=[
  {"name":"gemini","key_envs":["UCOA_GEMINI_API_KEY","GEMINI_API_KEY"],"base_env":"UCOA_GEMINI_BASE_URL","model_env":"UCOA_GEMINI_MODEL","default_base":"https://generativelanguage.googleapis.com/v1beta/openai","default_model":"gemini-2.5-flash","vision":True},
  {"name":"gemini-2","key_envs":["UCOA_GEMINI_API_KEY_2","GEMINI_API_KEY_2"],"base_env":"UCOA_GEMINI_BASE_URL_2","model_env":"UCOA_GEMINI_MODEL_2","default_base":"https://generativelanguage.googleapis.com/v1beta/openai","default_model":"gemini-2.5-flash","vision":True},
  {"name":"huggingface-text","key_envs":["HF_TOKEN"],"base_env":"HF_BASE_URL","model_env":"HF_MODEL","default_base":"https://router.huggingface.co/v1","default_model":"Qwen/Qwen3-4B-Instruct-2507:fastest","vision":False},
  {"name":"huggingface-vision","key_envs":["HF_TOKEN"],"base_env":"HF_BASE_URL","model_env":"HF_VISION_MODEL","default_base":"https://router.huggingface.co/v1","default_model":"Qwen/Qwen3-VL-2B-Instruct:fastest","vision":True},
+ {"name":"huggingface-space","key_envs":[],"base_env":"HF_SPACE_BASE_URL","model_env":"HF_SPACE_MODEL","default_base":"public","default_model":"Qwen3-VL-2B-Instruct","vision":True,"public":True},
  {"name":"deepseek","key_envs":["UCOA_DEEPSEEK_API_KEY"],"base_env":"UCOA_DEEPSEEK_BASE_URL","model_env":"UCOA_DEEPSEEK_MODEL","default_base":"https://api.deepseek.com","default_model":"deepseek-chat","vision":False},
  {"name":"omniroute","key_envs":["UCOA_OMNIROUTE_API_KEY"],"base_env":"UCOA_OMNIROUTE_BASE_URL","model_env":"UCOA_OMNIROUTE_MODEL","default_base":"","default_model":"auto","vision":True},
  {"name":"cerebras","key_envs":["UCOA_CEREBRAS_API_KEY"],"base_env":"UCOA_CEREBRAS_BASE_URL","model_env":"UCOA_CEREBRAS_MODEL","default_base":"https://api.cerebras.ai/v1","default_model":"gpt-oss-120b","vision":False},
@@ -27,9 +28,10 @@ def _first_env(names):
     for name in names:
         value=os.getenv(name,"").strip()
         if value:return value,name
-    return "",names[0]
+    return "",names[0] if names else "public"
 
 def _cfg(p):
+    if p.get("public"): return "public","","public",bool(p["vision"]),"public"
     key,key_name=_first_env(p["key_envs"])
     if not key: raise RuntimeError("provider not configured")
     base=(os.getenv(p["base_env"],"").strip() or p["default_base"]).rstrip("/"); model=os.getenv(p["model_env"],p["default_model"]).strip()
@@ -50,9 +52,9 @@ def _failure(name):
 
 def _chat(base,key,model,system,user,image,timeout):
     content=user if not image else [{"type":"text","text":user},{"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{image}","detail":"high"}}]
-    payload={"model":model,"temperature":0,"max_tokens":MAX_TOKENS,"messages":[{"role":"system","content":system},{"role":"user","content":content}]}
-    url=base if base.endswith("/chat/completions") else base+"/chat/completions"; req=Request(url,data=json.dumps(payload,ensure_ascii=False).encode(),headers={"Content-Type":"application/json","Accept":"application/json","Authorization":f"Bearer {key}"},method="POST")
-    with urlopen(req,timeout=timeout) as resp:body=json.loads(resp.read().decode())
+    payload={"model":model,"temperature":0,"max_tokens":MAX_TOKENS,"messages":[{"role":"system","content":system},{"role":"user","content":content}]};url=base if base.endswith("/chat/completions") else base+"/chat/completions";headers={"Content-Type":"application/json","Accept":"application/json"};
+    if key:headers["Authorization"]=f"Bearer {key}"
+    with urlopen(Request(url,data=json.dumps(payload,ensure_ascii=False).encode(),headers=headers,method="POST"),timeout=timeout) as resp:body=json.loads(resp.read().decode())
     choices=body.get("choices") or []
     if not choices:raise RuntimeError("no choices")
     content=(choices[0].get("message") or {}).get("content","")
@@ -61,12 +63,24 @@ def _chat(base,key,model,system,user,image,timeout):
     if not text:raise RuntimeError("empty response")
     return text
 
+def _space_call(system,user,image,timeout):
+    from gradio_client import Client, handle_file
+    from PIL import Image
+    raw=base64.b64decode(image) if image else None
+    with tempfile.NamedTemporaryFile(suffix=".jpg") as f:
+        if raw:
+            f.write(raw)
+        else:
+            img=Image.new("RGB",(32,32),(255,255,255));img.save(f,"JPEG")
+        f.flush();client=Client(VISION_SPACE,verbose=False);prompt=system+"\n"+user
+        return str(client.predict({"text":prompt,"files":[handle_file(f.name)]},[],api_name="/qwen_chat_fn"))
+
 def _ordered(image):
     configured=[]
     for p in PROVIDERS:
         try:_cfg(p);configured.append(p["name"])
         except Exception:pass
-    preferred=["gemini","gemini-2","huggingface-vision","omniroute","huggingface-text","deepseek"] if image else ["gemini","gemini-2","huggingface-text","cerebras","groq","deepseek","omniroute"]
+    preferred=["gemini","gemini-2","huggingface-vision","huggingface-space","omniroute","huggingface-text","deepseek"] if image else ["gemini","gemini-2","huggingface-text","cerebras","groq","deepseek","omniroute","huggingface-space"]
     return [n for n in preferred if n in configured and not _is_open(n)]
 
 def call(system,user,image=None):
@@ -76,7 +90,8 @@ def call(system,user,image=None):
         try:
             p=_provider(name);base,key,model,supports,key_name=_cfg(p)
             if image and not supports:raise RuntimeError("provider does not support vision")
-            with span("ai.provider",f"{name} inference",provider=name,model=model,multimodal=bool(image),credential=key_name):raw=_chat(base,key,model,system,user,image,timeout)
+            with span("ai.provider",f"{name} inference",provider=name,model=model,multimodal=bool(image),credential=key_name):
+                raw=_space_call(system,user,image,timeout) if p.get("public") else _chat(base,key,model,system,user,image,timeout)
             _success(name);set_measurement(f"provider.{name}.latency_ms",(time.perf_counter()-started)*1000);return raw,name
         except HTTPError as e:_failure(name);errors.append(f"{name}:HTTP_{e.code}")
         except (URLError,TimeoutError) as e:_failure(name);errors.append(f"{name}:{type(e).__name__}")
@@ -96,7 +111,6 @@ def _extract_json(raw):
     raise ValueError("provider returned non-JSON output")
 
 def reasoning(system,user):return call(system,user,None)
-
 def visual(task,ui_tree,image):
     key=hashlib.sha256(image.encode("ascii","ignore")).hexdigest();now=time.monotonic();cached=_VISION_CACHE.get(key)
     if cached and now-cached[0]<=CACHE_TTL:return cached[1],cached[2]
@@ -109,7 +123,6 @@ def safe_text_probe():
         try:
             _,_,model,vision,key_name=_cfg(p);configured.append({"provider":p["name"],"model":model,"vision":vision,"credential_env":key_name})
         except Exception:pass
-    if not configured:return {"ok":False,"configured":False,"providers":[]}
     try:
         raw,provider=call("Return ONLY JSON.","Return exactly {\"ok\":true}.");return {"ok":True,"configured":True,"providers":[{"provider":provider,"ok":True}],"response":_extract_json(raw),"configured_candidates":[{k:v for k,v in x.items() if k!="credential_env"} for x in configured]}
-    except Exception as exc:return {"ok":False,"configured":True,"providers":configured,"error":type(exc).__name__}
+    except Exception as exc:return {"ok":False,"configured":bool(configured),"providers":configured,"error":type(exc).__name__}
