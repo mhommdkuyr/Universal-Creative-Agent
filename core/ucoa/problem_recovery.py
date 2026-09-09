@@ -31,10 +31,33 @@ class ProblemRecoveryEngine:
         problem=self.classify(observation); attempts=[]
         for name,fn in strategies.get(problem,[]):
             if len(attempts)>=self.max_attempts: break
-            try: ok=bool(fn())
-            except Exception as e: ok=False
-            attempts.append(RecoveryAttempt(name,ok,str(e) if 'e' in locals() else ''))
+            try:
+                ok=bool(fn()); detail=''
+            except Exception as exc:
+                ok=False; detail=type(exc).__name__
+            attempts.append(RecoveryAttempt(name,ok,detail))
             if ok: return RecoveryDecision(problem,True,False,attempts=attempts)
         human={ProblemClass.SIGNUP:'أكمل التسجيل في الخدمة.',ProblemClass.VERIFICATION:'أدخل رمز التحقق أو أكمل التحقق.',ProblemClass.SUBSCRIPTION:'أكمل الاشتراك في الخدمة.',ProblemClass.CREDITS:'جدّد رصيد الخدمة أو اختر خدمة بديلة.',ProblemClass.AUTH:'سجّل الدخول إلى الخدمة.',ProblemClass.PERMISSION:'امنح الإذن المطلوب إذا كنت توافق.'}
         if problem in human: return RecoveryDecision(problem,False,True,human[problem],attempts)
         return RecoveryDecision(problem,False,False,attempts=attempts)
+
+class RecoveryResult(str, Enum):
+    RETRY='retry'; SOLVED='solved'; ALTERNATIVE='alternative'; HUMAN='human'; FAILED='failed'
+
+@dataclass(frozen=True)
+class RecoveryChoice:
+    result: RecoveryResult
+    reason: str = ''
+
+class ProblemRecovery:
+    """Compatibility facade used by policy tests and higher-level orchestration."""
+    def decide(self, problem: ProblemClass, *, skip_available: bool=False, alternative_available: bool=False) -> RecoveryChoice:
+        if problem in {ProblemClass.TRANSIENT, ProblemClass.NETWORK, ProblemClass.UI_CHANGED}:
+            return RecoveryChoice(RecoveryResult.RETRY, 'retryable problem')
+        if problem == ProblemClass.BLOCKING_AD:
+            return RecoveryChoice(RecoveryResult.SOLVED if skip_available else RecoveryResult.RETRY, 'skip or wait for blocking UI')
+        if problem in {ProblemClass.CREDITS, ProblemClass.SUBSCRIPTION}:
+            return RecoveryChoice(RecoveryResult.ALTERNATIVE if alternative_available else RecoveryResult.HUMAN, 'alternative or human intervention')
+        if problem in {ProblemClass.AUTH, ProblemClass.SIGNUP, ProblemClass.VERIFICATION, ProblemClass.PERMISSION}:
+            return RecoveryChoice(RecoveryResult.HUMAN, 'human-only security or account action')
+        return RecoveryChoice(RecoveryResult.FAILED, 'no safe automatic strategy')
