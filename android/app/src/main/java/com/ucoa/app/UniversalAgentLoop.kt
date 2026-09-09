@@ -14,9 +14,9 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
         fun onHumanIntervention(request: HumanIntervention.Request) { onEvent("تدخل المستخدم مطلوب: ${request.title}") }
     }
     private val main=Handler(Looper.getMainLooper()); private var running=false; private var waiting=false
-    private var task=""; private var step=0; private var listener:Listener?=null; private var history=JSONArray(); private var attachments:List<String>=emptyList(); private var recoveryAttempts=0
+    private var task=""; private var step=0; private var listener:Listener?=null; private var history=JSONArray(); private var attachments: List<String> = emptyList(); private var recoveryAttempts=0
 
-    fun start(taskText:String, listener:Listener, selectedAttachments:List<String>=emptyList()) {
+    fun start(taskText:String, listener:Listener, selectedAttachments: List<String> = emptyList()) {
         if(running||waiting)return
         if(UcoaAccessibilityService.instance==null){listener.onEvent("خدمة التحكم غير متاحة");listener.onFinished(false);return}
         running=true; waiting=false; task=taskText; step=0; recoveryAttempts=0; history=JSONArray(); this.listener=listener; attachments=selectedAttachments
@@ -44,7 +44,7 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
                     finish(false,"لم أستطع حل المشكلة تلقائيًا بعد عدة محاولات آمنة.");return@post
                 }
                 recoveryAttempts=0
-                val decision=response.body; val vp=decision.optString("vision_provider"); val summary=decision.optJSONObject("visual_observation")?.optString("screen_summary","").orEmpty()
+                val decision=response.body; val summary=decision.optJSONObject("visual_observation")?.optString("screen_summary","").orEmpty()
                 if(summary.isNotBlank())listener?.onEvent("الرؤية: $summary")
                 decision.optString("message").takeIf{it.isNotBlank()}?.let{listener?.onEvent("العقل: $it")}
                 HumanIntervention.detect(decision,summary)?.let{ req-> waiting=true;running=false;persist("waiting_${req.kind}");UcoaDiagnostics.log("HUMAN","المهمة تحتاج تدخلًا بشريًا","kind=${req.kind} step=$step");listener?.onHumanIntervention(req);return@post }
@@ -68,7 +68,7 @@ class UniversalAgentLoop(private val brain: AgentBrainClient) {
             if(!running)return@post
             val verified=result.ok&&(result.body?.optBoolean("verified",false)?:false)
             if(verified){recoveryAttempts=0;listener?.onEvent("تم التحقق من نجاح الخطوة.");step++;persist("verified_$step");main.postDelayed({next()},decision.optLong("wait_after_ms",700L).coerceIn(150L,5000L))}
-            else{recoveryAttempts++;listener?.onEvent("لم يثبت النجاح؛ سأعيد الملاحظة وأحاول تصحيح المسار.");if(recoveryAttempts>=3){listener?.onEvent("سأطلب تدخل المستخدم فقط إذا لم يتوفر حل آلي آخر.");recoveryAttempts=0};main.postDelayed({next()},600L)}
+            else{recoveryAttempts++;listener?.onEvent("لم يثبت النجاح؛ سأعيد الملاحظة وأحاول تصحيح المسار.");if(recoveryAttempts>=3){listener?.onEvent("سأعيد التحقق بعد تحديث الشاشة بدل إعلان الفشل.");recoveryAttempts=0};main.postDelayed({next()},600L)}
         }}}
     }
 
