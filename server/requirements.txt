@@ -5,3 +5,4 @@ python-multipart>=0.0.20,<1
 sentry-sdk>=2.0,<3
 pillow>=11,<13
 gradio-client>=2.0,<3
+psycopg[binary]>=3.2,<4
