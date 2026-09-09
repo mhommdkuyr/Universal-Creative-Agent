@@ -9,8 +9,8 @@ from observability import span, set_measurement
 CONNECT_TIMEOUT=float(os.getenv("UCOA_PROVIDER_CONNECT_TIMEOUT","2")); TEXT_TIMEOUT=float(os.getenv("UCOA_PROVIDER_TEXT_TIMEOUT","12")); VISION_TIMEOUT=float(os.getenv("UCOA_PROVIDER_VISION_TIMEOUT","20")); MAX_TOKENS=int(os.getenv("UCOA_PROVIDER_MAX_TOKENS","256")); CACHE_TTL=max(0.0,float(os.getenv("UCOA_VISION_CACHE_TTL","3"))); CB_FAILURES=max(1,int(os.getenv("UCOA_PROVIDER_CB_FAILURES","3"))); CB_COOLDOWN=max(1.0,float(os.getenv("UCOA_PROVIDER_CB_COOLDOWN","30")))
 
 PROVIDERS=[
- {"name":"gemini-primary","key_envs":["UCOA_GEMINI_API_KEY","GEMINI_API_KEY"],"base_env":"UCOA_GEMINI_BASE_URL","model_env":"UCOA_GEMINI_MODEL","default_base":"https://generativelanguage.googleapis.com/v1beta/openai","default_model":"gemini-2.5-flash","vision":True},
- {"name":"gemini-secondary","key_envs":["UCOA_GEMINI_API_KEY_2","GEMINI_API_KEY_2"],"base_env":"UCOA_GEMINI_BASE_URL_2","model_env":"UCOA_GEMINI_MODEL_2","default_base":"https://generativelanguage.googleapis.com/v1beta/openai","default_model":"gemini-2.5-flash","vision":True},
+ {"name":"gemini","key_envs":["UCOA_GEMINI_API_KEY","GEMINI_API_KEY"],"base_env":"UCOA_GEMINI_BASE_URL","model_env":"UCOA_GEMINI_MODEL","default_base":"https://generativelanguage.googleapis.com/v1beta/openai","default_model":"gemini-2.5-flash","vision":True},
+ {"name":"gemini-2","key_envs":["UCOA_GEMINI_API_KEY_2","GEMINI_API_KEY_2"],"base_env":"UCOA_GEMINI_BASE_URL_2","model_env":"UCOA_GEMINI_MODEL_2","default_base":"https://generativelanguage.googleapis.com/v1beta/openai","default_model":"gemini-2.5-flash","vision":True},
  {"name":"huggingface-text","key_envs":["HF_TOKEN"],"base_env":"HF_BASE_URL","model_env":"HF_MODEL","default_base":"https://router.huggingface.co/v1","default_model":"Qwen/Qwen3-4B-Instruct-2507:fastest","vision":False},
  {"name":"huggingface-vision","key_envs":["HF_TOKEN"],"base_env":"HF_BASE_URL","model_env":"HF_VISION_MODEL","default_base":"https://router.huggingface.co/v1","default_model":"Qwen/Qwen3-VL-2B-Instruct:fastest","vision":True},
  {"name":"deepseek","key_envs":["UCOA_DEEPSEEK_API_KEY"],"base_env":"UCOA_DEEPSEEK_BASE_URL","model_env":"UCOA_DEEPSEEK_MODEL","default_base":"https://api.deepseek.com","default_model":"deepseek-chat","vision":False},
@@ -66,7 +66,7 @@ def _ordered(image):
     for p in PROVIDERS:
         try:_cfg(p);configured.append(p["name"])
         except Exception:pass
-    preferred=["gemini-primary","gemini-secondary","huggingface-vision","omniroute","huggingface-text","deepseek"] if image else ["gemini-primary","gemini-secondary","huggingface-text","cerebras","groq","deepseek","omniroute"]
+    preferred=["gemini","gemini-2","huggingface-vision","omniroute","huggingface-text","deepseek"] if image else ["gemini","gemini-2","huggingface-text","cerebras","groq","deepseek","omniroute"]
     return [n for n in preferred if n in configured and not _is_open(n)]
 
 def call(system,user,image=None):
