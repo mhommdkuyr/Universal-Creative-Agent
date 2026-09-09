@@ -1,12 +1,8 @@
 name: Production Gemini Probe
-
 on:
   workflow_dispatch:
   push:
-    paths:
-      - 'server/app.py'
-      - 'server/provider_router.py'
-      - '.github/workflows/production-vision-probe.yml'
+    paths: ['server/app.py','server/provider_router.py','.github/workflows/production-vision-probe.yml']
 
 jobs:
   gemini-probe:
@@ -27,8 +23,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsS --max-time 60 https://generativelanguage.googleapis.com/v1beta/openai/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer $GEMINI_API_KEY" -d "{\"model\":\"$GEMINI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Return exactly OK.\"}],\"temperature\":0,\"max_tokens\":16}" | tee /tmp/gemini-text.json
-          grep -q 'OK' /tmp/gemini-text.json
+          for attempt in 1 2 3 4; do
+            if curl -fsS --max-time 60 https://generativelanguage.googleapis.com/v1beta/openai/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer $GEMINI_API_KEY" -d "{\"model\":\"$GEMINI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Return exactly OK.\"}],\"temperature\":0,\"max_tokens\":16}" | tee /tmp/gemini-text.json && grep -q 'OK' /tmp/gemini-text.json; then exit 0; fi
+            echo "Gemini text probe attempt $attempt failed; retrying transient provider error…"; sleep 5
+          done
+          exit 1
       - name: Verify Gemini vision API
         if: steps.gemini_config.outputs.available == 'true'
         shell: bash
@@ -40,8 +39,11 @@ jobs:
           img=Image.new('RGB',(320,180),'white');d=ImageDraw.Draw(img);d.rectangle((100,65,220,115),fill='#dddddd',outline='black');d.text((127,82),'CONTINUE',fill='black');img.save('/tmp/continue.jpg',format='JPEG',quality=90)
           PY
           IMAGE_B64="$(base64 -w0 /tmp/continue.jpg)"
-          curl -fsS --max-time 90 https://generativelanguage.googleapis.com/v1beta/openai/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer $GEMINI_API_KEY" -d "{\"model\":\"$GEMINI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Return exactly CONTINUE if the button labeled CONTINUE is visible.\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/jpeg;base64,$IMAGE_B64\"}}]}],\"temperature\":0,\"max_tokens\":16}" | tee /tmp/gemini-vision.json
-          grep -q 'CONTINUE' /tmp/gemini-vision.json
+          for attempt in 1 2 3 4; do
+            if curl -fsS --max-time 90 https://generativelanguage.googleapis.com/v1beta/openai/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer $GEMINI_API_KEY" -d "{\"model\":\"$GEMINI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Return exactly CONTINUE if the button labeled CONTINUE is visible.\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/jpeg;base64,$IMAGE_B64\"}}]}],\"temperature\":0,\"max_tokens\":16}" | tee /tmp/gemini-vision.json && grep -q 'CONTINUE' /tmp/gemini-vision.json; then exit 0; fi
+            echo "Gemini vision probe attempt $attempt failed; retrying transient provider error…"; sleep 5
+          done
+          exit 1
       - name: Verify UCOA runtime contract
         shell: bash
         run: |
