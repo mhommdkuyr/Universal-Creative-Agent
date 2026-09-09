@@ -16,6 +16,6 @@ class RevisionPlanner:
             return next((a for a in artifacts if a.artifact_id==request.target_artifact_id),None)
         text=request.instruction.lower()
         for a in artifacts:
-            if any(k in text for k in a.metadata.get('keywords',[])): return a
+            if any(k.lower() in text for k in a.metadata.get('keywords',[])): return a
         return artifacts[0] if artifacts else None
     def affected_steps(self, artifact:ResultArtifact)->list[str]: return list(artifact.produced_by_steps)

@@ -1,0 +1,58 @@
+name: CapCut E2E
+# Expensive release acceptance: not part of the default push build.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '47 2 * * *'
+
+concurrency:
+  group: capcut-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capcut-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - uses: gradle/actions/setup-gradle@v4
+      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Build UCOA debug APK
+        run: gradle -p android assembleDebug --stacktrace
+      - uses: actions/cache@v4
+        with:
+          path: .cache/capcut
+          key: capcut-apk-v1-${{ runner.os }}
+      - name: Prepare cache and APK path
+        run: mkdir -p .cache/capcut && test -s android/app/build/outputs/apk/debug/app-debug.apk
+      - name: Check KVM
+        run: |
+          if [ -e /dev/kvm ]; then echo "KVM_AVAILABLE=true"; else echo "KVM_AVAILABLE=false"; fi
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: default
+          arch: x86_64
+          profile: pixel_2
+          force-avd-creation: true
+          emulator-options: -no-window -noaudio -no-boot-anim -gpu swiftshader_indirect
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            adb wait-for-device
+            AAPT_PATH="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)"
+            test -n "$AAPT_PATH"
+            export PATH="$(dirname "$AAPT_PATH"):$PATH"
+            test "$(command -v aapt)" = "$(dirname "$AAPT_PATH")/aapt"
+            export CAPCUT_APK_PATH="$GITHUB_WORKSPACE/.cache/capcut/capcut.apk"
+            export UCOA_APK_PATH="$GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug.apk"
+            bash ./server/ci_capcut_e2e.sh
+        env:
+          CAPCUT_APK_SHA256: ${{ secrets.CAPCUT_APK_SHA256 }}

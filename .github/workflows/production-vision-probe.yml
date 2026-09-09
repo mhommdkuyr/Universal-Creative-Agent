@@ -1,0 +1,80 @@
+name: Production Gemini Probe
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'server/app.py'
+      - 'server/provider_router.py'
+      - '.github/workflows/production-vision-probe.yml'
+
+jobs:
+  gemini-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      GEMINI_API_KEY: ${{ secrets.UCOA_GEMINI_API_KEY || secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: gemini-2.5-flash
+    steps:
+      - name: Check Gemini credentials
+        id: gemini_config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${GEMINI_API_KEY:-}" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Gemini API secret is not configured; external text/vision probes will be skipped."
+          fi
+
+      - name: Verify Gemini text API
+        if: steps.gemini_config.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 60 \
+            https://generativelanguage.googleapis.com/v1beta/openai/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $GEMINI_API_KEY" \
+            -d "{\"model\":\"$GEMINI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Return exactly OK.\"}],\"temperature\":0,\"max_tokens\":16}" \
+            | tee /tmp/gemini-text.json
+          grep -q 'OK' /tmp/gemini-text.json
+
+      - name: Verify Gemini vision API
+        if: steps.gemini_config.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -q pillow
+          python - <<'PY'
+          from PIL import Image, ImageDraw
+          img=Image.new('RGB',(320,180),'white')
+          d=ImageDraw.Draw(img)
+          d.rectangle((100,65,220,115),fill='#dddddd',outline='black')
+          d.text((127,82),'CONTINUE',fill='black')
+          img.save('/tmp/continue.jpg',format='JPEG',quality=90)
+          PY
+          IMAGE_B64="$(base64 -w0 /tmp/continue.jpg)"
+          curl -fsS --max-time 90 \
+            https://generativelanguage.googleapis.com/v1beta/openai/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $GEMINI_API_KEY" \
+            -d "{\"model\":\"$GEMINI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Return exactly CONTINUE if the button labeled CONTINUE is visible.\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/jpeg;base64,$IMAGE_B64\"}}]}],\"temperature\":0,\"max_tokens\":16}" \
+            | tee /tmp/gemini-vision.json
+          grep -q 'CONTINUE' /tmp/gemini-vision.json
+
+      - name: Verify UCOA runtime contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -q pytest pillow numpy opencv-python-headless -r server/requirements.txt
+          PYTHONPATH=. pytest -q
+
+      - name: Release validation marker
+        if: steps.gemini_config.outputs.available == 'true'
+        run: echo "Gemini text + vision + UCOA runtime contract passed"
+
+      - name: Runtime-only validation marker
+        if: steps.gemini_config.outputs.available != 'true'
+        run: echo "UCOA runtime contract passed; Gemini external probe skipped because no API secret is configured"

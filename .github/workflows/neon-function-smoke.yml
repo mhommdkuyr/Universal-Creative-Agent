@@ -1,0 +1,24 @@
+name: Neon Function Smoke
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Health
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 30             https://br-sparkling-dust-ael6x30u-ucoa.compute.c-2.us-east-2.aws.neon.tech/health | tee /tmp/health.json
+          grep -q '"ok":true' /tmp/health.json
+      - name: Models endpoint
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /tmp/models.json -w '%{http_code}' --max-time 30             https://br-sparkling-dust-ael6x30u-ucoa.compute.c-2.us-east-2.aws.neon.tech/v1/providers/models)
+          cat /tmp/models.json
+          test "$code" = "200"
+          grep -q '"data"' /tmp/models.json

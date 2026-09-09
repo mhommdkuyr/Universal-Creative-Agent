@@ -1,9 +1,9 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import time
 @dataclass
 class TaskNotification:
-    task_id:str; title:str; body:str; kind:str; created_at:float=time()
+    task_id:str; title:str; body:str; kind:str; created_at:float=field(default_factory=time)
 class NotificationCenter:
     def __init__(self): self._sent:set[tuple[str,str]]=set(); self._items:list[TaskNotification]=[]
     def notify(self,task_id:str,kind:str,title:str,body:str)->bool:

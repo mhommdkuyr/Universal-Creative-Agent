@@ -33,7 +33,7 @@ class ProblemRecoveryEngine:
             if len(attempts)>=self.max_attempts: break
             try: ok=bool(fn())
             except Exception as e: ok=False
-            attempts.append(RecoveryAttempt(name,ok))
+            attempts.append(RecoveryAttempt(name,ok,str(e) if 'e' in locals() else ''))
             if ok: return RecoveryDecision(problem,True,False,attempts=attempts)
         human={ProblemClass.SIGNUP:'أكمل التسجيل في الخدمة.',ProblemClass.VERIFICATION:'أدخل رمز التحقق أو أكمل التحقق.',ProblemClass.SUBSCRIPTION:'أكمل الاشتراك في الخدمة.',ProblemClass.CREDITS:'جدّد رصيد الخدمة أو اختر خدمة بديلة.',ProblemClass.AUTH:'سجّل الدخول إلى الخدمة.',ProblemClass.PERMISSION:'امنح الإذن المطلوب إذا كنت توافق.'}
         if problem in human: return RecoveryDecision(problem,False,True,human[problem],attempts)
