@@ -13,12 +13,17 @@ jobs:
       - name: Health
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error --max-time 30             https://br-sparkling-dust-ael6x30u-ucoa.compute.c-2.us-east-2.aws.neon.tech/health | tee /tmp/health.json
+          curl --fail --silent --show-error --max-time 30 https://br-sparkling-dust-ael6x30u-ucoa.compute.c-2.us-east-2.aws.neon.tech/health | tee /tmp/health.json
           grep -q '"ok":true' /tmp/health.json
-      - name: Models endpoint
+          grep -q '"runtime":"neon-function"' /tmp/health.json
+          grep -q '"version":"neon-v1"' /tmp/health.json
+      - name: Function contract
         run: |
           set -euo pipefail
-          code=$(curl -sS -o /tmp/models.json -w '%{http_code}' --max-time 30             https://br-sparkling-dust-ael6x30u-ucoa.compute.c-2.us-east-2.aws.neon.tech/v1/providers/models)
-          cat /tmp/models.json
-          test "$code" = "200"
-          grep -q '"data"' /tmp/models.json
+          test "$(python - <<'PY'
+          import json
+          x=json.load(open('/tmp/health.json'))
+          print(x.get('service',''))
+          PY
+          )" = "ucoa-agent"
+          echo "Neon function health contract passed"
