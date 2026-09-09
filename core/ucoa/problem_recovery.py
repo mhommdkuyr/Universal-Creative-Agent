@@ -4,7 +4,7 @@ from enum import Enum
 from typing import Any, Callable
 
 class ProblemClass(str, Enum):
-    TRANSIENT='transient'; UI_CHANGED='ui_changed'; NETWORK='network'; BLOCKING_AD='blocking_ad'; AUTH='auth'; SIGNUP='signup'; VERIFICATION='verification'; CREDITS='credits'; SUBSCRIPTION='subscription'; PERMISSION='permission'; UNKNOWN='unknown'
+    TRANSIENT='transient'; UI_CHANGED='ui_changed'; NETWORK='network'; BLOCKING_AD='blocking_ad'; BLOCKING_UI='blocking_ad'; AUTH='auth'; SIGNUP='signup'; VERIFICATION='verification'; CREDITS='credits'; SUBSCRIPTION='subscription'; PERMISSION='permission'; UNKNOWN='unknown'
 
 @dataclass
 class RecoveryAttempt:
@@ -31,10 +31,8 @@ class ProblemRecoveryEngine:
         problem=self.classify(observation); attempts=[]
         for name,fn in strategies.get(problem,[]):
             if len(attempts)>=self.max_attempts: break
-            try:
-                ok=bool(fn()); detail=''
-            except Exception as exc:
-                ok=False; detail=type(exc).__name__
+            try: ok=bool(fn()); detail=''
+            except Exception as exc: ok=False; detail=type(exc).__name__
             attempts.append(RecoveryAttempt(name,ok,detail))
             if ok: return RecoveryDecision(problem,True,False,attempts=attempts)
         human={ProblemClass.SIGNUP:'أكمل التسجيل في الخدمة.',ProblemClass.VERIFICATION:'أدخل رمز التحقق أو أكمل التحقق.',ProblemClass.SUBSCRIPTION:'أكمل الاشتراك في الخدمة.',ProblemClass.CREDITS:'جدّد رصيد الخدمة أو اختر خدمة بديلة.',ProblemClass.AUTH:'سجّل الدخول إلى الخدمة.',ProblemClass.PERMISSION:'امنح الإذن المطلوب إذا كنت توافق.'}
@@ -54,8 +52,8 @@ class ProblemRecovery:
     def decide(self, problem: ProblemClass, *, skip_available: bool=False, alternative_available: bool=False) -> RecoveryChoice:
         if problem in {ProblemClass.TRANSIENT, ProblemClass.NETWORK, ProblemClass.UI_CHANGED}:
             return RecoveryChoice(RecoveryResult.RETRY, 'retryable problem')
-        if problem == ProblemClass.BLOCKING_AD:
-            return RecoveryChoice(RecoveryResult.SOLVED if skip_available else RecoveryResult.RETRY, 'skip or wait for blocking UI')
+        if problem == ProblemClass.BLOCKING_UI:
+            return RecoveryChoice(RecoveryResult.SOLVED if skip_available else RecoveryResult.RETRY, 'skip if available, otherwise wait and retry')
         if problem in {ProblemClass.CREDITS, ProblemClass.SUBSCRIPTION}:
             return RecoveryChoice(RecoveryResult.ALTERNATIVE if alternative_available else RecoveryResult.HUMAN, 'alternative or human intervention')
         if problem in {ProblemClass.AUTH, ProblemClass.SIGNUP, ProblemClass.VERIFICATION, ProblemClass.PERMISSION}:
