@@ -5,22 +5,11 @@ from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from observability import span, set_measurement
-
 CONNECT_TIMEOUT=float(os.getenv("UCOA_PROVIDER_CONNECT_TIMEOUT","2")); TEXT_TIMEOUT=float(os.getenv("UCOA_PROVIDER_TEXT_TIMEOUT","30")); VISION_TIMEOUT=float(os.getenv("UCOA_PROVIDER_VISION_TIMEOUT","45")); MAX_TOKENS=int(os.getenv("UCOA_PROVIDER_MAX_TOKENS","256")); CACHE_TTL=max(0.0,float(os.getenv("UCOA_VISION_CACHE_TTL","3"))); CB_FAILURES=max(1,int(os.getenv("UCOA_PROVIDER_CB_FAILURES","3"))); CB_COOLDOWN=max(1.0,float(os.getenv("UCOA_PROVIDER_CB_COOLDOWN","30"))); VISION_SPACE=os.getenv("UCOA_VISION_SPACE_URL","https://akhaliq-qwen3-vl-2b-instruct.hf.space").rstrip("/")
-PROVIDERS=[
- {"name":"gemini","key_envs":["UCOA_GEMINI_API_KEY","GEMINI_API_KEY"],"base_env":"UCOA_GEMINI_BASE_URL","model_env":"UCOA_GEMINI_MODEL","default_base":"https://generativelanguage.googleapis.com/v1beta/openai","default_model":"gemini-3.8-flash","vision":True},
- {"name":"gemini-2","key_envs":["UCOA_GEMINI_API_KEY_2","GEMINI_API_KEY_2"],"base_env":"UCOA_GEMINI_BASE_URL_2","model_env":"UCOA_GEMINI_MODEL_2","default_base":"https://generativelanguage.googleapis.com/v1beta/openai","default_model":"gemini-3.8-flash","vision":True},
- {"name":"huggingface-text","key_envs":["HF_TOKEN"],"base_env":"HF_BASE_URL","model_env":"HF_MODEL","default_base":"https://router.huggingface.co/v1","default_model":"Qwen/Qwen3-4B-Instruct-2507:fastest","vision":False},
- {"name":"huggingface-vision","key_envs":["HF_TOKEN"],"base_env":"HF_BASE_URL","model_env":"HF_VISION_MODEL","default_base":"https://router.huggingface.co/v1","default_model":"Qwen/Qwen3-VL-2B-Instruct:fastest","vision":True},
- {"name":"huggingface-space","key_envs":[],"base_env":"HF_SPACE_BASE_URL","model_env":"HF_SPACE_MODEL","default_base":"public","default_model":"Qwen3-VL-2B-Instruct","vision":True,"public":True},
- {"name":"deepseek","key_envs":["UCOA_DEEPSEEK_API_KEY"],"base_env":"UCOA_DEEPSEEK_BASE_URL","model_env":"UCOA_DEEPSEEK_MODEL","default_base":"https://api.deepseek.com","default_model":"deepseek-chat","vision":False},
- {"name":"omniroute","key_envs":["UCOA_OMNIROUTE_API_KEY"],"base_env":"UCOA_OMNIROUTE_BASE_URL","model_env":"UCOA_OMNIROUTE_MODEL","default_base":"","default_model":"auto","vision":True},
- {"name":"cerebras","key_envs":["UCOA_CEREBRAS_API_KEY"],"base_env":"UCOA_CEREBRAS_BASE_URL","model_env":"UCOA_CEREBRAS_MODEL","default_base":"https://api.cerebras.ai/v1","default_model":"gpt-oss-120b","vision":False},
- {"name":"groq","key_envs":["UCOA_GROQ_API_KEY"],"base_env":"UCOA_GROQ_BASE_URL","model_env":"UCOA_GROQ_MODEL","default_base":"https://api.groq.com/openai/v1","default_model":"openai/gpt-oss-120b","vision":False},
-]
+PROVIDERS=[{"name":"gemini","key_envs":["UCOA_GEMINI_API_KEY","GEMINI_API_KEY"],"base_env":"UCOA_GEMINI_BASE_URL","model_env":"UCOA_GEMINI_MODEL","default_base":"https://generativelanguage.googleapis.com/v1beta/openai","default_model":"gemini-3.8-flash","vision":True},{"name":"gemini-2","key_envs":["UCOA_GEMINI_API_KEY_2","GEMINI_API_KEY_2"],"base_env":"UCOA_GEMINI_BASE_URL_2","model_env":"UCOA_GEMINI_MODEL_2","default_base":"https://generativelanguage.googleapis.com/v1beta/openai","default_model":"gemini-3.8-flash","vision":True},{"name":"huggingface-text","key_envs":["HF_TOKEN"],"base_env":"HF_BASE_URL","model_env":"HF_MODEL","default_base":"https://router.huggingface.co/v1","default_model":"Qwen/Qwen3-4B-Instruct-2507:fastest","vision":False},{"name":"huggingface-vision","key_envs":["HF_TOKEN"],"base_env":"HF_BASE_URL","model_env":"HF_VISION_MODEL","default_base":"https://router.huggingface.co/v1","default_model":"Qwen/Qwen3-VL-2B-Instruct:fastest","vision":True},{"name":"huggingface-space","key_envs":[],"base_env":"HF_SPACE_BASE_URL","model_env":"HF_SPACE_MODEL","default_base":"public","default_model":"Qwen3-VL-2B-Instruct","vision":True,"public":True},{"name":"deepseek","key_envs":["UCOA_DEEPSEEK_API_KEY"],"base_env":"UCOA_DEEPSEEK_BASE_URL","model_env":"UCOA_DEEPSEEK_MODEL","default_base":"https://api.deepseek.com","default_model":"deepseek-chat","vision":False},{"name":"omniroute","key_envs":["UCOA_OMNIROUTE_API_KEY"],"base_env":"UCOA_OMNIROUTE_BASE_URL","model_env":"UCOA_OMNIROUTE_MODEL","default_base":"","default_model":"auto","vision":True},{"name":"cerebras","key_envs":["UCOA_CEREBRAS_API_KEY"],"base_env":"UCOA_CEREBRAS_BASE_URL","model_env":"UCOA_CEREBRAS_MODEL","default_base":"https://api.cerebras.ai/v1","default_model":"gpt-oss-120b","vision":False},{"name":"groq","key_envs":["UCOA_GROQ_API_KEY"],"base_env":"UCOA_GROQ_BASE_URL","model_env":"UCOA_GROQ_MODEL","default_base":"https://api.groq.com/openai/v1","default_model":"openai/gpt-oss-120b","vision":False}]
 @dataclass
 class CircuitState: failures:int=0; opened_at:float=0.0
-_BREAKERS={p["name"]:CircuitState() for p in PROVIDERS}; _VISION_CACHE={}
+_BREAKERS={p["name"]:CircuitState() for p in PROVIDERS};_VISION_CACHE={}
 def _first_env(names):
     for name in names:
         value=os.getenv(name,"").strip()
@@ -45,7 +34,9 @@ def _failure(name):
     if s.failures>=CB_FAILURES:s.opened_at=time.monotonic()
 def _chat(base,key,model,system,user,image,timeout):
     content=user if not image else [{"type":"text","text":user},{"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{image}","detail":"high"}}]
-    payload={"model":model,"temperature":0,"max_tokens":MAX_TOKENS,"messages":[{"role":"system","content":system},{"role":"user","content":content}]};url=base if base.endswith("/chat/completions") else base+"/chat/completions";headers={"Content-Type":"application/json","Accept":"application/json","x-goog-api-client":"ucoa/1.0"}
+    payload={"model":model,"temperature":0,"max_tokens":MAX_TOKENS,"messages":[{"role":"system","content":system},{"role":"user","content":content}]}
+    if model.startswith("gemini-3"):payload["reasoning_effort"]="low"
+    url=base if base.endswith("/chat/completions") else base+"/chat/completions";headers={"Content-Type":"application/json","Accept":"application/json","x-goog-api-client":"ucoa/1.0"}
     if key:headers["Authorization"]=f"Bearer {key}"
     with urlopen(Request(url,data=json.dumps(payload,ensure_ascii=False).encode(),headers=headers,method="POST"),timeout=timeout) as resp:body=json.loads(resp.read().decode())
     choices=body.get("choices") or []
