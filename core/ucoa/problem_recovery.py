@@ -1,41 +1,40 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable
 
 class ProblemClass(str, Enum):
-    TRANSIENT='transient'; BLOCKING_UI='blocking_ui'; SIGNUP='signup'; VERIFICATION='verification'; CREDITS='credits'; SUBSCRIPTION='subscription'; PERMISSION='permission'; UNKNOWN='unknown'
+    TRANSIENT='transient'; UI_CHANGED='ui_changed'; NETWORK='network'; BLOCKING_AD='blocking_ad'; AUTH='auth'; SIGNUP='signup'; VERIFICATION='verification'; CREDITS='credits'; SUBSCRIPTION='subscription'; PERMISSION='permission'; UNKNOWN='unknown'
 
-class RecoveryResult(str, Enum):
-    SOLVED='solved'; RETRY='retry'; ALTERNATIVE='alternative'; HUMAN='human'; TERMINAL='terminal'
+@dataclass
+class RecoveryAttempt:
+    strategy:str; success:bool=False; detail:str=''
 
 @dataclass
 class RecoveryDecision:
-    problem:ProblemClass
-    result:RecoveryResult
-    message:str
-    human_action:Optional[str]=None
-    retry_after_ms:int=0
-    alternatives:List[Dict[str,Any]]=None
+    problem:ProblemClass; resolved:bool; requires_human:bool=False; required_action:str|None=None; attempts:list[RecoveryAttempt]=field(default_factory=list)
 
-class ProblemRecovery:
-    """Policy-first recovery. Human intervention is a last resort, never the first response."""
-    def classify(self, text:str, *, skip_available=False, login_required=False, signup_required=False, credits_required=False, subscription_required=False, permission_required=False)->ProblemClass:
-        if signup_required:return ProblemClass.SIGNUP
-        if login_required:return ProblemClass.VERIFICATION
-        if subscription_required:return ProblemClass.SUBSCRIPTION
-        if credits_required:return ProblemClass.CREDITS
-        if permission_required:return ProblemClass.PERMISSION
-        if skip_available:return ProblemClass.BLOCKING_UI
-        t=(text or '').lower()
-        if any(x in t for x in ('timeout','timed out','انتهت المهلة','network','شبكة','try again','حاول مرة أخرى')):return ProblemClass.TRANSIENT
-        return ProblemClass.UNKNOWN
-    def decide(self, problem:ProblemClass, *, skip_available=False, alternative_available=False)->RecoveryDecision:
-        if problem==ProblemClass.BLOCKING_UI and skip_available:return RecoveryDecision(problem,RecoveryResult.SOLVED,'إغلاق أو تخطي النافذة ثم متابعة المهمة.')
-        if problem==ProblemClass.TRANSIENT:return RecoveryDecision(problem,RecoveryResult.RETRY,'إعادة المحاولة بعد إعادة الملاحظة.',retry_after_ms=1200)
-        if problem==ProblemClass.CREDITS and alternative_available:return RecoveryDecision(problem,RecoveryResult.ALTERNATIVE,'البحث عن خدمة بديلة قبل طلب تدخل المستخدم.')
-        human={ProblemClass.SIGNUP:('التسجيل بنفسي','إنشاء الحساب ثم متابعة المهمة.'),ProblemClass.VERIFICATION:('إدخال رمز التحقق','إكمال التحقق ثم متابعة المهمة.'),ProblemClass.SUBSCRIPTION:('إكمال الاشتراك','إكمال الاشتراك ثم متابعة المهمة.'),ProblemClass.PERMISSION:('منح الإذن','منح الإذن المطلوب فقط ثم متابعة المهمة.'),ProblemClass.CREDITS:('إكمال الاشتراك','لم يبقَ حل آلي متاح؛ يمكن إكمال الاشتراك ثم استئناف المهمة.')}
-        if problem in human:
-            action,msg=human[problem]; return RecoveryDecision(problem,RecoveryResult.HUMAN,msg,human_action=action)
-        if alternative_available:return RecoveryDecision(problem,RecoveryResult.ALTERNATIVE,'إعادة التخطيط باستخدام بديل متاح.')
-        return RecoveryDecision(problem,RecoveryResult.TERMINAL,'لم يتوفر حل آلي أو بديل آمن بعد استنفاد محاولات الإصلاح.')
+class ProblemRecoveryEngine:
+    def __init__(self, max_attempts:int=4): self.max_attempts=max_attempts
+    def classify(self, observation:dict[str,Any])->ProblemClass:
+        t=' '.join(str(observation.get(k,'')) for k in ('title','text','error','url')).lower()
+        if any(x in t for x in ('sign up','signup','create account','إنشاء حساب')): return ProblemClass.SIGNUP
+        if any(x in t for x in ('verification code','verify email','رمز التحقق')): return ProblemClass.VERIFICATION
+        if any(x in t for x in ('subscribe','subscription','اشتراك')): return ProblemClass.SUBSCRIPTION
+        if any(x in t for x in ('insufficient credits','out of credits','no credits','نفاد الرصيد')): return ProblemClass.CREDITS
+        if any(x in t for x in ('permission','allow','صلاحية','إذن')): return ProblemClass.PERMISSION
+        if any(x in t for x in ('login','sign in','تسجيل الدخول')): return ProblemClass.AUTH
+        if any(x in t for x in ('skip ad','close ad','advertisement','إعلان')): return ProblemClass.BLOCKING_AD
+        if any(x in t for x in ('timeout','temporarily','network','اتصال')): return ProblemClass.NETWORK
+        return ProblemClass.UI_CHANGED if observation.get('ui_changed') else ProblemClass.UNKNOWN
+    def recover(self, observation:dict[str,Any], strategies:dict[ProblemClass,list[tuple[str,Callable[[],bool]]]])->RecoveryDecision:
+        problem=self.classify(observation); attempts=[]
+        for name,fn in strategies.get(problem,[]):
+            if len(attempts)>=self.max_attempts: break
+            try: ok=bool(fn())
+            except Exception as e: ok=False
+            attempts.append(RecoveryAttempt(name,ok))
+            if ok: return RecoveryDecision(problem,True,False,attempts=attempts)
+        human={ProblemClass.SIGNUP:'أكمل التسجيل في الخدمة.',ProblemClass.VERIFICATION:'أدخل رمز التحقق أو أكمل التحقق.',ProblemClass.SUBSCRIPTION:'أكمل الاشتراك في الخدمة.',ProblemClass.CREDITS:'جدّد رصيد الخدمة أو اختر خدمة بديلة.',ProblemClass.AUTH:'سجّل الدخول إلى الخدمة.',ProblemClass.PERMISSION:'امنح الإذن المطلوب إذا كنت توافق.'}
+        if problem in human: return RecoveryDecision(problem,False,True,human[problem],attempts)
+        return RecoveryDecision(problem,False,False,attempts=attempts)

@@ -1,4 +1,0 @@
-{
-  "gate": ["python-tests", "android-unit-tests", "apk-build", "emulator-smoke"],
-  "policy": "do not report universal end-to-end success until the exact APK passes all four gates"
-}

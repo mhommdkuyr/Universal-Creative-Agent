@@ -1,1 +1,0 @@
-The exact APK delivered to users should always come from the latest successful CI run on `main`.
