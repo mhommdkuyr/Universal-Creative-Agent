@@ -18,7 +18,7 @@ concurrency:
 jobs:
   live-brain:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - name: Production health
@@ -34,32 +34,25 @@ jobs:
       - name: Live provider contract
         run: |
           set -euo pipefail
-          curl -fsS --max-time 30 https://ucoa-agent-brain.onrender.com/v1/providers/probe -o /tmp/providers.json
+          curl -fsS --max-time 60 https://ucoa-agent-brain.onrender.com/v1/providers/probe -o /tmp/providers.json
           python - <<'PY'
           import json
           d=json.load(open('/tmp/providers.json'))
           good=[p for p in d.get('providers',[]) if p.get('ok')]
-          configured=d.get('configured', True)
-          if not good and not configured:
-              print('No live provider is configured; development acceptance continues without paid inference.')
-          else:
-              assert good, d
-              print('usable providers:', [(p['provider'], p['latency_s']) for p in good])
+          assert good, d
+          print('usable providers:', [(p.get('provider'), p.get('model'), p.get('latency_s', 'n/a')) for p in good])
           PY
       - name: Live multimodal contract
         run: |
           set -euo pipefail
-          curl -fsS --max-time 30 https://ucoa-agent-brain.onrender.com/v1/providers/probe-vision -o /tmp/vision.json
+          curl -fsS --max-time 90 https://ucoa-agent-brain.onrender.com/v1/providers/probe-vision -o /tmp/vision.json
           python - <<'PY'
           import json
           d=json.load(open('/tmp/vision.json'))
-          if not d.get('ok') and not d.get('configured', True):
-              print('No live vision provider is configured; development acceptance continues without paid inference.')
-          else:
-              assert d.get('ok'), d
-              assert d.get('provider'), d
-              assert d.get('detected_target') == 'CONTINUE', d
-              print('vision provider:', d['provider'], 'confidence:', d.get('confidence'))
+          assert d.get('ok'), d
+          assert d.get('provider'), d
+          assert d.get('detected_target') == 'CONTINUE', d
+          print('vision provider:', d['provider'], 'confidence:', d.get('confidence'))
           PY
 
   android-capcut:
