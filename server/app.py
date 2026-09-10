@@ -1,6 +1,11 @@
-"""Production entrypoint for UCOA V4 with live provider routing."""
+"""Production entrypoint for UCOA V4 with native Gemini + routed cloud fallbacks."""
+from __future__ import annotations
+
+import base64
 import json
 import os
+import urllib.request
+import urllib.error
 
 import app_v4_runtime  # noqa: F401,E402
 import cloud_runtime  # noqa: F401,E402
@@ -13,34 +18,90 @@ from observability import init_sentry
 init_sentry()
 OPENAI_PRIMARY = os.getenv("UCOA_OPENAI_PRIMARY", "false").lower() == "true"
 
-# Reject stale/unsupported Gemini model names left in deployment variables.
-# Gemini 2.5 Flash is multimodal and available on the Gemini API free tier.
 _VALID_GEMINI_MODELS = {
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
+    "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+    "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+    "gemini-2.0-flash", "gemini-2.0-flash-lite",
 }
-for _provider in provider_router.PROVIDERS:
-    if _provider["name"] in {"gemini", "gemini-2"}:
-        _configured_model = os.getenv(_provider.get("model_env", ""), "").strip()
-        if _configured_model not in _VALID_GEMINI_MODELS:
-            _provider["default_model"] = "gemini-2.5-flash"
+_DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 
-_LEGACY_REASONING = app_v3.reasoning
-_LEGACY_VISUAL = app_v3.visual
-VISION_ENABLED = app_v3.VISION_ENABLED
+
+def _gemini_configured() -> bool:
+    return any(os.getenv(k, "").strip() for k in ("UCOA_GEMINI_API_KEY", "GEMINI_API_KEY"))
+
+
+def _gemini_key() -> str:
+    return (os.getenv("UCOA_GEMINI_API_KEY", "").strip() or os.getenv("GEMINI_API_KEY", "").strip())
+
+
+def _gemini_model() -> str:
+    configured = os.getenv("UCOA_GEMINI_MODEL", "").strip()
+    return configured if configured in _VALID_GEMINI_MODELS else _DEFAULT_GEMINI_MODEL
+
+
+def _gemini_native(system: str, user: str, image: str | None = None) -> str:
+    if not _gemini_configured():
+        raise RuntimeError("Gemini API key not configured")
+    parts = [{"text": user}]
+    if image:
+        parts.append({"inline_data": {"mime_type": "image/jpeg", "data": image}})
+    payload = {
+        "systemInstruction": {"parts": [{"text": system}]},
+        "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": {
+            "temperature": 0,
+            "maxOutputTokens": min(max(int(os.getenv("UCOA_PROVIDER_MAX_TOKENS", "512")), 64), 2048),
+        },
+    }
+    if _gemini_model().startswith("gemini-3."):
+        payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "low"}
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{_gemini_model()}:generateContent"
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json", "x-goog-api-key": _gemini_key()},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        body = json.loads(response.read().decode("utf-8"))
+    candidates = body.get("candidates") or []
+    if not candidates:
+        raise RuntimeError("Gemini returned no candidates")
+    fragments = []
+    for part in (candidates[0].get("content") or {}).get("parts", []):
+        text = part.get("text") if isinstance(part, dict) else None
+        if text:
+            fragments.append(text)
+    result = "".join(fragments).strip()
+    if not result:
+        raise RuntimeError("Gemini returned empty content")
+    return result
 
 
 def _provider_reasoning(system, user):
+    if _gemini_configured() and not OPENAI_PRIMARY:
+        try:
+            return _gemini_native(system, user), f"gemini:{_gemini_model()}"
+        except Exception:
+            pass
     if OPENAI_PRIMARY and openai_provider.configured():
         try:return openai_provider.reasoning(system, user), "openai"
         except Exception:pass
     try:return provider_router.reasoning(system, user)
-    except Exception:return _LEGACY_REASONING(system, user)
+    except Exception:
+        return app_v3._legacy_reasoning(system, user) if hasattr(app_v3, "_legacy_reasoning") else ("{\"action\":\"observe\"}", "repair")
 
 
 def _provider_visual(task, ui_tree, image):
+    if _gemini_configured() and image and not OPENAI_PRIMARY:
+        try:
+            system=("أنت محرك الرؤية لوكيل عملي على هاتف أندرويد. افحص لقطة الشاشة وشجرة الواجهة. "
+                    "أعد JSON فقط: {\"screen_summary\":string,\"elements\":[{\"text\":string,\"role\":string,\"x\":number,\"y\":number}],\"visible_goal_state\":string,\"confidence\":number}. "
+                    "لا تخترع عناصر غير ظاهرة، والإحداثيات بين صفر وألف.")
+            user=json.dumps({"task":task,"ui_tree":ui_tree[:18000]}, ensure_ascii=False)
+            return app_v3.extract_json(_gemini_native(system, user, image)), f"gemini:{_gemini_model()}"
+        except Exception:
+            pass
     if OPENAI_PRIMARY and openai_provider.configured():
         try:
             system=("You are UCOA visual perception. Inspect only the current Android screenshot and UI tree. "
@@ -50,34 +111,51 @@ def _provider_visual(task, ui_tree, image):
             return app_v3.extract_json(openai_provider.visual(system,user,image)),"openai"
         except Exception:pass
     try:return provider_router.visual(task,ui_tree,image)
-    except Exception:return _LEGACY_VISUAL(task,ui_tree,image)
+    except Exception:return app_v3._legacy_visual(task,ui_tree,image) if hasattr(app_v3, "_legacy_visual") else ({"screen_summary":"unavailable","elements":[]},"repair")
 
-reasoning=_provider_reasoning
-call_vision=_provider_visual
-app_v3.reasoning=lambda system,user: reasoning(system,user)
-app_v3.visual=lambda task,ui_tree,image: call_vision(task,ui_tree,image)
+# Preserve original seams for tests before replacing runtime callables.
+if not hasattr(app_v3, "_legacy_reasoning"):
+    app_v3._legacy_reasoning = app_v3.reasoning
+if not hasattr(app_v3, "_legacy_visual"):
+    app_v3._legacy_visual = app_v3.visual
 
-# Keep the existing in-memory runtime while adding durable Neon persistence when DATABASE_URL is present.
-_legacy_save_state=app_v3.save_state
+app_v3.reasoning = _provider_reasoning
+app_v3.visual = _provider_visual
+app_v3.call_vision = _provider_visual
+
+_legacy_save_state = app_v3.save_state
 
 def _durable_save_state(session_id, state):
     _legacy_save_state(session_id, state)
     try:
-        task=str(state.get("task", "")); step=int(state.get("step", 0)); status=str(state.get("phase", "unknown"))
+        task = str(state.get("task", "")); step = int(state.get("step", 0)); status = str(state.get("phase", "unknown"))
         durable_state.save_state(session_id, session_id, task, step, status, state)
     except Exception:
         pass
-app_v3.save_state=_durable_save_state
+app_v3.save_state = _durable_save_state
 
 @app_v3.app.get("/v1/providers/probe")
 def providers_probe():
-    result=provider_router.safe_text_probe()
-    try:
-        _,provider=reasoning("Return ONLY JSON.","Return exactly {\"ok\":true}.")
-        result["runtime"]={"ok":True,"provider":provider}
-        if provider=="openai":result["runtime"]["model"]=openai_provider.MODEL
-        result["ok"]=True
-    except Exception as exc:result["runtime"]={"ok":False,"error":type(exc).__name__}
+    rows = []
+    if _gemini_configured():
+        try:
+            text = _gemini_native("Return ONLY JSON.", "Return exactly {\"ok\":true}.")
+            rows.append({"provider":"gemini","model":_gemini_model(),"ok":True,"vision":True})
+            runtime = {"ok":True,"provider":f"gemini:{_gemini_model()}"}
+            return {"ok":True,"configured":True,"providers":rows,"runtime":runtime,"response":app_v3.extract_json(text)}
+        except Exception as exc:
+            rows.append({"provider":"gemini","model":_gemini_model(),"ok":False,"vision":True,"error":type(exc).__name__})
+    result = provider_router.safe_text_probe()
+    runtime = result.get("runtime", {})
+    if not runtime:
+        try:
+            _, provider = provider_router.reasoning("Return ONLY JSON.", "Return exactly {\"ok\":true}.")
+            runtime = {"ok":True,"provider":provider}
+        except Exception as exc:
+            runtime = {"ok":False,"error":type(exc).__name__}
+    result["runtime"] = runtime
+    result["providers"] = rows + result.get("providers", [])
+    result["ok"] = bool(runtime.get("ok")) or any(x.get("ok") for x in result["providers"])
     return result
 
 @app_v3.app.get("/v1/providers/models")
