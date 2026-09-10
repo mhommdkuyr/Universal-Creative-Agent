@@ -78,6 +78,12 @@ def _gemini_native(system: str, user: str, image: str | None = None) -> str:
     return result
 
 
+def _qwen_native(system: str, user: str, image: str | None = None) -> str:
+    """Use the production Qwen3-VL-235B Space as the final cloud fallback."""
+    prompt = system + "\n" + user
+    return app_v4_runtime._space_predict(prompt, image)
+
+
 def _provider_reasoning(system, user):
     if _gemini_configured() and not OPENAI_PRIMARY:
         try:
@@ -88,8 +94,10 @@ def _provider_reasoning(system, user):
         try:return openai_provider.reasoning(system, user), "openai"
         except Exception:pass
     try:return provider_router.reasoning(system, user)
-    except Exception:
-        return app_v3._legacy_reasoning(system, user) if hasattr(app_v3, "_legacy_reasoning") else ("{\"action\":\"observe\"}", "repair")
+    except Exception as primary_error:
+        try:return _qwen_native(system, user), "huggingface-qwen3-vl-235b"
+        except Exception:
+            return app_v3._legacy_reasoning(system, user) if hasattr(app_v3, "_legacy_reasoning") else ("{\"action\":\"observe\"}", "repair")
 
 
 def _provider_visual(task, ui_tree, image):
@@ -111,7 +119,15 @@ def _provider_visual(task, ui_tree, image):
             return app_v3.extract_json(openai_provider.visual(system,user,image)),"openai"
         except Exception:pass
     try:return provider_router.visual(task,ui_tree,image)
-    except Exception:return app_v3._legacy_visual(task,ui_tree,image) if hasattr(app_v3, "_legacy_visual") else ({"screen_summary":"unavailable","elements":[]},"repair")
+    except Exception as primary_error:
+        try:
+            system=("You are UCOA visual perception. Inspect only the current Android screenshot and UI tree. "
+                    "Return ONLY valid JSON: {\"screen_summary\":string,\"elements\":[{\"text\":string,\"role\":string,\"x\":number,\"y\":number}],\"visible_goal_state\":string,\"confidence\":number}. "
+                    "Never invent unseen elements. Coordinates must be normalized to 0..1000.")
+            user=json.dumps({"task":task,"ui_tree":ui_tree[:18000]},ensure_ascii=False)
+            return app_v3.extract_json(_qwen_native(system, user, image)), "huggingface-qwen3-vl-235b"
+        except Exception:
+            return app_v3._legacy_visual(task,ui_tree,image) if hasattr(app_v3, "_legacy_visual") else ({"screen_summary":"unavailable","elements":[]},"repair")
 
 # Preserve original seams for tests before replacing runtime callables.
 if not hasattr(app_v3, "_legacy_reasoning"):
@@ -145,7 +161,10 @@ def providers_probe():
             return {"ok":True,"configured":True,"providers":rows,"runtime":runtime,"response":app_v3.extract_json(text)}
         except Exception as exc:
             rows.append({"provider":"gemini","model":_gemini_model(),"ok":False,"vision":True,"error":type(exc).__name__})
-    result = provider_router.safe_text_probe()
+    try:
+        result = provider_router.safe_text_probe()
+    except Exception:
+        result = {"ok":False,"configured":True,"providers":[]}
     runtime = result.get("runtime", {})
     if not runtime:
         try:
@@ -156,6 +175,18 @@ def providers_probe():
     result["runtime"] = runtime
     result["providers"] = rows + result.get("providers", [])
     result["ok"] = bool(runtime.get("ok")) or any(x.get("ok") for x in result["providers"])
+    if not result["ok"]:
+        try:
+            text = _qwen_native("Return ONLY JSON: {\"ok\":true}.", "Return exactly {\"ok\":true}.")
+            result = {
+                "ok": True,
+                "configured": True,
+                "providers": result["providers"] + [{"provider":"huggingface-qwen3-vl-235b","model":os.getenv("UCOA_PRIMARY_VISION_MODEL", "Qwen/Qwen3-VL-235B-A22B-Instruct"),"ok":True,"vision":True}],
+                "runtime": {"ok":True,"provider":"huggingface-qwen3-vl-235b"},
+                "response": app_v3.extract_json(text),
+            }
+        except Exception as exc:
+            result["qwen_fallback_error"] = type(exc).__name__
     return result
 
 @app_v3.app.get("/v1/providers/models")
@@ -165,6 +196,7 @@ def providers_models():
         try:base,key,model,vision,key_name=provider_router._cfg(p)
         except Exception:continue
         data.append({"id":f"{p['name']}:{model}","provider":p["name"],"model":model,"vision":vision,"configured":True,"base_url":base})
+    data.append({"id":"huggingface-qwen3-vl-235b:Qwen/Qwen3-VL-235B-A22B-Instruct","provider":"huggingface-qwen3-vl-235b","model":"Qwen/Qwen3-VL-235B-A22B-Instruct","vision":True,"configured":True,"base_url":"huggingface-space"})
     return {"object":"list","data":data}
 
 @app_v3.app.post("/v1/agent/step")
