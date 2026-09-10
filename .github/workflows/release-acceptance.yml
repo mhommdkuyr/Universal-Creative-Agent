@@ -11,6 +11,7 @@ on:
       - 'server/ci_render_v3_smoke.py'
       - 'server/requirements.txt'
       - 'android/**'
+      - '.github/workflows/android-smoke.yml'
       - '.github/workflows/release-acceptance.yml'
 
 concurrency:
