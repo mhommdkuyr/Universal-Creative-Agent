@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'server/**'
+      - 'conftest.py'
       - '.github/workflows/render-brain-smoke.yml'
   schedule:
     - cron: '31 */6 * * *'
@@ -52,6 +53,13 @@ jobs:
           assert configured, 'No configured cloud provider is exposed by the production router'
           print(f"provider models contract passed: {len(configured)} configured providers")
           PY
+      - name: Verify installed-client step endpoint is registered
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /tmp/step.txt -w '%{http_code}' --max-time 15 "$BRAIN_URL/v1/agent/step" || true)
+          cat /tmp/step.txt || true
+          test "$code" = "405"
+          echo "Android step endpoint registration passed"
       - name: Probe a live cloud provider
         run: |
           set -euo pipefail
