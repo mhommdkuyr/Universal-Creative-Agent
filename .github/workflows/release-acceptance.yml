@@ -6,6 +6,7 @@ on:
     paths:
       - 'server/provider_router.py'
       - 'server/app.py'
+      - 'server/remote_ops.py'
       - 'server/ci_capcut_e2e.sh'
       - 'server/ci_render_v3_smoke.py'
       - 'server/requirements.txt'
@@ -54,6 +55,18 @@ jobs:
           python server/ci_render_v3_smoke.py plan
           python server/ci_render_v3_smoke.py step
           python server/ci_render_v3_smoke.py state
+      - name: Client session + remote config contract
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 20 https://ucoa-agent-brain.onrender.com/v1/client/config -o /tmp/client-config.json
+          python - <<'PY'
+          import json
+          d=json.load(open('/tmp/client-config.json'))
+          assert d.get('ok') is True, d
+          assert d.get('features',{}).get('remote_config') is True, d
+          assert d.get('features',{}).get('server_side_hotfix') is True, d
+          print('remote config revision:', d.get('revision'))
+          PY
       - name: Optional vision probe diagnostic
         continue-on-error: true
         run: |
@@ -76,6 +89,18 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - run: gradle -p android assembleDebug --stacktrace
+      - name: Assert APK is thin cloud client
+        run: |
+          set -euo pipefail
+          APK="$GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          SIZE=$(stat -c '%s' "$APK")
+          echo "APK bytes=$SIZE"
+          test "$SIZE" -lt 41943040
+          if unzip -l "$APK" | grep -E 'ucoa_local_model|litertlm'; then
+            echo 'Bundled model/runtime detected in thin client APK'
+            exit 1
+          fi
       - name: Cache CapCut APK
         uses: actions/cache@v4
         with:
@@ -96,7 +121,7 @@ jobs:
           emulator-options: -no-window -noaudio -no-boot-anim -gpu swiftshader_indirect
           disable-animations: true
           script: |
-            set -euo pipefail
+            set -eu
             adb wait-for-device
             AAPT_PATH="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)"
             test -n "$AAPT_PATH"
