@@ -3,6 +3,7 @@ import json
 import os
 
 import app_v4_runtime  # noqa: F401,E402
+import cloud_runtime  # noqa: F401,E402
 import app_v3
 import openai_provider
 import provider_router
