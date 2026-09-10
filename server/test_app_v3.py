@@ -22,7 +22,9 @@ def wait_job(job_id: str):
 def test_v3_health():
     x = client.get('/health').json()
     assert x['version'] == '3.0.0'
-    assert x['routing'] is False
+    assert x['routing'] is True
+    assert x['brain_configured'] is True
+    assert x['reasoning_provider'] == 'provider-router'
     assert x['verifier'] is True
     assert x['state_persistence'] is True
 
@@ -58,8 +60,8 @@ def test_v3_result_verifier():
 
 def test_v3_safety_gate():
     x = client.post('/v1/agent/verify', json={
-        'task': 'أرسل رمز التحقق',
+        'task': 'send code',
         'decision': {'action': 'type_into_any', 'params': {'text': '123456'}}
     }).json()
-    assert x['allowed'] is False
     assert x['requires_confirmation'] is True
+    assert x['allowed'] is False
