@@ -6,7 +6,6 @@ cloud-provider routing resilient when a primary provider is unavailable or over 
 from __future__ import annotations
 
 import os
-import threading
 from fastapi import Header, HTTPException
 
 _PATCHED = False
@@ -176,6 +175,16 @@ def _patch() -> None:
         _patch_safety(app_v3)
         _patch_health(app_v3)
         _patch_provider_router(app_v3)
+        # app.py is the real production entrypoint. Import it once here so the
+        # V4 runtime can finish wiring its callables, then re-apply compatibility
+        # routes against the final FastAPI app object before uvicorn starts.
+        try:
+            import app as _production_app  # noqa: F401
+        except Exception:
+            _production_app = None
+        _patch_android_routes(app_v3)
+        _patch_safety(app_v3)
+        _patch_health(app_v3)
         _PATCHED = True
     except Exception:
         return
