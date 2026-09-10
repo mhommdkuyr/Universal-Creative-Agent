@@ -1,17 +1,12 @@
 package com.ucoa.app
 
 import android.content.Context
-import com.google.ai.edge.litertlm.Backend
-import com.google.ai.edge.litertlm.ConversationConfig
-import com.google.ai.edge.litertlm.Engine
-import com.google.ai.edge.litertlm.EngineConfig
-import com.google.ai.edge.litertlm.SamplerConfig
-import org.json.JSONObject
-import java.io.File
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 
-/** On-device intent router. Unknown requests are delegated to Cloud Brain. */
+/**
+ * Compatibility facade kept for existing integrations. The production Android
+ * client is intentionally cloud-only: no model, provider key, or inference
+ * engine is packaged in the APK.
+ */
 class LocalBrainClient(private val context: Context) {
     data class Result(
         val understood: Boolean,
@@ -22,100 +17,26 @@ class LocalBrainClient(private val context: Context) {
         val error: String? = null,
     )
 
-    private val executor: ExecutorService = Executors.newSingleThreadExecutor()
-    private var engine: Engine? = null
+    fun isBundled(): Boolean = false
 
-    fun isBundled(): Boolean = try {
-        context.assets.open(MODEL_ASSET).use { true }
-    } catch (_: Exception) { false }
-
+    /**
+     * Preserves the old callback contract. Classification now delegates to
+     * the cloud planner so behavior is controlled server-side and can change
+     * without shipping a new APK.
+     */
     fun classify(task: String, apps: List<String>, callback: (Result) -> Unit) {
-        executor.execute {
-            val result = try {
-                if (!isBundled()) Result(false, error = "local_model_asset_missing")
-                else {
-                    val e = getEngine()
-                    val candidates = relevantApps(task, apps)
-                    e.createConversation(
-                        ConversationConfig(
-                            samplerConfig = SamplerConfig(topK = 10, topP = 0.85, temperature = 0.05),
-                            systemInstruction = com.google.ai.edge.litertlm.Contents.of(
-                                "Android router. Output ONLY JSON. For simple open/start app requests use action open_app; otherwise understood=false. Never invent an app."
-                            ),
-                        )
-                    ).use { conversation ->
-                        val response = conversation.sendMessage("$task\nCandidates: ${candidates.joinToString(", ")}\nJSON:")
-                        parse(response.toString())
-                    }
+        AgentBrainClient(context).plan(task, emptyList()) { response ->
+            val body = response.body
+            val first = body?.optJSONArray("steps")?.optString(0).orEmpty()
+            callback(
+                if (response.ok && first.isNotBlank()) {
+                    Result(false, raw = body?.toString().orEmpty())
+                } else {
+                    Result(false, raw = body?.toString().orEmpty(), error = response.error ?: "cloud_plan_unavailable")
                 }
-            } catch (t: Throwable) {
-                Result(false, error = "${t.javaClass.simpleName}: ${t.message}")
-            }
-            callback(result)
+            )
         }
     }
 
-    fun close() {
-        try { engine?.close() } catch (_: Throwable) {}
-        engine = null
-        executor.shutdownNow()
-    }
-
-    private fun getEngine(): Engine {
-        engine?.let { return it }
-        val path = ensureModelFile()
-        val config = EngineConfig(
-            modelPath = path,
-            backend = Backend.CPU(threadCount = 2),
-            maxNumTokens = 48,
-            cacheDir = context.cacheDir.absolutePath,
-        )
-        return Engine(config).also {
-            it.initialize()
-            engine = it
-        }
-    }
-
-    private fun ensureModelFile(): String {
-        val target = File(context.filesDir, "ucoa-local-model.litertlm")
-        if (!target.exists() || target.length() < MIN_MODEL_BYTES) {
-            context.assets.open(MODEL_ASSET).use { input ->
-                target.outputStream().use { output -> input.copyTo(output, 1024 * 1024) }
-            }
-        }
-        require(target.length() >= MIN_MODEL_BYTES) { "local_model_incomplete:${target.length()}" }
-        return target.absolutePath
-    }
-
-    private fun relevantApps(task: String, apps: List<String>): List<String> {
-        val normalized = task.lowercase()
-        val scored = apps.map { label ->
-            val score = label.lowercase().count { c -> normalized.contains(c) }
-            label to score
-        }
-        return scored.sortedByDescending { it.second }.take(12).map { it.first }
-    }
-
-    private fun parse(rawResponse: String): Result {
-        val raw = rawResponse.trim()
-        val start = raw.indexOf('{')
-        val end = raw.lastIndexOf('}')
-        if (start < 0 || end <= start) return Result(false, raw = raw, error = "local_model_non_json")
-        return try {
-            val o = JSONObject(raw.substring(start, end + 1))
-            val understood = o.optBoolean("understood", false)
-            val action = o.optString("action", null)
-            val app = o.optString("app", null)
-            val confidence = o.optDouble("confidence", 0.0)
-            if (understood && action == "open_app" && !app.isNullOrBlank() && confidence >= 0.50) Result(true, action, app, confidence, raw)
-            else Result(false, action, app, confidence, raw)
-        } catch (t: Throwable) {
-            Result(false, raw = raw, error = "local_model_json_error:${t.message}")
-        }
-    }
-
-    companion object {
-        private const val MODEL_ASSET = "ucoa_local_model.litertlm"
-        private const val MIN_MODEL_BYTES = 300_000_000L
-    }
+    fun close() = Unit
 }
