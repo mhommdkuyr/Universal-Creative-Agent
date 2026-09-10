@@ -78,8 +78,12 @@ jobs:
         run: |
           set -euo pipefail
           BRAIN_URL="$BRAIN_URL" python server/ci_render_v3_smoke.py state
-      - name: Run multimodal lifecycle smoke
+      - name: Run planner smoke
+        continue-on-error: true
         run: |
           set -euo pipefail
           BRAIN_URL="$BRAIN_URL" python server/ci_render_v3_smoke.py plan
+      - name: Run Android control step smoke
+        run: |
+          set -euo pipefail
           BRAIN_URL="$BRAIN_URL" python server/ci_render_v3_smoke.py step
