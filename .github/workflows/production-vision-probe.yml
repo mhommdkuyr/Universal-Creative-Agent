@@ -10,7 +10,7 @@ jobs:
     timeout-minutes: 12
     env:
       GEMINI_API_KEY: ${{ secrets.UCOA_GEMINI_API_KEY || secrets.GEMINI_API_KEY }}
-      GEMINI_MODEL: gemini-2.5-flash
+      GEMINI_MODEL: gemini-3.8-flash
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -19,18 +19,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "${GEMINI_API_KEY:-}" ]]; then echo "available=true" >> "$GITHUB_OUTPUT"; else echo "available=false" >> "$GITHUB_OUTPUT"; echo "::warning::Gemini API secret is not configured; external text/vision probes will be skipped."; fi
-      - name: Verify Gemini text API
+          if [[ -n "${GEMINI_API_KEY:-}" ]]; then echo "available=true" >> "$GITHUB_OUTPUT"; else echo "available=false" >> "$GITHUB_OUTPUT"; echo "::warning::Gemini API secret is not configured; external probes will be skipped."; fi
+      - name: Verify Gemini text API through native endpoint
         if: steps.gemini_config.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
           for attempt in 1 2 3 4; do
-            if curl -fsS --max-time 90 https://generativelanguage.googleapis.com/v1beta/openai/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer $GEMINI_API_KEY" -d "{\"model\":\"$GEMINI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Return exactly OK.\"}],\"temperature\":0,\"reasoning_effort\":\"low\",\"max_tokens\":64}" | tee /tmp/gemini-text.json && grep -q 'OK' /tmp/gemini-text.json; then exit 0; fi
-            echo "Gemini text probe attempt $attempt failed; retrying transient provider error…"; sleep $((attempt * 5))
+            body=$(curl -sS --max-time 90 "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
+              -H "Content-Type: application/json" \
+              -H "x-goog-api-key: $GEMINI_API_KEY" \
+              -X POST \
+              -d '{"contents":[{"parts":[{"text":"Return exactly OK."}]}],"generationConfig":{"temperature":0,"maxOutputTokens":64,"thinkingConfig":{"thinkingLevel":"low"}}}' )
+            echo "$body"
+            if grep -q 'OK' <<<"$body"; then exit 0; fi
+            echo "Gemini native text probe attempt $attempt failed; retrying…"; sleep $((attempt * 5))
           done
           exit 1
-      - name: Verify Gemini vision API
+      - name: Verify Gemini vision API through native endpoint
         if: steps.gemini_config.outputs.available == 'true'
         shell: bash
         run: |
@@ -46,17 +52,14 @@ jobs:
           PY
           IMAGE_B64="$(base64 -w0 /tmp/continue.jpg)"
           for attempt in 1 2 3 4 5 6; do
-            set +e
-            curl -sS --max-time 120 https://generativelanguage.googleapis.com/v1beta/openai/chat/completions \
+            body=$(curl -sS --max-time 120 "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
               -H "Content-Type: application/json" \
-              -H "Authorization: Bearer $GEMINI_API_KEY" \
-              -d "{\"model\":\"$GEMINI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Look at the image. Reply with exactly CONTINUE and nothing else if the button labeled CONTINUE is visible.\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/jpeg;base64,$IMAGE_B64\"}}]}],\"temperature\":0,\"reasoning_effort\":\"minimal\",\"max_tokens\":256}" > /tmp/gemini-vision.json
-            rc=$?
-            cat /tmp/gemini-vision.json
-            if [[ "$rc" -eq 0 ]] && grep -q 'CONTINUE' /tmp/gemini-vision.json; then exit 0; fi
-            if grep -q '"finish_reason":"length"' /tmp/gemini-vision.json; then echo "Gemini vision response was truncated; retrying with a larger output budget."; fi
-            if grep -q '"code":429\|Too Many Requests\|rate limit' /tmp/gemini-vision.json; then echo "Gemini vision rate limited; backing off before retry."; fi
-            set -e
+              -H "x-goog-api-key: $GEMINI_API_KEY" \
+              -X POST \
+              -d "{\"contents\":[{\"parts\":[{\"text\":\"Look at the image and reply with exactly CONTINUE if the button labeled CONTINUE is visible.\"},{\"inline_data\":{\"mime_type\":\"image/jpeg\",\"data\":\"$IMAGE_B64\"}}]}],\"generationConfig\":{\"temperature\":0,\"maxOutputTokens\":128,\"thinkingConfig\":{\"thinkingLevel\":\"low\"}}}" )
+            echo "$body"
+            if grep -q 'CONTINUE' <<<"$body"; then exit 0; fi
+            if grep -q '429\|RESOURCE_EXHAUSTED' <<<"$body"; then echo "Gemini vision rate limited; backing off."; fi
             sleep $((attempt * 10))
           done
           exit 1
@@ -70,7 +73,7 @@ jobs:
           PYTHONPATH=. pytest -q
       - name: Release validation marker
         if: steps.gemini_config.outputs.available == 'true'
-        run: echo "Gemini text + vision + UCOA runtime contract passed"
+        run: echo "Gemini native text + vision + UCOA runtime contract passed"
       - name: Runtime-only validation marker
         if: steps.gemini_config.outputs.available != 'true'
         run: echo "UCOA runtime contract passed; Gemini external probe skipped because no API secret is configured"
