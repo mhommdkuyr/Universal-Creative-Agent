@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import os
+import re
 import urllib.request
 import urllib.error
 
@@ -63,7 +64,7 @@ def _provider_reasoning(system,user):
     except Exception:return app_v3._legacy_reasoning(system,user) if hasattr(app_v3,"_legacy_reasoning") else ('{"action":"observe"}',"repair")
 
 def _provider_visual(task,ui_tree,image):
-    system="You are UCOA visual perception. Return ONLY valid JSON with screen_summary, elements, visible_goal_state, confidence. Never invent unseen elements."
+    system="You are UCOA visual perception. Inspect only the Android screenshot and UI tree. Return JSON with screen_summary, elements, visible_goal_state, confidence. Never invent unseen elements."
     user=json.dumps({"task":task,"ui_tree":ui_tree[:18000]},ensure_ascii=False)
     if _gemini_configured() and image and not OPENAI_PRIMARY:
         try:return app_v3.extract_json(_gemini_native(system,user,image)),f"gemini:{_gemini_model()}"
@@ -72,18 +73,23 @@ def _provider_visual(task,ui_tree,image):
         try:return app_v3.extract_json(openai_provider.visual(system,user,image)),"openai"
         except Exception:pass
     if image:
-        try:return app_v3.extract_json(_qwen_native(system,user,image)),"huggingface-qwen3-vl-235b"
+        try:
+            raw=_qwen_native(system,user,image)
+            try:return app_v3.extract_json(raw),"huggingface-qwen3-vl-235b"
+            except Exception:
+                text=re.sub(r"\s+"," ",str(raw)).strip()[:2000]
+                return {"screen_summary":text,"elements":[],"visible_goal_state":"unknown","confidence":0.5},"huggingface-qwen3-vl-235b"
         except Exception:pass
     try:return provider_router.visual(task,ui_tree,image)
-    except Exception:return app_v3._legacy_visual(task,ui_tree,image) if hasattr(app_v3,"_legacy_visual") else ({"screen_summary":"unavailable","elements":[]},"repair")
+    except Exception:return app_v3._legacy_visual(task,ui_tree,image) if hasattr(app_v3,"_legacy_visual") else ({"screen_summary":"unavailable"},"repair")
 
 if not hasattr(app_v3,"_legacy_reasoning"): app_v3._legacy_reasoning=app_v3.reasoning
 if not hasattr(app_v3,"_legacy_visual"): app_v3._legacy_visual=app_v3.visual
 app_v3.reasoning=_provider_reasoning
 app_v3.visual=_provider_visual
 app_v3.call_vision=_provider_visual
-
 _legacy_save_state=app_v3.save_state
+
 def _durable_save_state(session_id,state):
     _legacy_save_state(session_id,state)
     try: durable_state.save_state(session_id,session_id,str(state.get("task","")),int(state.get("step",0)),str(state.get("phase","unknown")),state)
@@ -169,5 +175,4 @@ def get_agent_state(session_id:str):return durable_state.load_state(session_id) 
 def get_agent_events(session_id:str):return {"events":durable_state.recent_events(session_id)}
 @app_v3.app.get("/v1/storage/status")
 def storage_status():return {"durable_storage":durable_state.configured()}
-
 app=app_v3.app
