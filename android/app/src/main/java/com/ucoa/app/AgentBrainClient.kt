@@ -12,22 +12,16 @@ import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
-/**
- * Thin mobile transport. Provider/model secrets stay in the cloud. The APK
- * bootstraps an expiring client session and consumes server-side configuration.
- */
+/** Thin mobile transport. Provider/model secrets stay in the cloud. */
 class AgentBrainClient(private val context: Context) {
     data class Response(val ok: Boolean, val body: JSONObject?, val error: String? = null)
-
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private val prefs get() = context.getSharedPreferences("ucoa_brain", Context.MODE_PRIVATE)
     private val defaultEndpoint = "https://ucoa-agent-brain.onrender.com"
     private val appVersion = "1.0.0"
-
+    private fun endpoint(): String = prefs.getString("endpoint", defaultEndpoint)?.trim().orEmpty().trimEnd('/')
+    private fun token(): String = prefs.getString("token", "")?.trim().orEmpty()
     fun configured(): Boolean = endpoint().isNotBlank()
-    fun endpoint(): String = prefs.getString("endpoint", defaultEndpoint)?.trim().orEmpty().trimEnd('/')
-    fun token(): String = prefs.getString("token", "")?.trim().orEmpty()
-
     fun sessionId(): String {
         val current = prefs.getString("session_id", null)
         if (!current.isNullOrBlank()) return current
@@ -35,7 +29,6 @@ class AgentBrainClient(private val context: Context) {
         prefs.edit().putString("session_id", created).apply()
         return created
     }
-
     private fun installId(): String {
         val current = prefs.getString("install_id", null)
         if (!current.isNullOrBlank()) return current
@@ -43,64 +36,23 @@ class AgentBrainClient(private val context: Context) {
         prefs.edit().putString("install_id", created).apply()
         return created
     }
+    fun resetSession() { prefs.edit().remove("session_id").remove("token").apply() }
+    fun saveConfig(endpoint: String, token: String) { prefs.edit().putString("endpoint", endpoint.trim().trimEnd('/')).putString("token", token.trim()).apply() }
 
-    fun resetSession() { prefs.edit().remove("session_id").apply() }
-
-    fun saveConfig(endpoint: String, token: String) {
-        prefs.edit().putString("endpoint", endpoint.trim().trimEnd('/')).putString("token", token.trim()).apply()
+    fun bootstrap(callback: ((Response) -> Unit)? = null) = executor.execute {
+        try { val body = ensureClientSession(); refreshRemoteConfig(); callback?.invoke(Response(true, body)) }
+        catch (e: Exception) { callback?.invoke(Response(false, null, e.message ?: e.javaClass.simpleName)) }
     }
 
-    fun bootstrap(callback: ((Response) -> Unit)? = null) {
-        executor.execute {
-            try {
-                val body = ensureClientSession()
-                refreshRemoteConfig()
-                callback?.invoke(Response(true, body))
-            } catch (e: Exception) {
-                callback?.invoke(Response(false, null, e.message ?: e.javaClass.simpleName))
-            }
-        }
-    }
-
-    fun persistExecutionState(task: String, step: Int, history: JSONArray, status: String, callback: ((Response) -> Unit)? = null) {
-        val payload = JSONObject().apply {
-            put("session_id", sessionId())
-            put("state", JSONObject().apply { put("task", task); put("step", step); put("status", status); put("history", history) })
-        }
-        executor.execute {
-            try {
-                ensureClientSession()
-                callback?.invoke(Response(true, requestJson("POST", endpoint() + "/v1/agent/state", payload, 15000)))
-            } catch (e: Exception) { callback?.invoke(Response(false, null, e.message ?: e.javaClass.simpleName)) }
-        }
-    }
-
-    fun verifyResult(task: String, action: JSONObject, beforeUi: String, afterUi: String, beforeScreenshot: String?, afterScreenshot: String?, callback: (Response) -> Unit) {
-        val payload = JSONObject().apply {
-            put("task", task); put("action", action); put("before_ui_tree", beforeUi); put("after_ui_tree", afterUi); put("session_id", sessionId())
-            if (!beforeScreenshot.isNullOrBlank()) put("before_screenshot_base64", beforeScreenshot)
-            if (!afterScreenshot.isNullOrBlank()) put("after_screenshot_base64", afterScreenshot)
-        }
-        executor.execute {
-            try {
-                ensureClientSession()
-                callback(Response(true, requestJson("POST", endpoint() + "/v1/agent/verify-result", payload, 30000)))
-            } catch (e: Exception) { callback(Response(false, null, e.message ?: e.javaClass.simpleName)) }
-        }
-    }
-
-    fun health(callback: (Boolean, String) -> Unit) {
-        readiness { transportOk, ready, detail -> callback(transportOk && ready, detail) }
-    }
-
-    fun readiness(callback: (transportOk: Boolean, ready: Boolean, detail: String) -> Unit) {
+    fun health(callback: (Boolean, String) -> Unit) = readiness { transportOk, ready, detail -> callback(transportOk && ready, detail) }
+    fun readiness(callback: (Boolean, Boolean, String) -> Unit) {
         val base = endpoint()
         if (base.isBlank()) { callback(false, false, "عنوان العقل غير مُعد"); return }
         executor.execute {
             try {
                 val body = requestJson("GET", base + "/health", null, 15000)
-                val vision = body.optString("vision_model", "غير متاح")
                 val ready = body.optBoolean("brain_configured", false)
+                val vision = body.optString("vision_model", "غير متاح")
                 val reasoning = body.optString("reasoning_model", body.optString("model", "primary"))
                 val provider = body.optString("reasoning_provider", "provider-router")
                 val detail = if (ready) "العقل جاهز: $provider/$reasoning | الرؤية: $vision" else "الخادم متصل لكن النموذج غير مهيأ"
@@ -109,37 +61,31 @@ class AgentBrainClient(private val context: Context) {
         }
     }
 
-    fun fetchRemoteConfig(callback: (Response) -> Unit) {
-        executor.execute {
-            try { callback(Response(true, refreshRemoteConfig())) }
-            catch (e: Exception) { callback(Response(false, null, e.message ?: e.javaClass.simpleName)) }
-        }
+    fun fetchRemoteConfig(callback: (Response) -> Unit) = executor.execute {
+        try { callback(Response(true, refreshRemoteConfig())) }
+        catch (e: Exception) { callback(Response(false, null, e.message ?: e.javaClass.simpleName)) }
     }
 
-    fun telemetry(kind: String, payload: JSONObject = JSONObject(), taskId: String? = null) {
-        executor.execute {
-            try {
-                ensureClientSession()
-                val event = JSONObject().apply {
-                    put("install_id", installId()); put("session_id", sessionId()); if (!taskId.isNullOrBlank()) put("task_id", taskId)
-                    put("kind", kind); put("payload", payload); put("app_version", appVersion)
-                }
-                requestJson("POST", endpoint() + "/v1/client/events", event, 15000)
-            } catch (_: Exception) { /* diagnostics must never block execution */ }
-        }
+    fun telemetry(kind: String, payload: JSONObject = JSONObject(), taskId: String? = null) = executor.execute {
+        try {
+            ensureClientSession()
+            val event = JSONObject().apply {
+                put("install_id", installId()); put("session_id", sessionId()); if (!taskId.isNullOrBlank()) put("task_id", taskId)
+                put("kind", kind); put("payload", payload); put("app_version", appVersion)
+            }
+            requestJson("POST", endpoint() + "/v1/client/events", event, 15000)
+        } catch (_: Exception) { }
     }
 
-    fun reportOutcome(outcome: String, metrics: JSONObject = JSONObject(), taskId: String? = null) {
-        executor.execute {
-            try {
-                ensureClientSession()
-                val report = JSONObject().apply {
-                    put("install_id", installId()); put("session_id", sessionId()); if (!taskId.isNullOrBlank()) put("task_id", taskId)
-                    put("outcome", outcome); put("metrics", metrics)
-                }
-                requestJson("POST", endpoint() + "/v1/client/report", report, 15000)
-            } catch (_: Exception) { }
-        }
+    fun reportOutcome(outcome: String, metrics: JSONObject = JSONObject(), taskId: String? = null) = executor.execute {
+        try {
+            ensureClientSession()
+            val report = JSONObject().apply {
+                put("install_id", installId()); put("session_id", sessionId()); if (!taskId.isNullOrBlank()) put("task_id", taskId)
+                put("outcome", outcome); put("metrics", metrics)
+            }
+            requestJson("POST", endpoint() + "/v1/client/report", report, 15000)
+        } catch (_: Exception) { }
     }
 
     fun plan(task: String, attachments: List<String>, callback: (Response) -> Unit) {
@@ -148,7 +94,7 @@ class AgentBrainClient(private val context: Context) {
             put("device", JSONObject().apply { put("manufacturer", Build.MANUFACTURER); put("model", Build.MODEL); put("android", Build.VERSION.SDK_INT); put("app_version", appVersion) })
         }
         UcoaDiagnostics.log("BRAIN_HTTP", "إرسال طلب تخطيط", "endpoint=${endpoint()}/v1/agent/plan")
-        telemetry("plan_requested", JSONObject().put("task_chars", task.length()))
+        telemetry("plan_requested", JSONObject().put("task_chars", task.length))
         submitJob("/v1/agent/plan", payload, "plan", callback)
     }
 
@@ -168,59 +114,52 @@ class AgentBrainClient(private val context: Context) {
         submitJob("/v1/agent/step", payload, "step", callback)
     }
 
-    private fun submitJob(path: String, payload: JSONObject, kind: String, callback: (Response) -> Unit) {
-        val base = endpoint()
-        if (base.isBlank()) { callback(Response(false, null, "لم يتم إعداد عنوان عقل AI بعد")); return }
+    fun persistExecutionState(task: String, step: Int, history: JSONArray, status: String, callback: ((Response) -> Unit)? = null) {
+        val payload = JSONObject().apply { put("session_id", sessionId()); put("state", JSONObject().apply { put("task", task); put("step", step); put("status", status); put("history", history) }) }
         executor.execute {
-            try {
-                ensureClientSession()
-                refreshRemoteConfig()
-                val submitted = requestJson("POST", base + path, payload, 20000)
-                val jobId = submitted.optString("job_id").takeIf { it.isNotBlank() } ?: throw IllegalStateException("Brain did not return a job_id")
-                UcoaDiagnostics.log("BRAIN_HTTP", "Brain أنشأ job", "path=$path job_id=$jobId")
-                telemetry("job_submitted", JSONObject().put("kind", kind).put("job_id", jobId), jobId)
-                pollJob(base, jobId, callback, 0)
-            } catch (e: Exception) {
-                UcoaDiagnostics.log("BRAIN_HTTP", "فشل طلب Brain", e.message ?: e.javaClass.simpleName)
-                telemetry("request_failed", JSONObject().put("kind", kind).put("error", e.message ?: e.javaClass.simpleName))
-                callback(Response(false, null, e.message ?: e.javaClass.simpleName))
-            }
+            try { ensureClientSession(); callback?.invoke(Response(true, requestJson("POST", endpoint() + "/v1/agent/state", payload, 15000))) }
+            catch (e: Exception) { callback?.invoke(Response(false, null, e.message ?: e.javaClass.simpleName)) }
+        }
+    }
+
+    fun verifyResult(task: String, action: JSONObject, beforeUi: String, afterUi: String, beforeScreenshot: String?, afterScreenshot: String?, callback: (Response) -> Unit) {
+        val payload = JSONObject().apply {
+            put("task", task); put("action", action); put("before_ui_tree", beforeUi); put("after_ui_tree", afterUi); put("session_id", sessionId())
+            if (!beforeScreenshot.isNullOrBlank()) put("before_screenshot_base64", beforeScreenshot)
+            if (!afterScreenshot.isNullOrBlank()) put("after_screenshot_base64", afterScreenshot)
+        }
+        executor.execute {
+            try { ensureClientSession(); callback(Response(true, requestJson("POST", endpoint() + "/v1/agent/verify-result", payload, 30000))) }
+            catch (e: Exception) { callback(Response(false, null, e.message ?: e.javaClass.simpleName)) }
+        }
+    }
+
+    private fun submitJob(path: String, payload: JSONObject, kind: String, callback: (Response) -> Unit) = executor.execute {
+        try {
+            ensureClientSession(); refreshRemoteConfig()
+            val submitted = requestJson("POST", endpoint() + path, payload, 20000)
+            val jobId = submitted.optString("job_id").takeIf { it.isNotBlank() } ?: throw IllegalStateException("Brain did not return a job_id")
+            UcoaDiagnostics.log("BRAIN_HTTP", "Brain أنشأ job", "path=$path job_id=$jobId")
+            telemetry("job_submitted", JSONObject().put("kind", kind).put("job_id", jobId), jobId)
+            pollJob(endpoint(), jobId, callback, 0)
+        } catch (e: Exception) {
+            UcoaDiagnostics.log("BRAIN_HTTP", "فشل طلب Brain", e.message ?: e.javaClass.simpleName)
+            telemetry("request_failed", JSONObject().put("kind", kind).put("error", e.message ?: e.javaClass.simpleName))
+            callback(Response(false, null, e.message ?: e.javaClass.simpleName))
         }
     }
 
     private fun pollJob(base: String, jobId: String, callback: (Response) -> Unit, attempt: Int) {
-        val maxPolls = remoteInt("max_poll_attempts", 240)
-        val pollMs = remoteInt("poll_interval_ms", 1000)
-        if (attempt >= maxPolls) {
-            UcoaDiagnostics.log("BRAIN_HTTP", "انتهت مهلة job", "job_id=$jobId")
-            telemetry("job_timeout", JSONObject().put("attempts", attempt), jobId)
-            reportOutcome("timeout", JSONObject().put("attempts", attempt), jobId)
-            callback(Response(false, null, "انتهت مهلة انتظار عقل AI")); return
-        }
+        val maxPolls = remoteInt("max_poll_attempts", 240); val pollMs = remoteInt("poll_interval_ms", 1000)
+        if (attempt >= maxPolls) { telemetry("job_timeout", JSONObject().put("attempts", attempt), jobId); reportOutcome("timeout", JSONObject().put("attempts", attempt), jobId); callback(Response(false, null, "انتهت مهلة انتظار عقل AI")); return }
         try {
             val job = requestJson("GET", base + "/v1/agent/jobs/$jobId", null, 15000)
             when (job.optString("status")) {
-                "completed" -> {
-                    val result = job.optJSONObject("result")
-                    UcoaDiagnostics.log("BRAIN_HTTP", "اكتمل job", "job_id=$jobId result=${result != null}")
-                    telemetry("job_completed", JSONObject().put("has_result", result != null), jobId)
-                    reportOutcome("completed", JSONObject().put("has_result", result != null), jobId)
-                    callback(if (result != null) Response(true, result) else Response(false, null, "العقل أنهى المهمة بلا نتيجة"))
-                }
-                "failed" -> {
-                    val error = job.optString("error", "فشل تشغيل عقل AI")
-                    UcoaDiagnostics.log("BRAIN_HTTP", "فشل job", "job_id=$jobId error=$error")
-                    telemetry("job_failed", JSONObject().put("error", error), jobId)
-                    reportOutcome("failed", JSONObject().put("error", error), jobId)
-                    callback(Response(false, null, error))
-                }
+                "completed" -> { val result = job.optJSONObject("result"); telemetry("job_completed", JSONObject().put("has_result", result != null), jobId); reportOutcome("completed", JSONObject().put("has_result", result != null), jobId); callback(if (result != null) Response(true, result) else Response(false, null, "العقل أنهى المهمة بلا نتيجة")) }
+                "failed" -> { val error = job.optString("error", "فشل تشغيل عقل AI"); telemetry("job_failed", JSONObject().put("error", error), jobId); reportOutcome("failed", JSONObject().put("error", error), jobId); callback(Response(false, null, error)) }
                 else -> { Thread.sleep(pollMs.toLong()); pollJob(base, jobId, callback, attempt + 1) }
             }
-        } catch (e: Exception) {
-            UcoaDiagnostics.log("BRAIN_HTTP", "فشل polling", "job_id=$jobId error=${e.message}")
-            telemetry("poll_failed", JSONObject().put("error", e.message ?: e.javaClass.simpleName), jobId)
-            callback(Response(false, null, e.message ?: e.javaClass.simpleName))
-        }
+        } catch (e: Exception) { telemetry("poll_failed", JSONObject().put("error", e.message ?: e.javaClass.simpleName), jobId); callback(Response(false, null, e.message ?: e.javaClass.simpleName)) }
     }
 
     private fun ensureClientSession(): JSONObject {
@@ -235,20 +174,12 @@ class AgentBrainClient(private val context: Context) {
         prefs.edit().putString("token", sessionToken).apply()
         return body
     }
-
     private fun refreshRemoteConfig(): JSONObject {
         val body = requestJson("GET", endpoint() + "/v1/client/config?platform=android&app_version=$appVersion", null, 15000)
         prefs.edit().putString("remote_config", body.toString()).putLong("remote_config_at", System.currentTimeMillis()).apply()
         return body
     }
-
-    private fun remoteInt(key: String, defaultValue: Int): Int {
-        return try {
-            val raw = prefs.getString("remote_config", null) ?: return defaultValue
-            JSONObject(raw).optInt(key, defaultValue)
-        } catch (_: Exception) { defaultValue }
-    }
-
+    private fun remoteInt(key: String, defaultValue: Int): Int = try { prefs.getString("remote_config", null)?.let { JSONObject(it).optInt(key, defaultValue) } ?: defaultValue } catch (_: Exception) { defaultValue }
     private fun requestJson(method: String, url: String, payload: JSONObject?, timeout: Int): JSONObject {
         var conn: HttpURLConnection? = null
         try {
