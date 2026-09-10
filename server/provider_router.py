@@ -139,12 +139,7 @@ def _gemini_generate(base: str, key: str, model: str, system: str, user: str, im
     if model.startswith("gemini-3."):
         payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "low"}
     url = f"{base}/models/{model}:generateContent"
-    request = Request(
-        url,
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json", "x-goog-api-key": key, "Accept": "application/json"},
-        method="POST",
-    )
+    request = Request(url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"), headers={"Content-Type":"application/json","x-goog-api-key":key,"Accept":"application/json"}, method="POST")
     with urlopen(request, timeout=timeout) as response:
         return _extract_gemini_text(json.loads(response.read().decode("utf-8")))
 
@@ -236,13 +231,39 @@ def visual(task,ui_tree,image):
 
 def safe_text_probe():
     configured=[]
+    results=[]
     for p in PROVIDERS:
         try:
-            _,_,model,vision,key_name=_cfg(p)
+            base,key,model,vision,key_name=_cfg(p)
             configured.append({"provider":p["name"],"model":model,"vision":vision,"credential_env":key_name})
-        except Exception: pass
-    try:
-        raw,provider=call("Return ONLY JSON.","Return exactly {\"ok\":true}.")
-        return {"ok":True,"configured":True,"providers":[{"provider":provider,"model":_provider(provider).get("default_model"),"ok":True}],"response":_extract_json(raw),"configured_candidates":[{k:v for k,v in x.items() if k!="credential_env"} for x in configured]}
-    except Exception as exc:
-        return {"ok":False,"configured":bool(configured),"providers":configured,"error":type(exc).__name__}
+        except Exception:
+            continue
+    for p in PROVIDERS:
+        name=p["name"]
+        try:
+            base,key,model,vision,key_name=_cfg(p)
+        except Exception:
+            continue
+        if vision and name == "huggingface-space":
+            # Skip the public UI space for text readiness; it is vision-only and can cold-start unpredictably.
+            results.append({"provider":name,"model":model,"ok":False,"skipped":True,"reason":"vision-only-public"})
+            continue
+        started=time.perf_counter()
+        try:
+            if p.get("native_gemini"):
+                raw=_gemini_generate(base,key,model,"Return only JSON.","Return exactly {\"ok\":true}.",None,min(TEXT_TIMEOUT,20))
+            else:
+                raw=_chat(base,key,model,"Return only JSON.","Return exactly {\"ok\":true}.",None,min(TEXT_TIMEOUT,20))
+            value=_extract_json(raw)
+            results.append({"provider":name,"model":model,"ok":True,"latency_s":round(time.perf_counter()-started,3),"response":value})
+            _success(name)
+            # One healthy text provider is sufficient for overall readiness.
+            break
+        except HTTPError as exc:
+            _failure(name); results.append({"provider":name,"model":model,"ok":False,"error":f"HTTP_{exc.code}"})
+        except (URLError,TimeoutError) as exc:
+            _failure(name); results.append({"provider":name,"model":model,"ok":False,"error":type(exc).__name__})
+        except Exception as exc:
+            _failure(name); results.append({"provider":name,"model":model,"ok":False,"error":str(exc)[:200]})
+    healthy=next((r for r in results if r.get("ok")),None)
+    return {"ok":bool(healthy),"configured":bool(configured),"providers":results,"configured_candidates":[{k:v for k,v in x.items() if k!="credential_env"} for x in configured]}
