@@ -147,6 +147,11 @@ def providers_models():
     data.append({"id":"huggingface-qwen3-vl-235b:Qwen/Qwen3-VL-235B-A22B-Instruct","provider":"huggingface-qwen3-vl-235b","model":"Qwen/Qwen3-VL-235B-A22B-Instruct","vision":True,"configured":True,"base_url":"huggingface-space"})
     return {"object":"list","data":data}
 
+def android_plan(req:app_v3.PlanRequest,authorization:str|None=Header(default=None)):
+    app_v3.auth(authorization); runner=getattr(app_v3,"run_plan",None)
+    if not callable(runner): raise HTTPException(503,"plan runtime not initialized")
+    return app_v3.submit("plan",lambda:runner(req))
+
 def android_step(req:app_v3.StepRequest,authorization:str|None=Header(default=None)):
     app_v3.auth(authorization); runner=getattr(app_v3,"run_step",None)
     if not callable(runner):raise HTTPException(503,"step runtime not initialized")
@@ -158,7 +163,8 @@ def android_job(jid:str,authorization:str|None=Header(default=None)):
     if not job:raise HTTPException(404,"job not found")
     return job
 
-app_v3.app.routes[:]=[route for route in app_v3.app.routes if getattr(route,"path","") not in {"/v1/agent/step","/v1/agent/jobs/{jid}","/health"}]
+app_v3.app.routes[:]=[route for route in app_v3.app.routes if getattr(route,"path","") not in {"/v1/agent/plan","/v1/agent/step","/v1/agent/jobs/{jid}","/health"}]
+app_v3.app.add_api_route("/v1/agent/plan",android_plan,methods=["POST"])
 app_v3.app.add_api_route("/v1/agent/step",android_step,methods=["POST"])
 app_v3.app.add_api_route("/v1/agent/jobs/{jid}",android_job,methods=["GET"])
 
