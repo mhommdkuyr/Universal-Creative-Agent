@@ -48,25 +48,30 @@ jobs:
           assert x.get('object') == 'list'
           assert isinstance(x.get('data'), list)
           assert all({'provider','model','vision','configured','base_url'} <= set(item) for item in x['data'])
-          print(f"provider models contract passed: {len(x['data'])} providers")
+          configured=[item for item in x['data'] if item.get('configured')]
+          assert configured, 'No configured cloud provider is exposed by the production router'
+          print(f"provider models contract passed: {len(configured)} configured providers")
+          PY
+      - name: Probe a live cloud provider
+        run: |
+          set -euo pipefail
+          curl -sS --fail --max-time 60 "$BRAIN_URL/v1/providers/probe" | tee /tmp/providers.json
+          python - <<'PY'
+          import json
+          data=json.load(open('/tmp/providers.json'))
+          ok=[p for p in data.get('providers',[]) if p.get('ok')]
+          assert ok, 'No configured cloud provider returned a successful live probe'
+          for p in data.get('providers',[]):
+              print(p.get('provider'), p.get('model'), p.get('vision'), p.get('ok'), p.get('latency_s'), p.get('error',''))
+          runtime=data.get('runtime',{})
+          assert runtime.get('ok') is True, runtime
           PY
       - name: Run state and verifier smoke
         run: |
           set -euo pipefail
           BRAIN_URL="$BRAIN_URL" python server/ci_render_v3_smoke.py state
-      - name: Run multimodal lifecycle smoke when brain is configured
+      - name: Run multimodal lifecycle smoke
         run: |
           set -euo pipefail
-          configured=$(python - <<'PY'
-          import json
-          x=json.load(open('health.json'))
-          print('true' if x.get('brain_configured') else 'false')
-          PY
-          )
-          if [ "$configured" != "true" ]; then
-            echo 'BRAIN_NOT_CONFIGURED=true'
-            echo 'Live AI lifecycle remains blocked until at least one UCOA_* provider API key is configured on Render.'
-            exit 0
-          fi
           BRAIN_URL="$BRAIN_URL" python server/ci_render_v3_smoke.py plan
           BRAIN_URL="$BRAIN_URL" python server/ci_render_v3_smoke.py step
