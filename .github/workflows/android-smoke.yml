@@ -28,18 +28,20 @@ jobs:
         with:
           packages: platform-tools
       - uses: gradle/actions/setup-gradle@v4
-      - name: Cache embedded local model
-        uses: actions/cache@v4
-        with:
-          path: android/app/src/main/assets/ucoa_local_model.litertlm
-          key: ucoa-qwen3-0.6b-mixed-int4-v1
       - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - run: gradle -p android assembleDebug --stacktrace
-      - name: Verify local model is packaged
+      - name: Assert thin cloud-client APK
         run: |
           set -eu
-          test -s android/app/build/outputs/apk/debug/app-debug.apk
-          unzip -l android/app/build/outputs/apk/debug/app-debug.apk | grep -q 'assets/ucoa_local_model.litertlm'
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          SIZE=$(stat -c '%s' "$APK")
+          echo "APK_BYTES=$SIZE"
+          test "$SIZE" -lt 41943040
+          if unzip -l "$APK" | grep -E 'ucoa_local_model|litertlm'; then
+            echo "Local AI model/runtime is still packaged in the APK"
+            exit 1
+          fi
       - name: Check hardware acceleration availability
         run: |
           if [ -e /dev/kvm ]; then echo "KVM_AVAILABLE=true"; else echo "KVM_AVAILABLE=false"; fi
