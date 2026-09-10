@@ -18,7 +18,10 @@ fi
 [ -s "$UCOA_APK_PATH" ]
 AAPT_BIN="${AAPT_BIN:-$(command -v aapt || true)}"
 if [ -z "$AAPT_BIN" ]; then
-  AAPT_BIN="$(find "${ANDROID_HOME:-$HOME/Android/Sdk}/build-tools" -type f -name aapt 2>/dev/null | sort -V | tail -n 1)"
+  AAPT_BIN="$(command -v aapt2 || true)"
+fi
+if [ -z "$AAPT_BIN" ]; then
+  AAPT_BIN="$(find "${ANDROID_HOME:-$HOME/Android/Sdk}/build-tools" -type f \( -name aapt -o -name aapt2 \) 2>/dev/null | sort -V | tail -n 1)"
 fi
 [ -x "$AAPT_BIN" ]
 
