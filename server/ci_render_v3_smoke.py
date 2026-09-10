@@ -7,22 +7,40 @@ import sys
 import time
 import urllib.request
 from io import BytesIO
-
 from PIL import Image, ImageDraw, ImageFont
 
 BASE = os.getenv("BRAIN_URL", "https://ucoa-agent-brain.onrender.com").rstrip("/")
 
 
-def post(path, payload):
-    req = urllib.request.Request(BASE + path, data=json.dumps(payload, ensure_ascii=False).encode(), headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=30) as r:
+def request(method: str, path: str, payload=None, token: str | None = None, timeout: int = 30):
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode()
+    req = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode())
 
 
-def poll(job_id):
+def bootstrap() -> str:
+    master = os.getenv("UCOA_AGENT_TOKEN", "").strip()
+    if master:
+        return master
+    body = request("POST", "/v1/client/session", {
+        "install_id": "ci-release-acceptance",
+        "app_version": "ci",
+        "platform": "github-actions",
+        "device": {"runner": "ubuntu-latest"},
+    }, timeout=20)
+    token = str(body.get("session_token", ""))
+    if not token:
+        raise RuntimeError(f"client session bootstrap failed: {body}")
+    return token
+
+
+def poll(job_id: str, token: str):
     for _ in range(180):
-        with urllib.request.urlopen(BASE + "/v1/agent/jobs/" + job_id, timeout=20) as r:
-            x = json.loads(r.read().decode())
+        x = request("GET", "/v1/agent/jobs/" + job_id, token=token, timeout=20)
         if x.get("status") == "completed":
             return x["result"]
         if x.get("status") == "failed":
@@ -46,27 +64,27 @@ def screenshot_b64():
 
 
 mode = sys.argv[1]
+token = bootstrap()
 if mode == "plan":
-    submitted = post("/v1/agent/plan", {"task": "Open the appropriate app, perform the requested action, and verify the result.", "device": {"android": 35}})
-    result = poll(submitted["job_id"])
-    assert len(result.get("steps", [])) >= 2
+    submitted = request("POST", "/v1/agent/plan", {"task": "Open the appropriate app, perform the requested action, and verify the result.", "device": {"android": 35}}, token)
+    result = poll(submitted["job_id"], token)
+    assert len(result.get("steps", [])) >= 2, result
     assert result.get("provider") not in {None, "", "repair"}, result
     print("PLAN_V4_OK", json.dumps(result, ensure_ascii=False))
 elif mode == "step":
-    submitted = post("/v1/agent/step", {"task": "Press the visible CONTINUE button.", "step": 0, "history": [], "ui_tree": "[{\"text\":\"CONTINUE\",\"class\":\"android.widget.Button\"}]", "screenshot_base64": screenshot_b64(), "installed_apps": ["Chrome"], "capabilities": ["click_any_text", "tap", "observe", "done"]})
-    result = poll(submitted["job_id"])
+    submitted = request("POST", "/v1/agent/step", {"task": "Press the visible CONTINUE button.", "step": 0, "history": [], "ui_tree": "[{\"text\":\"CONTINUE\",\"class\":\"android.widget.Button\"}]", "screenshot_base64": screenshot_b64(), "installed_apps": ["Chrome"], "capabilities": ["click_any_text", "tap", "observe", "done"]}, token)
+    result = poll(submitted["job_id"], token)
     provider = str(result.get("vision_provider", ""))
     assert provider not in {"", "repair", "compatibility"}, result
     assert result.get("visual_observation"), result
     assert result.get("action") in {"click_any_text", "tap", "observe", "done"}, result
     print("RENDER_V4_MULTIMODAL_OK", json.dumps({"vision_provider": provider, "provider": result.get("provider"), "action": result.get("action"), "visual_observation": result.get("visual_observation")}, ensure_ascii=False))
 elif mode == "state":
-    sid = post("/v1/agent/sessions", {"title": "ci-v4"})["session_id"]
-    post("/v1/agent/state", {"session_id": sid, "state": {"task": "smoke", "step": 2, "status": "verified"}})
-    with urllib.request.urlopen(BASE + "/v1/agent/state/" + sid, timeout=20) as r:
-        state = json.loads(r.read().decode())
+    sid = request("POST", "/v1/agent/sessions", {"title": "ci-v4"}, token)["session_id"]
+    request("POST", "/v1/agent/state", {"session_id": sid, "state": {"task": "smoke", "step": 2, "status": "verified"}}, token)
+    state = request("GET", "/v1/agent/state/" + sid, token=token, timeout=20)
     assert state["state"]["step"] == 2
-    verified = post("/v1/agent/verify-result", {"task": "press continue", "action": {"action": "click_any_text", "params": {"texts": ["CONTINUE"]}}, "before_ui_tree": "[{\"text\":\"CONTINUE\"}]", "after_ui_tree": "[{\"text\":\"NEXT\"}]", "session_id": sid})
+    verified = request("POST", "/v1/agent/verify-result", {"task": "press continue", "action": {"action": "click_any_text", "params": {"texts": ["CONTINUE"]}}, "before_ui_tree": "[{\"text\":\"CONTINUE\"}]", "after_ui_tree": "[{\"text\":\"NEXT\"}]", "session_id": sid}, token)
     assert verified["verified"] is True, verified
     print("RENDER_V4_STATE_VERIFIER_OK", sid)
 else:
