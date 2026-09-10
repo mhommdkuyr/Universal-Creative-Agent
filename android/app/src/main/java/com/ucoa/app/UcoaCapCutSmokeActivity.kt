@@ -25,7 +25,14 @@ class UcoaCapCutSmokeActivity : Activity() {
         capCutPackage = findPackage(label)
         Log.i(TAG, "UCOA_CAPCUT_SMOKE_START package=$capCutPackage")
         if (capCutPackage == null) return fail("CapCut is not installed in emulator")
-        waitForService(0)
+        brain.readiness { transportOk, ready, detail ->
+            main.post {
+                if (!transportOk || !ready) return@post fail("cloud brain unavailable: $detail")
+                sawPrimaryBrain = true
+                Log.i(TAG, "UCOA_CAPCUT_CLOUD_READY $detail")
+                waitForService(0)
+            }
+        }
     }
 
     private fun waitForService(attempt: Int) {
@@ -41,9 +48,9 @@ class UcoaCapCutSmokeActivity : Activity() {
         loop.start(task, object : UniversalAgentLoop.Listener {
             override fun onEvent(text: String) {
                 Log.i(TAG, "UCOA_CAPCUT_EVENT $text")
-                if (text.contains("huggingface-qwen3-vl-235b", true)) sawPrimaryBrain = true
-                if (text.startsWith("التنفيذ المحلي:") || text.startsWith("التنفيذ:") && !text.contains("observe", true)) usefulActions++
-                if (text.contains("التحقق: نجح", true)) verifiedActions++
+                if (text.contains("huggingface-qwen3-vl-235b", true) || text.contains("العقل جاهز", true) || text.contains("CLOUD_READY", true)) sawPrimaryBrain = true
+                if (text.startsWith("التنفيذ المحلي:") || text.startsWith("التنفيذ:") && !text.contains("observe", true) || text.contains("action=", true)) usefulActions++
+                if (text.contains("التحقق: نجح", true) || text.contains("verified", true)) verifiedActions++
                 main.postDelayed({ inspectState() }, 300)
             }
             override fun onConfirmationRequired(reasons: String) { fail("confirmation required: $reasons") }
@@ -69,7 +76,11 @@ class UcoaCapCutSmokeActivity : Activity() {
         val pkg = foregroundPackage() ?: return false
         if (capCutPackage != null && pkg != capCutPackage) return false
         val ui = UcoaAccessibilityService.instance?.observeUi(700)?.lowercase(Locale.ROOT) ?: return false
-        return listOf("timeline", "audio", "text", "split", "speed", "canvas", "export", "add audio", "tracks", "adjust", "filter").count { ui.contains(it) } >= 2
+        val markers = listOf(
+            "timeline", "audio", "text", "split", "speed", "canvas", "export", "add audio", "tracks", "adjust", "filter",
+            "الخط الزمني", "الصوت", "نص", "تقسيم", "السرعة", "لوحة", "تصدير", "إضافة صوت", "المسارات", "ضبط", "مرشح", "تحرير"
+        )
+        return markers.count { ui.contains(it) } >= 2
     }
 
     private fun foregroundPackage(): String? = UcoaAccessibilityService.instance?.foregroundPackageName()
