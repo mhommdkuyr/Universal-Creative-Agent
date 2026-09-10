@@ -60,7 +60,7 @@ def test_v3_result_verifier():
 
 def test_v3_safety_gate():
     x = client.post('/v1/agent/verify', json={
-        'task': 'send code',
+        'task': 'أرسل رمز التحقق',
         'decision': {'action': 'type_into_any', 'params': {'text': '123456'}}
     }).json()
     assert x['requires_confirmation'] is True
