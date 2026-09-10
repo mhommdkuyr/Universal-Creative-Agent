@@ -36,7 +36,10 @@ def _patch(monkeypatch, responses):
 
 def _configure(monkeypatch):
     monkeypatch.setenv("UCOA_GEMINI_API_KEY", "test")
+    monkeypatch.delenv("UCOA_OMNIRouTE_API_KEY", raising=False)
     monkeypatch.delenv("UCOA_OMNIROUTE_API_KEY", raising=False)
+    monkeypatch.delenv("UCOA_GEMINI_API_KEY_2", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY_2", raising=False)
     monkeypatch.delenv("UCOA_DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("UCOA_CEREBRAS_API_KEY", raising=False)
     monkeypatch.delenv("UCOA_GROQ_API_KEY", raising=False)
@@ -47,13 +50,17 @@ def _configure(monkeypatch):
     pr._VISION_CACHE.clear()
 
 
+def _gemini_response(text):
+    return {"candidates": [{"content": {"parts": [{"text": text}]}}]}
+
+
 def test_gemini_text_call(monkeypatch):
     _configure(monkeypatch)
-    calls = _patch(monkeypatch, [{"choices": [{"message": {"content": '{"ok":true}'}}]}])
+    calls = _patch(monkeypatch, [_gemini_response('{"ok":true}')])
     raw, provider = pr.call("system", "user")
     assert provider == "gemini"
     assert raw == '{"ok":true}'
-    assert calls and "/chat/completions" in calls[0][0]
+    assert calls and "/models/gemini-3.8-flash:generateContent" in calls[0][0]
 
 
 def test_failover_after_primary_error(monkeypatch):
@@ -72,11 +79,11 @@ def test_circuit_breaker_skips_open_provider(monkeypatch):
     monkeypatch.setenv("UCOA_CEREBRAS_API_KEY", "test-c")
     import time
 
-    pr._BREAKERS["cerebras"].opened_at = time.monotonic()
+    pr._BREAKERS["gemini"].opened_at = time.monotonic()
     responses = [{"choices": [{"message": {"content": "ok"}}]}]
     calls = _patch(monkeypatch, responses)
     raw, provider = pr.call("system", "user")
-    assert provider == "gemini"
+    assert provider == "cerebras"
     assert len(calls) == 1
 
 
@@ -90,12 +97,12 @@ def test_json_extraction():
 def test_vision_cache(monkeypatch):
     _configure(monkeypatch)
     image = base64.b64encode(b"fake-image").decode()
-    body = {"choices": [{"message": {"content": json.dumps({
+    body = _gemini_response(json.dumps({
         "screen_summary": "ok",
         "elements": [],
         "visible_goal_state": "x",
         "confidence": 0.9,
-    })}}]}
+    }))
     calls = _patch(monkeypatch, [body])
     first, p1 = pr.visual("task", "[]", image)
     second, p2 = pr.visual("task", "[]", image)
