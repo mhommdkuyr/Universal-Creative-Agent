@@ -168,7 +168,6 @@ def health():
     for env_name,name in (("UCOA_GEMINI_API_KEY","gemini"),("GEMINI_API_KEY","gemini"),("UCOA_GEMINI_API_KEY_2","gemini-2"),("GEMINI_API_KEY_2","gemini-2"),("HF_TOKEN","huggingface"),("UCOA_DEEPSEEK_API_KEY","deepseek"),("UCOA_CEREBRAS_API_KEY","cerebras"),("UCOA_GROQ_API_KEY","groq"),("UCOA_OMNIROUTE_API_KEY","omniroute")):
         if os.getenv(env_name," ").strip() and name not in external:external.append(name)
     return {"ok":True,"brain_configured":True,"model":os.getenv("UCOA_MODEL_NAME",""),"local_vision":app_v3.VISION_ENABLED,"vision_model":app_v3.VISION_MODEL,"reasoning_model":app_v3.REASONING_MODEL,"reasoning_provider":"provider-router","configured_providers":external,"external_fallback_configured":bool(os.getenv("UCOA_FALLBACK_BASE_URL","") and os.getenv("UCOA_FALLBACK_MODEL","")),"routing":True,"verifier":True,"state_persistence":True,"version":app.version}
-
 @app_v3.app.get("/v1/agent/state/{session_id}")
 def get_agent_state(session_id:str):return durable_state.load_state(session_id) or {"task_id":session_id,"status":"not_found"}
 @app_v3.app.get("/v1/agent/state/{session_id}/events")
@@ -176,3 +175,4 @@ def get_agent_events(session_id:str):return {"events":durable_state.recent_event
 @app_v3.app.get("/v1/storage/status")
 def storage_status():return {"durable_storage":durable_state.configured()}
 app=app_v3.app
+import production_overrides  # noqa: E402,F401
