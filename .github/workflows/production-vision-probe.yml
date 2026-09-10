@@ -7,10 +7,17 @@ on:
 jobs:
   gemini-probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     env:
       GEMINI_API_KEY: ${{ secrets.UCOA_GEMINI_API_KEY || secrets.GEMINI_API_KEY }}
       GEMINI_MODEL: gemini-3.8-flash
+      UCOA_GEMINI_API_KEY: ${{ secrets.UCOA_GEMINI_API_KEY || secrets.GEMINI_API_KEY }}
+      UCOA_GEMINI_API_KEY_2: ${{ secrets.UCOA_GEMINI_API_KEY_2 || secrets.GEMINI_API_KEY_2 }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      UCOA_DEEPSEEK_API_KEY: ${{ secrets.UCOA_DEEPSEEK_API_KEY }}
+      UCOA_OMNIROUTE_API_KEY: ${{ secrets.UCOA_OMNIROUTE_API_KEY }}
+      UCOA_CEREBRAS_API_KEY: ${{ secrets.UCOA_CEREBRAS_API_KEY }}
+      UCOA_GROQ_API_KEY: ${{ secrets.UCOA_GROQ_API_KEY }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -19,7 +26,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "${GEMINI_API_KEY:-}" ]]; then echo "available=true" >> "$GITHUB_OUTPUT"; else echo "available=false" >> "$GITHUB_OUTPUT"; echo "::warning::Gemini API secret is not configured; external probes will be skipped."; fi
+          if [[ -n "${GEMINI_API_KEY:-}" ]]; then echo "available=true" >> "$GITHUB_OUTPUT"; else echo "available=false" >> "$GITHUB_OUTPUT"; echo "::warning::Gemini API secret is not configured; direct Gemini checks will be skipped."; fi
+      - name: Install runtime dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -q pillow pytest numpy opencv-python-headless
+          python -m pip install -q -r server/requirements.txt
       - name: Check Gemini model catalog
         if: steps.gemini_config.outputs.available == 'true'
         shell: bash
@@ -37,11 +50,13 @@ jobs:
           assert 'gemini-3.8-flash' in names, sorted(n for n in names if 'gemini' in n.lower())[:100]
           print('Gemini model catalog contains gemini-3.8-flash')
           PY
-      - name: Verify Gemini text API through native endpoint
+      - name: Verify Gemini text API when quota allows
+        id: gemini_text
         if: steps.gemini_config.outputs.available == 'true'
         shell: bash
+        continue-on-error: true
         run: |
-          set -euo pipefail
+          set -u
           for attempt in 1 2 3; do
             body=$(curl --http1.1 -sS --connect-timeout 10 --max-time 30 \
               "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
@@ -61,12 +76,34 @@ jobs:
             sleep $((attempt*4))
           done
           exit 1
-      - name: Verify Gemini vision API through native endpoint
-        if: steps.gemini_config.outputs.available == 'true'
+      - name: Verify cloud router failover
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install -q pillow
+          result="$(PYTHONPATH=server python - <<'PY'
+          import json
+          import provider_router
+          x=provider_router.safe_text_probe()
+          print(json.dumps(x, ensure_ascii=False))
+          if not x.get('ok'):
+              raise SystemExit('Cloud router failed: '+json.dumps(x, ensure_ascii=False))
+          provider=((x.get('providers') or [{}])[0] or {}).get('provider','')
+          if not provider:
+              raise SystemExit('Cloud router returned no provider')
+          print('Cloud router text probe passed via '+provider)
+          PY
+          )"
+          echo "$result"
+      - name: Verify UCOA runtime contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. pytest -q
+      - name: Verify Gemini vision API when quota allows
+        if: steps.gemini_text.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
           python - <<'PY'
           from PIL import Image, ImageDraw
           img=Image.new('RGB',(160,90),'white'); d=ImageDraw.Draw(img)
@@ -74,36 +111,19 @@ jobs:
           img.save('/tmp/continue.jpg',format='JPEG',quality=75,optimize=True)
           PY
           IMAGE_B64="$(base64 -w0 /tmp/continue.jpg)"
-          for attempt in 1 2 3; do
-            body=$(curl --http1.1 -sS --connect-timeout 10 --max-time 45 \
-              "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
-              -H "Content-Type: application/json" \
-              -H "x-goog-api-key: $GEMINI_API_KEY" \
-              --data-binary "{\"contents\":[{\"parts\":[{\"text\":\"Look at the image. Reply with exactly CONTINUE if a button labeled CONTINUE is visible.\"},{\"inline_data\":{\"mime_type\":\"image/jpeg\",\"data\":\"$IMAGE_B64\"}}]}],\"generationConfig\":{\"temperature\":0,\"maxOutputTokens\":64,\"thinkingConfig\":{\"thinkingLevel\":\"low\"}}}" ) || true
-            echo "$body"
-            if python - <<'PY' "$body"
+          body=$(curl --http1.1 -sS --connect-timeout 10 --max-time 45 \
+            "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
+            -H "Content-Type: application/json" \
+            -H "x-goog-api-key: $GEMINI_API_KEY" \
+            --data-binary "{\"contents\":[{\"parts\":[{\"text\":\"Look at the image. Reply with exactly CONTINUE if a button labeled CONTINUE is visible.\"},{\"inline_data\":{\"mime_type\":\"image/jpeg\",\"data\":\"$IMAGE_B64\"}}]}],\"generationConfig\":{\"temperature\":0,\"maxOutputTokens\":64,\"thinkingConfig\":{\"thinkingLevel\":\"low\"}}}" )
+          echo "$body"
+          python - <<'PY' "$body"
           import json,sys
-          x=json.loads(sys.argv[1])
-          assert not x.get('error'), x
+          x=json.loads(sys.argv[1]); assert not x.get('error'),x
           txt=''.join(p.get('text','') for p in x.get('candidates',[{}])[0].get('content',{}).get('parts',[]) if isinstance(p,dict))
-          assert 'CONTINUE' in txt, x
+          assert 'CONTINUE' in txt,x
           print('Gemini native vision generation passed')
           PY
-            then exit 0; fi
-            sleep $((attempt*5))
-          done
-          exit 1
-      - name: Verify UCOA runtime contract
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install -q pytest pillow numpy opencv-python-headless
-          if [[ -f requirements.txt ]]; then python -m pip install -q -r requirements.txt; fi
-          if [[ -f server/requirements.txt ]]; then python -m pip install -q -r server/requirements.txt; fi
-          PYTHONPATH=. pytest -q
       - name: Release validation marker
-        if: steps.gemini_config.outputs.available == 'true'
-        run: echo "Gemini catalog + native text + native vision + UCOA runtime contract passed"
-      - name: Runtime-only validation marker
-        if: steps.gemini_config.outputs.available != 'true'
-        run: echo "UCOA runtime contract passed; Gemini external probe skipped because no API secret is configured"
+        run: |
+          echo "Cloud routing contract passed; Gemini direct path status=${{ steps.gemini_text.outcome }}"
