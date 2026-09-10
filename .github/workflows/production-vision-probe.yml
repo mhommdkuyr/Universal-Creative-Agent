@@ -7,7 +7,7 @@ on:
 jobs:
   gemini-probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 10
     env:
       GEMINI_API_KEY: ${{ secrets.UCOA_GEMINI_API_KEY || secrets.GEMINI_API_KEY }}
       GEMINI_MODEL: gemini-3.8-flash
@@ -25,11 +25,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          code=$(curl -sS --connect-timeout 10 --max-time 30 -o /tmp/models.json -w '%{http_code}' \
+          code=$(curl --http1.1 -sS --connect-timeout 10 --max-time 30 -o /tmp/models.json -w '%{http_code}' \
             "https://generativelanguage.googleapis.com/v1beta/models" \
             -H "x-goog-api-key: $GEMINI_API_KEY")
-          echo "HTTP $code"
-          cat /tmp/models.json
+          echo "HTTP $code"; cat /tmp/models.json
           test "$code" = "200"
           python - <<'PY'
           import json
@@ -43,12 +42,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          body=$(curl -sS --connect-timeout 10 --max-time 45 \
+          body=$(curl --http1.1 --noproxy '*' -sS --connect-timeout 10 --max-time 30 \
             "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
             -H "Content-Type: application/json" \
             -H "x-goog-api-key: $GEMINI_API_KEY" \
-            -X POST \
-            -d '{"contents":[{"parts":[{"text":"Return exactly OK."}]}],"generationConfig":{"temperature":0,"maxOutputTokens":64,"thinkingConfig":{"thinkingLevel":"low"}}}')
+            --data-binary '{"contents":[{"parts":[{"text":"Return exactly OK."}]}],"generationConfig":{"temperature":0,"maxOutputTokens":16}}')
           echo "$body"
           python - <<'PY' "$body"
           import json,sys
@@ -70,12 +68,11 @@ jobs:
           img.save('/tmp/continue.jpg',format='JPEG',quality=75,optimize=True)
           PY
           IMAGE_B64="$(base64 -w0 /tmp/continue.jpg)"
-          body=$(curl -sS --connect-timeout 10 --max-time 60 \
+          body=$(curl --http1.1 --noproxy '*' -sS --connect-timeout 10 --max-time 45 \
             "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
             -H "Content-Type: application/json" \
             -H "x-goog-api-key: $GEMINI_API_KEY" \
-            -X POST \
-            -d "{\"contents\":[{\"parts\":[{\"text\":\"Look at the image. Reply with exactly CONTINUE if a button labeled CONTINUE is visible.\"},{\"inline_data\":{\"mime_type\":\"image/jpeg\",\"data\":\"$IMAGE_B64\"}}]}],\"generationConfig\":{\"temperature\":0,\"maxOutputTokens\":128,\"thinkingConfig\":{\"thinkingLevel\":\"low\"}}}" )
+            --data-binary "{\"contents\":[{\"parts\":[{\"text\":\"Look at the image. Reply with exactly CONTINUE if a button labeled CONTINUE is visible.\"},{\"inline_data\":{\"mime_type\":\"image/jpeg\",\"data\":\"$IMAGE_B64\"}}]}],\"generationConfig\":{\"temperature\":0,\"maxOutputTokens\":64}}" )
           echo "$body"
           python - <<'PY' "$body"
           import json,sys
