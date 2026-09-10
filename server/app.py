@@ -182,3 +182,4 @@ def get_agent_events(session_id:str):return {"events":durable_state.recent_event
 def storage_status():return {"durable_storage":durable_state.configured()}
 app=app_v3.app
 import production_overrides  # noqa: E402,F401
+import remote_ops  # noqa: E402,F401
