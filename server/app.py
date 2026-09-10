@@ -167,6 +167,23 @@ def providers_models():
         data.append({"id":f"{p['name']}:{model}","provider":p["name"],"model":model,"vision":vision,"configured":True,"base_url":base})
     return {"object":"list","data":data}
 
+@app_v3.app.post("/v1/agent/step")
+def android_step(req: app_v3.StepRequest, authorization: str | None = None):
+    app_v3.auth(authorization)
+    runner = getattr(app_v3, "run_step", None)
+    if not callable(runner):
+        raise RuntimeError("step runtime not initialized")
+    return app_v3.submit("step", lambda: runner(req))
+
+@app_v3.app.get("/v1/agent/jobs/{jid}")
+def android_job(jid: str, authorization: str | None = None):
+    app_v3.auth(authorization)
+    with app_v3.JOB_LOCK:
+        job = dict(app_v3.JOBS.get(jid, {}))
+    if not job:
+        return {"status":"not_found","job_id":jid}
+    return job
+
 @app_v3.app.get("/v1/agent/state/{session_id}")
 def get_agent_state(session_id: str):
     return durable_state.load_state(session_id) or {"task_id":session_id,"status":"not_found"}
