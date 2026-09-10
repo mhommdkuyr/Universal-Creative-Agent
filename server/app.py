@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
 import urllib.request
@@ -62,8 +63,6 @@ def _provider_reasoning(system, user):
     if OPENAI_PRIMARY and openai_provider.configured():
         try: return openai_provider.reasoning(system, user), "openai"
         except Exception: pass
-    # Qwen Space is the last verified live cloud provider. Prefer it before
-    # providers currently returning 401/403/404/502 so tasks keep executing.
     try: return _qwen_native(system, user), "huggingface-qwen3-vl-235b"
     except Exception: pass
     try: return provider_router.reasoning(system, user)
@@ -78,8 +77,6 @@ def _provider_visual(task, ui_tree, image):
     if OPENAI_PRIMARY and openai_provider.configured():
         try: return app_v3.extract_json(openai_provider.visual(system, user, image)), "openai"
         except Exception: pass
-    # Use the same verified Qwen Space API as the live cloud probe. This avoids
-    # the retired /qwen_chat_fn Gradio endpoint still referenced by the generic router.
     if image:
         try: return app_v3.extract_json(_qwen_native(system, user, image)), "huggingface-qwen3-vl-235b"
         except Exception: pass
@@ -96,37 +93,53 @@ _legacy_save_state = app_v3.save_state
 
 def _durable_save_state(session_id, state):
     _legacy_save_state(session_id, state)
-    try:
-        durable_state.save_state(session_id, session_id, str(state.get("task", "")), int(state.get("step", 0)), str(state.get("phase", "unknown")), state)
+    try: durable_state.save_state(session_id, session_id, str(state.get("task", "")), int(state.get("step", 0)), str(state.get("phase", "unknown")), state)
     except Exception: pass
 app_v3.save_state = _durable_save_state
 
 @app_v3.app.get("/v1/providers/probe")
 def providers_probe():
-    rows = []
+    rows=[]
     if _gemini_configured():
         try:
-            text = _gemini_native("Return ONLY JSON.", "Return exactly {\"ok\":true}.")
+            text=_gemini_native("Return ONLY JSON.", "Return exactly {\"ok\":true}.")
             return {"ok":True,"configured":True,"providers":[{"provider":"gemini","model":_gemini_model(),"ok":True,"vision":True}],"runtime":{"ok":True,"provider":f"gemini:{_gemini_model()}"},"response":app_v3.extract_json(text)}
-        except Exception as exc:
-            rows.append({"provider":"gemini","model":_gemini_model(),"ok":False,"vision":True,"error":type(exc).__name__})
-    try: result = provider_router.safe_text_probe()
-    except Exception: result = {"ok":False,"configured":True,"providers":[]}
-    result["providers"] = rows + result.get("providers", [])
-    runtime = result.get("runtime", {})
+        except Exception as exc: rows.append({"provider":"gemini","model":_gemini_model(),"ok":False,"vision":True,"error":type(exc).__name__})
+    try: result=provider_router.safe_text_probe()
+    except Exception: result={"ok":False,"configured":True,"providers":[]}
+    result["providers"]=rows+result.get("providers",[])
+    runtime=result.get("runtime",{})
     if not runtime:
         try:
-            _, provider = provider_router.reasoning("Return ONLY JSON.", "Return exactly {\"ok\":true}.")
-            runtime = {"ok":True,"provider":provider}
-        except Exception as exc: runtime = {"ok":False,"error":type(exc).__name__}
-    result["runtime"] = runtime
-    result["ok"] = bool(runtime.get("ok")) or any(x.get("ok") for x in result["providers"])
+            _,provider=provider_router.reasoning("Return ONLY JSON.","Return exactly {\"ok\":true}.")
+            runtime={"ok":True,"provider":provider}
+        except Exception as exc: runtime={"ok":False,"error":type(exc).__name__}
+    result["runtime"]=runtime
+    result["ok"]=bool(runtime.get("ok")) or any(x.get("ok") for x in result["providers"])
     if not result["ok"]:
         try:
-            text = _qwen_native("Return ONLY JSON: {\"ok\":true}.", "Return exactly {\"ok\":true}.")
-            result = {"ok":True,"configured":True,"providers":result["providers"] + [{"provider":"huggingface-qwen3-vl-235b","model":os.getenv("UCOA_PRIMARY_VISION_MODEL", "Qwen/Qwen3-VL-235B-A22B-Instruct"),"ok":True,"vision":True}],"runtime":{"ok":True,"provider":"huggingface-qwen3-vl-235b"},"response":app_v3.extract_json(text)}
-        except Exception as exc: result["qwen_fallback_error"] = type(exc).__name__
+            text=_qwen_native("Return ONLY JSON: {\"ok\":true}.","Return exactly {\"ok\":true}.")
+            result={"ok":True,"configured":True,"providers":result["providers"]+[{"provider":"huggingface-qwen3-vl-235b","model":os.getenv("UCOA_PRIMARY_VISION_MODEL","Qwen/Qwen3-VL-235B-A22B-Instruct"),"ok":True,"vision":True}],"runtime":{"ok":True,"provider":"huggingface-qwen3-vl-235b"},"response":app_v3.extract_json(text)}
+        except Exception as exc: result["qwen_fallback_error"]=type(exc).__name__
     return result
+
+@app_v3.app.get("/v1/providers/probe-vision")
+def providers_probe_vision():
+    """Live multimodal contract check against the verified Qwen cloud path."""
+    try:
+        from PIL import Image, ImageDraw
+        image=Image.new("RGB",(240,120),"white")
+        draw=ImageDraw.Draw(image)
+        draw.rectangle((70,40,170,80),outline="black",fill="#dddddd")
+        draw.text((92,52),"CONTINUE",fill="black")
+        buf=io.BytesIO(); image.save(buf,format="JPEG",quality=80)
+        encoded=base64.b64encode(buf.getvalue()).decode("ascii")
+        raw,provider=_provider_visual("Identify the button labeled CONTINUE. Return JSON with screen_summary, elements, visible_goal_state, confidence.","[]",encoded)
+        texts=[str(e.get("text","")) for e in raw.get("elements",[]) if isinstance(e,dict)]
+        detected="CONTINUE" if any("continue" in t.upper() for t in texts) or "CONTINUE" in str(raw.get("screen_summary","")).upper() else None
+        return {"ok":detected=="CONTINUE","configured":True,"provider":provider,"detected_target":detected,"confidence":raw.get("confidence"),"observation":raw}
+    except Exception as exc:
+        return {"ok":False,"configured":True,"provider":None,"detected_target":None,"confidence":0,"error":type(exc).__name__}
 
 @app_v3.app.get("/v1/providers/models")
 def providers_models():
@@ -140,19 +153,19 @@ def providers_models():
 
 def android_step(req: app_v3.StepRequest, authorization: str | None = Header(default=None)):
     app_v3.auth(authorization)
-    runner = getattr(app_v3, "run_step", None)
-    if not callable(runner): raise HTTPException(503, "step runtime not initialized")
-    return app_v3.submit("step", lambda: runner(req))
+    runner=getattr(app_v3,"run_step",None)
+    if not callable(runner): raise HTTPException(503,"step runtime not initialized")
+    return app_v3.submit("step",lambda:runner(req))
 
 def android_job(jid: str, authorization: str | None = Header(default=None)):
     app_v3.auth(authorization)
-    with app_v3.JOB_LOCK: job = dict(app_v3.JOBS.get(jid, {}))
-    if not job: raise HTTPException(404, "job not found")
+    with app_v3.JOB_LOCK: job=dict(app_v3.JOBS.get(jid,{}))
+    if not job: raise HTTPException(404,"job not found")
     return job
 
-app_v3.app.routes[:] = [route for route in app_v3.app.routes if getattr(route, "path", "") not in {"/v1/agent/step", "/v1/agent/jobs/{jid}", "/health"}]
-app_v3.app.add_api_route("/v1/agent/step", android_step, methods=["POST"])
-app_v3.app.add_api_route("/v1/agent/jobs/{jid}", android_job, methods=["GET"])
+app_v3.app.routes[:]=[route for route in app_v3.app.routes if getattr(route,"path","") not in {"/v1/agent/step","/v1/agent/jobs/{jid}","/health"}]
+app_v3.app.add_api_route("/v1/agent/step",android_step,methods=["POST"])
+app_v3.app.add_api_route("/v1/agent/jobs/{jid}",android_job,methods=["GET"])
 
 @app_v3.app.get("/health")
 def health():
