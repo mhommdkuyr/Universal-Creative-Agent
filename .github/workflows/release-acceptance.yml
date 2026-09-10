@@ -134,10 +134,7 @@ jobs:
             set -eu
             pwd
             test -s ./android/app/build/outputs/apk/debug/app-debug.apk
-            export CAPCUT_APK_PATH="$PWD/.cache/capcut/capcut.apk"
-            export UCOA_APK_PATH="$PWD/android/app/build/outputs/apk/debug/app-debug.apk"
-            test -s "$UCOA_APK_PATH"
-            bash ./server/ci_capcut_e2e.sh
+            CAPCUT_APK_PATH="$PWD/.cache/capcut/capcut.apk" UCOA_APK_PATH="$PWD/android/app/build/outputs/apk/debug/app-debug.apk" bash ./server/ci_capcut_e2e.sh
       - name: Upload verified release APK
         if: success()
         uses: actions/upload-artifact@v4
