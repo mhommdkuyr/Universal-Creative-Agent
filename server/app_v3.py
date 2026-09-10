@@ -180,9 +180,10 @@ def submit(kind,fn):
 @app.get("/health")
 def health():
     external = []
-    for env_name, name in [("UCOA_GEMINI_API_KEY","gemini"),("UCOA_DEEPSEEK_API_KEY","deepseek"),("UCOA_CEREBRAS_API_KEY","cerebras"),("UCOA_GROQ_API_KEY","groq"),("UCOA_OMNIROUTE_API_KEY","omniroute")]:
-        if os.getenv(env_name, "").strip(): external.append(name)
-    return {"ok":True,"brain_configured":bool(HF_TOKEN or LOCAL_BASE),"model":LOCAL_MODEL,"local_vision":VISION_ENABLED,"vision_model":VISION_MODEL,"reasoning_model":REASONING_MODEL,"reasoning_provider":"provider-router" if external else ("huggingface-router" if HF_TOKEN else "unconfigured"),"configured_providers":external,"external_fallback_configured":bool(EXT_BASE and EXT_MODEL),"routing":bool(external),"verifier":True,"state_persistence":True,"version":app.version}
+    for env_name, name in [("UCOA_GEMINI_API_KEY","gemini"),("GEMINI_API_KEY","gemini"),("UCOA_GEMINI_API_KEY_2","gemini-2"),("GEMINI_API_KEY_2","gemini-2"),("HF_TOKEN","huggingface"),("UCOA_DEEPSEEK_API_KEY","deepseek"),("UCOA_CEREBRAS_API_KEY","cerebras"),("UCOA_GROQ_API_KEY","groq"),("UCOA_OMNIROUTE_API_KEY","omniroute")]:
+        if os.getenv(env_name, "").strip() and name not in external: external.append(name)
+    router_ready = bool(external)
+    return {"ok":True,"brain_configured":bool(HF_TOKEN or LOCAL_BASE or router_ready),"model":LOCAL_MODEL,"local_vision":VISION_ENABLED,"vision_model":VISION_MODEL,"reasoning_model":REASONING_MODEL,"reasoning_provider":"provider-router" if router_ready else ("huggingface-router" if HF_TOKEN else "unconfigured"),"configured_providers":external,"external_fallback_configured":bool(EXT_BASE and EXT_MODEL),"routing":router_ready,"verifier":True,"state_persistence":True,"version":app.version}
 
 @app.post("/v1/agent/sessions")
 def create_session(req:SessionRequest,authorization:str|None=Header(default=None)):
@@ -218,22 +219,3 @@ def run_plan(req):
 def get_job(jid:str,authorization:str|None=Header(default=None)):
     auth(authorization)
     with JOB_LOCK:x=dict(JOBS.get(jid,{}))
-    if not x: raise HTTPException(404,"Unknown job")
-    return x
-@app.post("/v1/agent/step")
-def step(req:StepRequest,authorization:str|None=Header(default=None)):
-    auth(authorization); return submit("step",lambda: run_step(req))
-def run_step(req):
-    sid=ensure_session(req.session_id); obs={"screen_summary":"No screenshot","elements":[],"confidence":0.0}; vp=None
-    if req.screenshot_base64 and VISION_ENABLED:
-        try: obs,vp=call_vision(req.task,req.ui_tree,req.screenshot_base64); remember(sid,"visual_observation",obs)
-        except Exception as e: remember(sid,"visual_error",{"error":type(e).__name__})
-    prompt=json.dumps({"task":req.task,"step":req.step,"history":req.history[-8:],"memory":memory(sid,16),"state":load_state(sid),"visual_observation":obs,"ui_tree":req.ui_tree[:14000],"installed_apps":req.installed_apps[:100],"capabilities":req.capabilities},ensure_ascii=False)
-    try:
-        raw,p=reasoning(STEP_SYSTEM,prompt); result=extract_json(raw); action=str(result.get("action","observe"));
-        if action not in ACTIONS: raise ValueError("invalid action")
-        result["action"]=action; result["params"]=result.get("params") if isinstance(result.get("params"),dict) else {}; result["done"]=bool(result.get("done",False)); result["wait_after_ms"]=max(150,min(5000,int(result.get("wait_after_ms",700)))); result["message"]=str(result.get("message","")); result["output_mode"]="model"
-    except Exception as e:
-        result=fallback_step(req,obs); p="repair"; result["error"]=type(e).__name__
-    result.update(provider=p,vision_provider=vp,visual_observation=obs,session_id=sid,verification=safety(req.task,result,req.approved_risks))
-    remember(sid,"decision",result); save_state(sid,{"phase":"executing","task":req.task,"step":req.step,"last_decision":result}); return result
