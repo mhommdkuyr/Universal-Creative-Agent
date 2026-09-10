@@ -81,27 +81,34 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONPATH=server python - <<'PY'
-          import json
           import provider_router as pr
-          pr.os.environ['UCOA_GEMINI_API_KEY'] = 'test'
-          pr.os.environ['UCOA_CEREBRAS_API_KEY'] = 'test-c'
           for state in pr._BREAKERS.values():
               state.failures = 0; state.opened_at = 0.0
-          responses = [RuntimeError('simulated Gemini quota'), {'choices':[{'message':{'content':'{"ok":true}'}}]}]
-          def fake_call(*_args, **_kwargs):
-              value = responses.pop(0)
-              if isinstance(value, Exception): raise value
-              return value
+          original_ordered = pr._ordered
+          original_cfg = pr._cfg
           original_generate = pr._gemini_generate
           original_chat = pr._chat
+          calls = []
           try:
-              pr._gemini_generate = fake_call
-              pr._chat = lambda *args, **kwargs: fake_call()
+              # Deterministically exercise the same provider loop used in production.
+              pr._ordered = lambda image: ['gemini', 'cerebras']
+              pr._cfg = lambda p: ('https://example.invalid', 'test-key', 'test-model', bool(p.get('vision')), 'test')
+              def fake_generate(*args, **kwargs):
+                  calls.append('gemini')
+                  raise RuntimeError('simulated Gemini quota')
+              def fake_chat(*args, **kwargs):
+                  calls.append('cerebras')
+                  return '{"ok":true}'
+              pr._gemini_generate = fake_generate
+              pr._chat = fake_chat
               raw, provider = pr.call('system','user')
+              assert calls == ['gemini', 'cerebras'], calls
               assert provider == 'cerebras', (provider, raw)
-              assert raw == '{"ok":true}'
+              assert raw == '{"ok":true}', raw
               print('Cloud router failover contract passed: Gemini failure -> Cerebras success')
           finally:
+              pr._ordered = original_ordered
+              pr._cfg = original_cfg
               pr._gemini_generate = original_generate
               pr._chat = original_chat
           PY
