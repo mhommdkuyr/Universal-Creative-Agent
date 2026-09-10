@@ -7,6 +7,8 @@ import os
 import urllib.request
 import urllib.error
 
+from fastapi import Header, HTTPException
+
 import app_v4_runtime  # noqa: F401,E402
 import cloud_runtime  # noqa: F401,E402
 import app_v3
@@ -67,12 +69,7 @@ def _gemini_native(system: str, user: str, image: str | None = None) -> str:
     candidates = body.get("candidates") or []
     if not candidates:
         raise RuntimeError("Gemini returned no candidates")
-    fragments = []
-    for part in (candidates[0].get("content") or {}).get("parts", []):
-        text = part.get("text") if isinstance(part, dict) else None
-        if text:
-            fragments.append(text)
-    result = "".join(fragments).strip()
+    result = "".join(str(p.get("text", "")) for p in (candidates[0].get("content") or {}).get("parts", []) if isinstance(p, dict)).strip()
     if not result:
         raise RuntimeError("Gemini returned empty content")
     return result
@@ -89,11 +86,15 @@ def _provider_reasoning(system, user):
         except Exception:
             pass
     if OPENAI_PRIMARY and openai_provider.configured():
-        try:return openai_provider.reasoning(system, user), "openai"
-        except Exception:pass
-    try:return provider_router.reasoning(system, user)
+        try:
+            return openai_provider.reasoning(system, user), "openai"
+        except Exception:
+            pass
+    try:
+        return provider_router.reasoning(system, user)
     except Exception:
-        try:return _qwen_native(system, user), "huggingface-qwen3-vl-235b"
+        try:
+            return _qwen_native(system, user), "huggingface-qwen3-vl-235b"
         except Exception:
             return app_v3._legacy_reasoning(system, user) if hasattr(app_v3, "_legacy_reasoning") else ("{\"action\":\"observe\"}", "repair")
 
@@ -101,31 +102,33 @@ def _provider_reasoning(system, user):
 def _provider_visual(task, ui_tree, image):
     if _gemini_configured() and image and not OPENAI_PRIMARY:
         try:
-            system=("أنت محرك الرؤية لوكيل عملي على هاتف أندرويد. افحص لقطة الشاشة وشجرة الواجهة. "
-                    "أعد JSON فقط: {\"screen_summary\":string,\"elements\":[{\"text\":string,\"role\":string,\"x\":number,\"y\":number}],\"visible_goal_state\":string,\"confidence\":number}. "
-                    "لا تخترع عناصر غير ظاهرة، والإحداثيات بين صفر وألف.")
-            user=json.dumps({"task":task,"ui_tree":ui_tree[:18000]}, ensure_ascii=False)
+            system = ("أنت محرك الرؤية لوكيل عملي على هاتف أندرويد. افحص لقطة الشاشة وشجرة الواجهة. "
+                      "أعد JSON فقط: {\"screen_summary\":string,\"elements\":[{\"text\":string,\"role\":string,\"x\":number,\"y\":number}],\"visible_goal_state\":string,\"confidence\":number}. "
+                      "لا تخترع عناصر غير ظاهرة، والإحداثيات بين صفر وألف.")
+            user = json.dumps({"task": task, "ui_tree": ui_tree[:18000]}, ensure_ascii=False)
             return app_v3.extract_json(_gemini_native(system, user, image)), f"gemini:{_gemini_model()}"
         except Exception:
             pass
     if OPENAI_PRIMARY and openai_provider.configured():
         try:
-            system=("You are UCOA visual perception. Inspect only the current Android screenshot and UI tree. "
-                    "Return ONLY valid JSON: {\"screen_summary\":string,\"elements\":[{\"text\":string,\"role\":string,\"x\":number,\"y\":number}],\"visible_goal_state\":string,\"confidence\":number}. "
-                    "Never invent unseen elements. Coordinates must be normalized to 0..1000.")
-            user=json.dumps({"task":task,"ui_tree":ui_tree[:18000]},ensure_ascii=False)
-            return app_v3.extract_json(openai_provider.visual(system,user,image)),"openai"
-        except Exception:pass
-    try:return provider_router.visual(task,ui_tree,image)
+            system = ("You are UCOA visual perception. Inspect only the current Android screenshot and UI tree. "
+                      "Return ONLY valid JSON: {\"screen_summary\":string,\"elements\":[{\"text\":string,\"role\":string,\"x\":number,\"y\":number}],\"visible_goal_state\":string,\"confidence\":number}. "
+                      "Never invent unseen elements. Coordinates must be normalized to 0..1000.")
+            user = json.dumps({"task": task, "ui_tree": ui_tree[:18000]}, ensure_ascii=False)
+            return app_v3.extract_json(openai_provider.visual(system, user, image)), "openai"
+        except Exception:
+            pass
+    try:
+        return provider_router.visual(task, ui_tree, image)
     except Exception:
         try:
-            system=("You are UCOA visual perception. Inspect only the current Android screenshot and UI tree. "
-                    "Return ONLY valid JSON: {\"screen_summary\":string,\"elements\":[{\"text\":string,\"role\":string,\"x\":number,\"y\":number}],\"visible_goal_state\":string,\"confidence\":number}. "
-                    "Never invent unseen elements. Coordinates must be normalized to 0..1000.")
-            user=json.dumps({"task":task,"ui_tree":ui_tree[:18000]},ensure_ascii=False)
+            system = ("You are UCOA visual perception. Inspect only the current Android screenshot and UI tree. "
+                      "Return ONLY valid JSON: {\"screen_summary\":string,\"elements\":[{\"text\":string,\"role\":string,\"x\":number,\"y\":number}],\"visible_goal_state\":string,\"confidence\":number}. "
+                      "Never invent unseen elements. Coordinates must be normalized to 0..1000.")
+            user = json.dumps({"task": task, "ui_tree": ui_tree[:18000]}, ensure_ascii=False)
             return app_v3.extract_json(_qwen_native(system, user, image)), "huggingface-qwen3-vl-235b"
         except Exception:
-            return app_v3._legacy_visual(task,ui_tree,image) if hasattr(app_v3, "_legacy_visual") else ({"screen_summary":"unavailable","elements":[]},"repair")
+            return app_v3._legacy_visual(task, ui_tree, image) if hasattr(app_v3, "_legacy_visual") else ({"screen_summary": "unavailable", "elements": []}, "repair")
 
 if not hasattr(app_v3, "_legacy_reasoning"):
     app_v3._legacy_reasoning = app_v3.reasoning
@@ -196,35 +199,29 @@ def providers_models():
     return {"object":"list","data":data}
 
 
-def android_step(req: app_v3.StepRequest, authorization: str | None = None):
+def android_step(req: app_v3.StepRequest, authorization: str | None = Header(default=None)):
     app_v3.auth(authorization)
     runner = getattr(app_v3, "run_step", None)
     if not callable(runner):
-        raise RuntimeError("step runtime not initialized")
+        raise HTTPException(503, "step runtime not initialized")
     return app_v3.submit("step", lambda: runner(req))
 
 
-def android_job(jid: str, authorization: str | None = None):
+def android_job(jid: str, authorization: str | None = Header(default=None)):
     app_v3.auth(authorization)
     with app_v3.JOB_LOCK:
         job = dict(app_v3.JOBS.get(jid, {}))
     if not job:
-        return {"status":"not_found","job_id":jid}
+        raise HTTPException(404, "job not found")
     return job
 
-# Replace any earlier compatible V3 routes in-place so FastAPI does not select a stale
-# handler before these production definitions. If none exist, register new routes.
-def _replace_or_add_route(path: str, methods: set[str], endpoint) -> None:
-    for route in app_v3.app.routes:
-        if getattr(route, "path", "") == path and methods.intersection(getattr(route, "methods", set()) or set()):
-            route.endpoint = endpoint
-            if hasattr(route, "dependant"):
-                route.dependant.call = endpoint
-            return
-    app_v3.app.add_api_route(path, endpoint, methods=sorted(methods))
-
-_replace_or_add_route("/v1/agent/step", {"POST"}, android_step)
-_replace_or_add_route("/v1/agent/jobs/{jid}", {"GET"}, android_job)
+# Remove stale V3 route definitions so FastAPI cannot select them before the production handlers.
+app_v3.app.routes[:] = [
+    route for route in app_v3.app.routes
+    if getattr(route, "path", "") not in {"/v1/agent/step", "/v1/agent/jobs/{jid}"}
+]
+app_v3.app.add_api_route("/v1/agent/step", android_step, methods=["POST"])
+app_v3.app.add_api_route("/v1/agent/jobs/{jid}", android_job, methods=["GET"])
 
 @app_v3.app.get("/v1/agent/state/{session_id}")
 def get_agent_state(session_id: str):
