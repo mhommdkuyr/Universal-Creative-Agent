@@ -12,6 +12,21 @@ from observability import init_sentry
 
 init_sentry()
 OPENAI_PRIMARY = os.getenv("UCOA_OPENAI_PRIMARY", "false").lower() == "true"
+
+# Reject stale/unsupported Gemini model names left in deployment variables.
+# Gemini 2.5 Flash is multimodal and available on the Gemini API free tier.
+_VALID_GEMINI_MODELS = {
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+}
+for _provider in provider_router.PROVIDERS:
+    if _provider["name"] in {"gemini", "gemini-2"}:
+        _configured_model = os.getenv(_provider.get("model_env", ""), "").strip()
+        if _configured_model not in _VALID_GEMINI_MODELS:
+            _provider["default_model"] = "gemini-2.5-flash"
+
 _LEGACY_REASONING = app_v3.reasoning
 _LEGACY_VISUAL = app_v3.visual
 VISION_ENABLED = app_v3.VISION_ENABLED
