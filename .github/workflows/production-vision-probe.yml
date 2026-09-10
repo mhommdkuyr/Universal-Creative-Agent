@@ -25,7 +25,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          code=$(curl --http1.1 --noproxy '*' -sS --connect-timeout 10 --max-time 20 -o /tmp/models.json -w '%{http_code}' \
+          code=$(curl --http1.1 -sS --connect-timeout 10 --max-time 20 -o /tmp/models.json -w '%{http_code}' \
             "https://generativelanguage.googleapis.com/v1beta/models" \
             -H "x-goog-api-key: $GEMINI_API_KEY")
           echo "HTTP $code"; cat /tmp/models.json
@@ -42,20 +42,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          body=$(curl --http1.1 --noproxy '*' -sS --connect-timeout 10 --max-time 30 \
-            "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
-            -H "Content-Type: application/json" \
-            -H "x-goog-api-key: $GEMINI_API_KEY" \
-            --data-binary '{"contents":[{"parts":[{"text":"Return exactly OK."}]}],"generationConfig":{"temperature":0,"maxOutputTokens":16,"thinkingConfig":{"thinkingLevel":"low"}}}')
-          echo "$body"
-          python - <<'PY' "$body"
+          for attempt in 1 2 3; do
+            body=$(curl --http1.1 -sS --connect-timeout 10 --max-time 30 \
+              "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
+              -H "Content-Type: application/json" \
+              -H "x-goog-api-key: $GEMINI_API_KEY" \
+              --data-binary '{"contents":[{"parts":[{"text":"Return exactly OK."}]}],"generationConfig":{"temperature":0,"maxOutputTokens":16,"thinkingConfig":{"thinkingLevel":"low"}}}' ) || true
+            echo "$body"
+            if python - <<'PY' "$body"
           import json,sys
-          raw=sys.argv[1]; x=json.loads(raw)
-          assert not x.get('error'), raw
+          x=json.loads(sys.argv[1])
+          assert not x.get('error'), x
           txt=''.join(p.get('text','') for p in x.get('candidates',[{}])[0].get('content',{}).get('parts',[]) if isinstance(p,dict))
-          assert 'OK' in txt, raw
+          assert 'OK' in txt, x
           print('Gemini native text generation passed')
           PY
+            then exit 0; fi
+            sleep $((attempt*4))
+          done
+          exit 1
       - name: Verify Gemini vision API through native endpoint
         if: steps.gemini_config.outputs.available == 'true'
         shell: bash
@@ -69,20 +74,25 @@ jobs:
           img.save('/tmp/continue.jpg',format='JPEG',quality=75,optimize=True)
           PY
           IMAGE_B64="$(base64 -w0 /tmp/continue.jpg)"
-          body=$(curl --http1.1 --noproxy '*' -sS --connect-timeout 10 --max-time 45 \
-            "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
-            -H "Content-Type: application/json" \
-            -H "x-goog-api-key: $GEMINI_API_KEY" \
-            --data-binary "{\"contents\":[{\"parts\":[{\"text\":\"Look at the image. Reply with exactly CONTINUE if a button labeled CONTINUE is visible.\"},{\"inline_data\":{\"mime_type\":\"image/jpeg\",\"data\":\"$IMAGE_B64\"}}]}],\"generationConfig\":{\"temperature\":0,\"maxOutputTokens\":64,\"thinkingConfig\":{\"thinkingLevel\":\"low\"}}}" )
-          echo "$body"
-          python - <<'PY' "$body"
+          for attempt in 1 2 3; do
+            body=$(curl --http1.1 -sS --connect-timeout 10 --max-time 45 \
+              "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
+              -H "Content-Type: application/json" \
+              -H "x-goog-api-key: $GEMINI_API_KEY" \
+              --data-binary "{\"contents\":[{\"parts\":[{\"text\":\"Look at the image. Reply with exactly CONTINUE if a button labeled CONTINUE is visible.\"},{\"inline_data\":{\"mime_type\":\"image/jpeg\",\"data\":\"$IMAGE_B64\"}}]}],\"generationConfig\":{\"temperature\":0,\"maxOutputTokens\":64,\"thinkingConfig\":{\"thinkingLevel\":\"low\"}}}" ) || true
+            echo "$body"
+            if python - <<'PY' "$body"
           import json,sys
-          raw=sys.argv[1]; x=json.loads(raw)
-          assert not x.get('error'), raw
+          x=json.loads(sys.argv[1])
+          assert not x.get('error'), x
           txt=''.join(p.get('text','') for p in x.get('candidates',[{}])[0].get('content',{}).get('parts',[]) if isinstance(p,dict))
-          assert 'CONTINUE' in txt, raw
+          assert 'CONTINUE' in txt, x
           print('Gemini native vision generation passed')
           PY
+            then exit 0; fi
+            sleep $((attempt*5))
+          done
+          exit 1
       - name: Verify UCOA runtime contract
         shell: bash
         run: |
