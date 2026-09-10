@@ -98,6 +98,16 @@ def _bind_verified_handlers(app_v3) -> None:
     app_v3._ucoa_verified_handlers = True
 
 
+def _restore_production_overrides(app_v3) -> None:
+    """sitecustomize bootstraps the legacy handlers; production_overrides must win last."""
+    try:
+        import production_overrides
+        app_v3.run_plan = production_overrides.run_plan
+        app_v3.run_step = production_overrides.run_step
+    except Exception:
+        pass
+
+
 def _patch_provider_router(app_v3) -> None:
     import provider_router
     if not getattr(provider_router.reasoning, "__ucoa_qwen_fallback__", False):
@@ -133,6 +143,7 @@ def _patch() -> None:
         except Exception: _production_app = None
         _bind_verified_handlers(app_v3)
         _patch_android_routes(app_v3); _patch_health(app_v3)
+        _restore_production_overrides(app_v3)
         _PATCHED=True
     except Exception:
         return
