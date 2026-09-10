@@ -2,7 +2,7 @@ name: Production Gemini Probe
 on:
   workflow_dispatch:
   push:
-    paths: ['server/app.py','server/provider_router.py','.github/workflows/production-vision-probe.yml']
+    paths: ['server/app.py','server/provider_router.py','.github/workflows/production-vision-probe.yml','server/cloud_runtime.py']
 
 jobs:
   gemini-probe:
@@ -10,7 +10,7 @@ jobs:
     timeout-minutes: 12
     env:
       GEMINI_API_KEY: ${{ secrets.UCOA_GEMINI_API_KEY || secrets.GEMINI_API_KEY }}
-      GEMINI_MODEL: gemini-3.8-flash
+      GEMINI_MODEL: gemini-2.5-flash
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
