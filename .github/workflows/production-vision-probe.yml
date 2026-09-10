@@ -20,22 +20,43 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -n "${GEMINI_API_KEY:-}" ]]; then echo "available=true" >> "$GITHUB_OUTPUT"; else echo "available=false" >> "$GITHUB_OUTPUT"; echo "::warning::Gemini API secret is not configured; external probes will be skipped."; fi
+      - name: Check Gemini model catalog
+        if: steps.gemini_config.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          code=$(curl -sS --connect-timeout 10 --max-time 30 -o /tmp/models.json -w '%{http_code}' \
+            "https://generativelanguage.googleapis.com/v1beta/models" \
+            -H "x-goog-api-key: $GEMINI_API_KEY")
+          echo "HTTP $code"
+          cat /tmp/models.json
+          test "$code" = "200"
+          python - <<'PY'
+          import json
+          x=json.load(open('/tmp/models.json'))
+          names={str(m.get('name','')).split('/')[-1] for m in x.get('models',[])}
+          assert 'gemini-3.8-flash' in names, sorted(n for n in names if 'gemini' in n.lower())[:100]
+          print('Gemini model catalog contains gemini-3.8-flash')
+          PY
       - name: Verify Gemini text API through native endpoint
         if: steps.gemini_config.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          for attempt in 1 2 3 4; do
-            body=$(curl -sS --max-time 90 "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
-              -H "Content-Type: application/json" \
-              -H "x-goog-api-key: $GEMINI_API_KEY" \
-              -X POST \
-              -d '{"contents":[{"parts":[{"text":"Return exactly OK."}]}],"generationConfig":{"temperature":0,"maxOutputTokens":64,"thinkingConfig":{"thinkingLevel":"low"}}}' )
-            echo "$body"
-            if grep -q 'OK' <<<"$body"; then exit 0; fi
-            echo "Gemini native text probe attempt $attempt failed; retrying…"; sleep $((attempt * 5))
-          done
-          exit 1
+          body=$(curl -sS --connect-timeout 10 --max-time 45 \
+            "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
+            -H "Content-Type: application/json" \
+            -H "x-goog-api-key: $GEMINI_API_KEY" \
+            -X POST \
+            -d '{"contents":[{"parts":[{"text":"Return exactly OK."}]}],"generationConfig":{"temperature":0,"maxOutputTokens":64,"thinkingConfig":{"thinkingLevel":"low"}}}')
+          echo "$body"
+          python - <<'PY' "$body"
+          import json,sys
+          raw=sys.argv[1]; x=json.loads(raw)
+          txt=''.join(p.get('text','') for p in x.get('candidates',[{}])[0].get('content',{}).get('parts',[]) if isinstance(p,dict))
+          assert 'OK' in txt, raw
+          print('Gemini native text generation passed')
+          PY
       - name: Verify Gemini vision API through native endpoint
         if: steps.gemini_config.outputs.available == 'true'
         shell: bash
@@ -44,25 +65,25 @@ jobs:
           python -m pip install -q pillow
           python - <<'PY'
           from PIL import Image, ImageDraw
-          img=Image.new('RGB',(160,90),'white')
-          d=ImageDraw.Draw(img)
-          d.rectangle((48,32,112,58),fill='#dddddd',outline='black')
-          d.text((55,39),'CONTINUE',fill='black')
+          img=Image.new('RGB',(160,90),'white'); d=ImageDraw.Draw(img)
+          d.rectangle((48,32,112,58),fill='#dddddd',outline='black'); d.text((55,39),'CONTINUE',fill='black')
           img.save('/tmp/continue.jpg',format='JPEG',quality=75,optimize=True)
           PY
           IMAGE_B64="$(base64 -w0 /tmp/continue.jpg)"
-          for attempt in 1 2 3 4 5 6; do
-            body=$(curl -sS --max-time 120 "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
-              -H "Content-Type: application/json" \
-              -H "x-goog-api-key: $GEMINI_API_KEY" \
-              -X POST \
-              -d "{\"contents\":[{\"parts\":[{\"text\":\"Look at the image and reply with exactly CONTINUE if the button labeled CONTINUE is visible.\"},{\"inline_data\":{\"mime_type\":\"image/jpeg\",\"data\":\"$IMAGE_B64\"}}]}],\"generationConfig\":{\"temperature\":0,\"maxOutputTokens\":128,\"thinkingConfig\":{\"thinkingLevel\":\"low\"}}}" )
-            echo "$body"
-            if grep -q 'CONTINUE' <<<"$body"; then exit 0; fi
-            if grep -q '429\|RESOURCE_EXHAUSTED' <<<"$body"; then echo "Gemini vision rate limited; backing off."; fi
-            sleep $((attempt * 10))
-          done
-          exit 1
+          body=$(curl -sS --connect-timeout 10 --max-time 60 \
+            "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
+            -H "Content-Type: application/json" \
+            -H "x-goog-api-key: $GEMINI_API_KEY" \
+            -X POST \
+            -d "{\"contents\":[{\"parts\":[{\"text\":\"Look at the image. Reply with exactly CONTINUE if a button labeled CONTINUE is visible.\"},{\"inline_data\":{\"mime_type\":\"image/jpeg\",\"data\":\"$IMAGE_B64\"}}]}],\"generationConfig\":{\"temperature\":0,\"maxOutputTokens\":128,\"thinkingConfig\":{\"thinkingLevel\":\"low\"}}}" )
+          echo "$body"
+          python - <<'PY' "$body"
+          import json,sys
+          raw=sys.argv[1]; x=json.loads(raw)
+          txt=''.join(p.get('text','') for p in x.get('candidates',[{}])[0].get('content',{}).get('parts',[]) if isinstance(p,dict))
+          assert 'CONTINUE' in txt, raw
+          print('Gemini native vision generation passed')
+          PY
       - name: Verify UCOA runtime contract
         shell: bash
         run: |
@@ -73,7 +94,7 @@ jobs:
           PYTHONPATH=. pytest -q
       - name: Release validation marker
         if: steps.gemini_config.outputs.available == 'true'
-        run: echo "Gemini native text + vision + UCOA runtime contract passed"
+        run: echo "Gemini catalog + native text + native vision + UCOA runtime contract passed"
       - name: Runtime-only validation marker
         if: steps.gemini_config.outputs.available != 'true'
         run: echo "UCOA runtime contract passed; Gemini external probe skipped because no API secret is configured"
