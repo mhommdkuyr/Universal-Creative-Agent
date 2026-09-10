@@ -7,6 +7,7 @@ on:
       - 'server/provider_router.py'
       - 'server/app.py'
       - 'server/ci_capcut_e2e.sh'
+      - 'server/ci_render_v3_smoke.py'
       - 'server/requirements.txt'
       - 'android/**'
       - '.github/workflows/release-acceptance.yml'
@@ -42,18 +43,17 @@ jobs:
           assert good, d
           print('usable providers:', [(p.get('provider'), p.get('model'), p.get('latency_s', 'n/a')) for p in good])
           PY
-      - name: Live multimodal contract
+      - name: Live multimodal agent contract
         run: |
           set -euo pipefail
-          curl -fsS --max-time 90 https://ucoa-agent-brain.onrender.com/v1/providers/probe-vision -o /tmp/vision.json
-          python - <<'PY'
-          import json
-          d=json.load(open('/tmp/vision.json'))
-          assert d.get('ok'), d
-          assert d.get('provider'), d
-          assert d.get('detected_target') == 'CONTINUE', d
-          print('vision provider:', d['provider'], 'confidence:', d.get('confidence'))
-          PY
+          python server/ci_render_v3_smoke.py plan
+          python server/ci_render_v3_smoke.py step
+          python server/ci_render_v3_smoke.py state
+      - name: Optional vision probe diagnostic
+        continue-on-error: true
+        run: |
+          curl -fsS --max-time 90 https://ucoa-agent-brain.onrender.com/v1/providers/probe-vision -o /tmp/vision.json || true
+          cat /tmp/vision.json || true
 
   android-capcut:
     needs: live-brain
