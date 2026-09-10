@@ -62,31 +62,29 @@ def _provider_reasoning(system, user):
     if OPENAI_PRIMARY and openai_provider.configured():
         try: return openai_provider.reasoning(system, user), "openai"
         except Exception: pass
+    # Qwen Space is the last verified live cloud provider. Prefer it before
+    # providers currently returning 401/403/404/502 so tasks keep executing.
+    try: return _qwen_native(system, user), "huggingface-qwen3-vl-235b"
+    except Exception: pass
     try: return provider_router.reasoning(system, user)
-    except Exception:
-        try: return _qwen_native(system, user), "huggingface-qwen3-vl-235b"
-        except Exception: return app_v3._legacy_reasoning(system, user) if hasattr(app_v3, "_legacy_reasoning") else ('{"action":"observe"}', "repair")
+    except Exception: return app_v3._legacy_reasoning(system, user) if hasattr(app_v3, "_legacy_reasoning") else ('{"action":"observe"}', "repair")
 
 def _provider_visual(task, ui_tree, image):
+    system = "You are UCOA visual perception. Return ONLY valid JSON with screen_summary, elements, visible_goal_state, confidence. Never invent unseen elements."
+    user = json.dumps({"task": task, "ui_tree": ui_tree[:18000]}, ensure_ascii=False)
     if _gemini_configured() and image and not OPENAI_PRIMARY:
-        try:
-            system = "You are UCOA visual perception. Return ONLY JSON with screen_summary, elements, visible_goal_state, confidence."
-            user = json.dumps({"task": task, "ui_tree": ui_tree[:18000]}, ensure_ascii=False)
-            return app_v3.extract_json(_gemini_native(system, user, image)), f"gemini:{_gemini_model()}"
+        try: return app_v3.extract_json(_gemini_native(system, user, image)), f"gemini:{_gemini_model()}"
         except Exception: pass
     if OPENAI_PRIMARY and openai_provider.configured():
-        try:
-            system = "You are UCOA visual perception. Return ONLY JSON with screen_summary, elements, visible_goal_state, confidence."
-            user = json.dumps({"task": task, "ui_tree": ui_tree[:18000]}, ensure_ascii=False)
-            return app_v3.extract_json(openai_provider.visual(system, user, image)), "openai"
+        try: return app_v3.extract_json(openai_provider.visual(system, user, image)), "openai"
+        except Exception: pass
+    # Use the same verified Qwen Space API as the live cloud probe. This avoids
+    # the retired /qwen_chat_fn Gradio endpoint still referenced by the generic router.
+    if image:
+        try: return app_v3.extract_json(_qwen_native(system, user, image)), "huggingface-qwen3-vl-235b"
         except Exception: pass
     try: return provider_router.visual(task, ui_tree, image)
-    except Exception:
-        try:
-            system = "You are UCOA visual perception. Return ONLY valid JSON with screen_summary, elements, visible_goal_state, confidence."
-            user = json.dumps({"task": task, "ui_tree": ui_tree[:18000]}, ensure_ascii=False)
-            return app_v3.extract_json(_qwen_native(system, user, image)), "huggingface-qwen3-vl-235b"
-        except Exception: return app_v3._legacy_visual(task, ui_tree, image) if hasattr(app_v3, "_legacy_visual") else ({"screen_summary":"unavailable","elements":[]}, "repair")
+    except Exception: return app_v3._legacy_visual(task, ui_tree, image) if hasattr(app_v3, "_legacy_visual") else ({"screen_summary":"unavailable","elements":[]}, "repair")
 
 if not hasattr(app_v3, "_legacy_reasoning"): app_v3._legacy_reasoning = app_v3.reasoning
 if not hasattr(app_v3, "_legacy_visual"): app_v3._legacy_visual = app_v3.visual
@@ -152,11 +150,10 @@ def android_job(jid: str, authorization: str | None = Header(default=None)):
     if not job: raise HTTPException(404, "job not found")
     return job
 
-app_v3.app.routes[:] = [route for route in app_v3.app.routes if getattr(route, "path", "") not in {"/v1/agent/step", "/v1/agent/jobs/{jid}"}]
+app_v3.app.routes[:] = [route for route in app_v3.app.routes if getattr(route, "path", "") not in {"/v1/agent/step", "/v1/agent/jobs/{jid}", "/health"}]
 app_v3.app.add_api_route("/v1/agent/step", android_step, methods=["POST"])
 app_v3.app.add_api_route("/v1/agent/jobs/{jid}", android_job, methods=["GET"])
 
-# The provider router is a runtime capability, even when optional credentials are absent.
 @app_v3.app.get("/health")
 def health():
     external=[]
