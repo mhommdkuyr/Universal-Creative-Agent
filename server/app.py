@@ -79,9 +79,7 @@ def _gemini_native(system: str, user: str, image: str | None = None) -> str:
 
 
 def _qwen_native(system: str, user: str, image: str | None = None) -> str:
-    """Use the production Qwen3-VL-235B Space as the final cloud fallback."""
-    prompt = system + "\n" + user
-    return app_v4_runtime._space_predict(prompt, image)
+    return app_v4_runtime._space_predict(system + "\n" + user, image)
 
 
 def _provider_reasoning(system, user):
@@ -94,7 +92,7 @@ def _provider_reasoning(system, user):
         try:return openai_provider.reasoning(system, user), "openai"
         except Exception:pass
     try:return provider_router.reasoning(system, user)
-    except Exception as primary_error:
+    except Exception:
         try:return _qwen_native(system, user), "huggingface-qwen3-vl-235b"
         except Exception:
             return app_v3._legacy_reasoning(system, user) if hasattr(app_v3, "_legacy_reasoning") else ("{\"action\":\"observe\"}", "repair")
@@ -119,7 +117,7 @@ def _provider_visual(task, ui_tree, image):
             return app_v3.extract_json(openai_provider.visual(system,user,image)),"openai"
         except Exception:pass
     try:return provider_router.visual(task,ui_tree,image)
-    except Exception as primary_error:
+    except Exception:
         try:
             system=("You are UCOA visual perception. Inspect only the current Android screenshot and UI tree. "
                     "Return ONLY valid JSON: {\"screen_summary\":string,\"elements\":[{\"text\":string,\"role\":string,\"x\":number,\"y\":number}],\"visible_goal_state\":string,\"confidence\":number}. "
@@ -129,7 +127,6 @@ def _provider_visual(task, ui_tree, image):
         except Exception:
             return app_v3._legacy_visual(task,ui_tree,image) if hasattr(app_v3, "_legacy_visual") else ({"screen_summary":"unavailable","elements":[]},"repair")
 
-# Preserve original seams for tests before replacing runtime callables.
 if not hasattr(app_v3, "_legacy_reasoning"):
     app_v3._legacy_reasoning = app_v3.reasoning
 if not hasattr(app_v3, "_legacy_visual"):
@@ -157,14 +154,14 @@ def providers_probe():
         try:
             text = _gemini_native("Return ONLY JSON.", "Return exactly {\"ok\":true}.")
             rows.append({"provider":"gemini","model":_gemini_model(),"ok":True,"vision":True})
-            runtime = {"ok":True,"provider":f"gemini:{_gemini_model()}"}
-            return {"ok":True,"configured":True,"providers":rows,"runtime":runtime,"response":app_v3.extract_json(text)}
+            return {"ok":True,"configured":True,"providers":rows,"runtime":{"ok":True,"provider":f"gemini:{_gemini_model()}"},"response":app_v3.extract_json(text)}
         except Exception as exc:
             rows.append({"provider":"gemini","model":_gemini_model(),"ok":False,"vision":True,"error":type(exc).__name__})
     try:
         result = provider_router.safe_text_probe()
     except Exception:
         result = {"ok":False,"configured":True,"providers":[]}
+    result["providers"] = rows + result.get("providers", [])
     runtime = result.get("runtime", {})
     if not runtime:
         try:
@@ -173,7 +170,6 @@ def providers_probe():
         except Exception as exc:
             runtime = {"ok":False,"error":type(exc).__name__}
     result["runtime"] = runtime
-    result["providers"] = rows + result.get("providers", [])
     result["ok"] = bool(runtime.get("ok")) or any(x.get("ok") for x in result["providers"])
     if not result["ok"]:
         try:
@@ -199,7 +195,7 @@ def providers_models():
     data.append({"id":"huggingface-qwen3-vl-235b:Qwen/Qwen3-VL-235B-A22B-Instruct","provider":"huggingface-qwen3-vl-235b","model":"Qwen/Qwen3-VL-235B-A22B-Instruct","vision":True,"configured":True,"base_url":"huggingface-space"})
     return {"object":"list","data":data}
 
-@app_v3.app.post("/v1/agent/step")
+
 def android_step(req: app_v3.StepRequest, authorization: str | None = None):
     app_v3.auth(authorization)
     runner = getattr(app_v3, "run_step", None)
@@ -207,7 +203,7 @@ def android_step(req: app_v3.StepRequest, authorization: str | None = None):
         raise RuntimeError("step runtime not initialized")
     return app_v3.submit("step", lambda: runner(req))
 
-@app_v3.app.get("/v1/agent/jobs/{jid}")
+
 def android_job(jid: str, authorization: str | None = None):
     app_v3.auth(authorization)
     with app_v3.JOB_LOCK:
@@ -215,6 +211,20 @@ def android_job(jid: str, authorization: str | None = None):
     if not job:
         return {"status":"not_found","job_id":jid}
     return job
+
+# Replace any earlier compatible V3 routes in-place so FastAPI does not select a stale
+# handler before these production definitions. If none exist, register new routes.
+def _replace_or_add_route(path: str, methods: set[str], endpoint) -> None:
+    for route in app_v3.app.routes:
+        if getattr(route, "path", "") == path and methods.intersection(getattr(route, "methods", set()) or set()):
+            route.endpoint = endpoint
+            if hasattr(route, "dependant"):
+                route.dependant.call = endpoint
+            return
+    app_v3.app.add_api_route(path, endpoint, methods=sorted(methods))
+
+_replace_or_add_route("/v1/agent/step", {"POST"}, android_step)
+_replace_or_add_route("/v1/agent/jobs/{jid}", {"GET"}, android_job)
 
 @app_v3.app.get("/v1/agent/state/{session_id}")
 def get_agent_state(session_id: str):
