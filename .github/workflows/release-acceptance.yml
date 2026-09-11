@@ -6,6 +6,7 @@ on:
     paths:
       - 'server/provider_router.py'
       - 'server/app.py'
+      - 'server/app_v4_runtime.py'
       - 'server/remote_ops.py'
       - 'server/ci_capcut_e2e.sh'
       - 'server/ci_render_v3_smoke.py'
