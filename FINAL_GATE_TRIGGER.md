@@ -1,0 +1,1 @@
+Final release acceptance is driven from the CI workflow completion and then runs the cloud contract, thin-client APK checks, Android x86_64 emulator smoke, accessibility action, and cloud verification before uploading the verified APK.
