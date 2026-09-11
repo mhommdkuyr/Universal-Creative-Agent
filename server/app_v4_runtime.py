@@ -49,6 +49,7 @@ app_v3.VISION_MODEL = HF_MODEL
 
 
 def _space_predict(prompt: str, image_base64: str | None = None) -> str:
+    """Call the Qwen Gradio Space with the exact stateful signatures exposed by app.py."""
     from gradio_client import Client, handle_file
     last: Exception | None = None
     for attempt in range(MAX_RETRIES):
@@ -56,25 +57,35 @@ def _space_predict(prompt: str, image_base64: str | None = None) -> str:
         try:
             client = Client(HF_SPACE, verbose=False)
             history: Any = []
+            task_history: Any = []
             if image_base64:
                 raw = base64.b64decode(image_base64)
                 with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
-                    f.write(raw); f.flush(); temp_path = f.name
-                history = client.predict(history, handle_file(temp_path), api_name="/add_file")
-            history = client.predict(history, prompt, api_name="/add_text")
-            result = client.predict(history, api_name="/predict")
+                    f.write(raw)
+                    f.flush()
+                    temp_path = f.name
+                out = client.predict(history, task_history, handle_file(temp_path), api_name="/add_file")
+                history, task_history = out[0], out[1]
+            out = client.predict(history, task_history, prompt, api_name="/add_text")
+            history, task_history = out[0], out[1]
+            result = client.predict(history, task_history, api_name="/predict")
             if isinstance(result, (list, tuple)) and result:
-                item = result[-1]
-                if isinstance(item, (list, tuple)) and len(item) >= 2:
-                    return str(item[1])
+                chatbot = result[0] if isinstance(result[0], list) else result
+                if isinstance(chatbot, list) and chatbot:
+                    item = chatbot[-1]
+                    if isinstance(item, (list, tuple)) and len(item) >= 2:
+                        return str(item[1])
             return str(result)
         except Exception as exc:
             last = exc
-            if attempt + 1 < MAX_RETRIES: time.sleep(2 ** attempt)
+            if attempt + 1 < MAX_RETRIES:
+                time.sleep(2 ** attempt)
         finally:
             if temp_path:
-                try: os.unlink(temp_path)
-                except OSError: pass
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
     raise RuntimeError(f"HF Qwen3-VL-235B request failed: {last}")
 
 
