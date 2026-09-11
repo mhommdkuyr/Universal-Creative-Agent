@@ -128,14 +128,7 @@ def _gemini_generate(base: str, key: str, model: str, system: str, user: str, im
     parts = [{"text": user}]
     if image:
         parts.append({"inline_data": {"mime_type": "image/jpeg", "data": image}})
-    payload = {
-        "systemInstruction": {"parts": [{"text": system}]},
-        "contents": [{"role": "user", "parts": parts}],
-        "generationConfig": {
-            "temperature": 0,
-            "maxOutputTokens": max(64, min(MAX_TOKENS, 2048)),
-        },
-    }
+    payload = {"systemInstruction": {"parts": [{"text": system}]}, "contents": [{"role": "user", "parts": parts}], "generationConfig": {"temperature": 0, "maxOutputTokens": max(64, min(MAX_TOKENS, 2048))}}
     if model.startswith("gemini-3."):
         payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "low"}
     url = f"{base}/models/{model}:generateContent"
@@ -164,8 +157,7 @@ def _space_call(system, user, image, timeout):
     if image:
         raw = base64.b64decode(image)
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
-            f.write(raw)
-            temp_path = f.name
+            f.write(raw); temp_path = f.name
         try:
             files = [handle_file(temp_path)]
             result = client.predict({"text": system + "\n" + user, "files": files}, [], api_name="/qwen_chat_fn")
@@ -175,8 +167,7 @@ def _space_call(system, user, image, timeout):
     else:
         result = client.predict({"text": system + "\n" + user, "files": []}, [], api_name="/qwen_chat_fn")
     text = str(result).strip()
-    if not text:
-        raise RuntimeError("public Qwen space returned empty response")
+    if not text: raise RuntimeError("public Qwen space returned empty response")
     return text
 
 
@@ -190,20 +181,14 @@ def _ordered(image):
 
 
 def call(system, user, image=None):
-    errors=[]
-    timeout=VISION_TIMEOUT if image else TEXT_TIMEOUT
+    errors=[]; timeout=VISION_TIMEOUT if image else TEXT_TIMEOUT
     for name in _ordered(bool(image)):
         started=time.perf_counter()
         try:
             p=_provider(name); base,key,model,supports_vision,key_name=_cfg(p)
             if image and not supports_vision: raise RuntimeError("provider does not support vision")
             with span("ai.provider", f"{name} inference", provider=name, model=model, multimodal=bool(image), credential=key_name):
-                if p.get("native_gemini"):
-                    raw=_gemini_generate(base,key,model,system,user,image,timeout)
-                elif p.get("public"):
-                    raw=_space_call(system,user,image,timeout)
-                else:
-                    raw=_chat(base,key,model,system,user,image,timeout)
+                raw = _gemini_generate(base,key,model,system,user,image,timeout) if p.get("native_gemini") else (_space_call(system,user,image,timeout) if p.get("public") else _chat(base,key,model,system,user,image,timeout))
             _success(name); set_measurement(f"provider.{name}.latency_ms",(time.perf_counter()-started)*1000); return raw,name
         except HTTPError as exc:
             _failure(name); errors.append(f"{name}:HTTP_{exc.code}")
@@ -225,6 +210,22 @@ def _extract_json(raw):
         value=json.loads(match.group(0))
         if isinstance(value,dict): return value
     raise ValueError("provider returned non-JSON output")
+
+
+def visual(task, ui_tree, image):
+    if not image:
+        raise ValueError("visual inspection requires an image")
+    key = hashlib.sha256((task + "\n" + ui_tree[:14000] + "\n" + image).encode("utf-8")).hexdigest()
+    now = time.monotonic()
+    cached = _VISION_CACHE.get(key)
+    if cached and now - cached[0] <= CACHE_TTL:
+        return cached[1], cached[2]
+    system = "You are UCOA visual perception. Inspect only the Android screenshot and UI tree. Return JSON with screen_summary, elements, visible_goal_state, confidence. Never invent unseen elements."
+    user = json.dumps({"task": task, "ui_tree": ui_tree[:14000]}, ensure_ascii=False)
+    raw, provider = call(system, user, image)
+    result = _extract_json(raw)
+    _VISION_CACHE[key] = (now, result, provider)
+    return result, provider
 
 
 def reasoning(system,user):
