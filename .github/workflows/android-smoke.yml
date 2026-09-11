@@ -61,6 +61,7 @@ jobs:
           sudo chmod 666 /dev/kvm || true
           test -e /dev/kvm
       - name: Final emulator cloud smoke
+        timeout-minutes: 15
         uses: reactivecircus/android-emulator-runner@v2
         env:
           UCOA_SMOKE_POLLS: '30'
