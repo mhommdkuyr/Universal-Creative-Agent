@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Final release gate: ARM-only external apps remain diagnostic-only on hosted x86_64.
+# Final release gate trigger: hosted x86_64 validates the UCOA client harness; ARM-only CapCut is diagnostic-only.
 CAPCUT_APK_URL="${CAPCUT_APK_URL:-https://sf16-sg.tiktokcdn.com/obj/eden-sg/nupkuhs_yvojuh_jj/ljhwZthlaukjlkulzlp/capcut_apk/cc_website_download.apk}"
 CAPCUT_APK_PATH="${CAPCUT_APK_PATH:-/tmp/capcut.apk}"
 UCOA_APK_PATH="${UCOA_APK_PATH:-android/app/build/outputs/apk/debug/app-debug.apk}"
@@ -66,9 +66,7 @@ if [ "$CAPCUT_INSTALLED" = true ]; then
   rm -f /tmp/ucoa-capcut-log.txt
   for i in $(seq 1 240); do
     adb logcat -d -s UCOA_CAPCUT:I UCOA_CAPCUT:E '*:S' > /tmp/ucoa-capcut-log.txt || true
-    if grep -q 'UCOA_CAPCUT_SMOKE_OK' /tmp/ucoa-capcut-log.txt; then
-      END_MS="$(date +%s%3N)"; cat /tmp/ucoa-capcut-log.txt; echo "CAPCUT_LAUNCH_AND_TASK_DURATION_MS=$((END_MS-LAUNCH_MS))"; echo CAPCUT_E2E_OK; exit 0
-    fi
+    if grep -q 'UCOA_CAPCUT_SMOKE_OK' /tmp/ucoa-capcut-log.txt; then END_MS="$(date +%s%3N)"; cat /tmp/ucoa-capcut-log.txt; echo "CAPCUT_LAUNCH_AND_TASK_DURATION_MS=$((END_MS-LAUNCH_MS))"; echo CAPCUT_E2E_OK; exit 0; fi
     if grep -q 'UCOA_CAPCUT_SMOKE_FAILED' /tmp/ucoa-capcut-log.txt; then cat /tmp/ucoa-capcut-log.txt; echo CAPCUT_E2E_FAILED; exit 1; fi
     sleep 2
   done
