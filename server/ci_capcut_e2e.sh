@@ -31,12 +31,22 @@ if [ -z "$CAPCUT_PACKAGE" ]; then
   CAPCUT_PACKAGE="$("$AAPT_BIN" dump badging "$CAPCUT_APK_PATH" | sed -n "s/^package: name='\\([^']*\\)'.*/\\1/p" | head -n1)"
 fi
 CAPCUT_LABEL="$("$AAPT_BIN" dump badging "$CAPCUT_APK_PATH" | sed -n "s/.*application-label='\\([^']*\\)'.*/\\1/p" | head -n1)"
+CAPCUT_NATIVE_ABIS="$("$AAPT_BIN" dump badging "$CAPCUT_APK_PATH" | sed -n "s/^native-code: //p" | head -n1 || true)"
 [ -n "$CAPCUT_PACKAGE" ]
-echo "CAPCUT_PACKAGE=$CAPCUT_PACKAGE CAPCUT_LABEL=$CAPCUT_LABEL"
+echo "CAPCUT_PACKAGE=$CAPCUT_PACKAGE CAPCUT_LABEL=$CAPCUT_LABEL CAPCUT_NATIVE_ABIS=${CAPCUT_NATIVE_ABIS:-none}"
 
 START_MS="$(date +%s%3N)"
 CAPCUT_INSTALLED=true
-if ! adb install -r "$CAPCUT_APK_PATH"; then
+# Hosted x86_64 CI cannot execute ARM-only CapCut builds. Detect that before
+# invoking adb so an incompatible APK can never block the smoke test for minutes.
+CAPCUT_ABI_COMPATIBLE=true
+if [ -n "$CAPCUT_NATIVE_ABIS" ] && ! printf '%s\n' "$CAPCUT_NATIVE_ABIS" | grep -Eq 'x86_64|x86'; then
+  CAPCUT_ABI_COMPATIBLE=false
+fi
+if [ "$CAPCUT_OPTIONAL" = "true" ] && [ "$CAPCUT_ABI_COMPATIBLE" = "false" ]; then
+  CAPCUT_INSTALLED=false
+  echo "CAPCUT_INSTALL_SKIPPED_ABI_OR_DEVICE_INCOMPATIBLE=true"
+elif ! timeout 60 adb install -r "$CAPCUT_APK_PATH"; then
   CAPCUT_INSTALLED=false
   if [ "$CAPCUT_OPTIONAL" != "true" ]; then
     echo "CAPCUT_INSTALL_FAILED"
