@@ -33,7 +33,7 @@ PROVIDERS = [
     {"name":"gemini-2","key_envs":["UCOA_GEMINI_API_KEY_2","GEMINI_API_KEY_2"],"base_env":"UCOA_GEMINI_BASE_URL_2","model_env":"UCOA_GEMINI_MODEL_2","default_base":"https://generativelanguage.googleapis.com/v1beta","default_model":"gemini-3.7-flash","vision":True,"native_gemini":True},
     {"name":"huggingface-text","key_envs":["HF_TOKEN"],"base_env":"HF_BASE_URL","model_env":"HF_MODEL","default_base":"https://router.huggingface.co/v1","default_model":"Qwen/Qwen3-4B-Instruct-2507:fastest","vision":False},
     {"name":"huggingface-vision","key_envs":["HF_TOKEN"],"base_env":"HF_BASE_URL","model_env":"HF_VISION_MODEL","default_base":"https://router.huggingface.co/v1","default_model":"Qwen/Qwen3-VL-2B-Instruct:fastest","vision":True},
-    {"name":"huggingface-space","key_envs":[],"base_env":"HF_SPACE_BASE_URL","model_env":"HF_SPACE_MODEL","default_base":"public","default_model":"Qwen3-VL-2B-Instruct","vision":True,"public":True},
+    {"name":"huggingface-space","key_envs":[],"base_env":"HF_SPACE_BASE_URL","model_env":"HF_SPACE_MODEL","default_base":"public","default_model":"Qwen/Qwen3-VL-2B-Instruct","vision":True,"public":True},
     {"name":"deepseek","key_envs":["UCOA_DEEPSEEK_API_KEY"],"base_env":"UCOA_DEEPSEEK_BASE_URL","model_env":"UCOA_DEEPSEEK_MODEL","default_base":"https://api.deepseek.com","default_model":"deepseek-chat","vision":False},
     {"name":"omniroute","key_envs":["UCOA_OMNIROUTE_API_KEY"],"base_env":"UCOA_OMNIROUTE_BASE_URL","model_env":"UCOA_OMNIROUTE_MODEL","default_base":"","default_model":"auto","vision":True},
     {"name":"cerebras","key_envs":["UCOA_CEREBRAS_API_KEY"],"base_env":"UCOA_CEREBRAS_BASE_URL","model_env":"UCOA_CEREBRAS_MODEL","default_base":"https://api.cerebras.ai/v1","default_model":"gpt-oss-120b","vision":False},
@@ -159,14 +159,25 @@ def _chat(base, key, model, system, user, image, timeout):
 
 def _space_call(system, user, image, timeout):
     from gradio_client import Client, handle_file
-    from PIL import Image
-    raw = base64.b64decode(image) if image else None
-    with tempfile.NamedTemporaryFile(suffix=".jpg") as f:
-        if raw: f.write(raw)
-        else: Image.new("RGB", (32,32), (255,255,255)).save(f, "JPEG")
-        f.flush()
-        client = Client(VISION_SPACE, verbose=False)
-        return str(client.predict({"text":system+"\n"+user,"files":[handle_file(f.name)]},[],api_name="/qwen_chat_fn"))
+    client = Client(VISION_SPACE, verbose=False)
+    files = []
+    if image:
+        raw = base64.b64decode(image)
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+            f.write(raw)
+            temp_path = f.name
+        try:
+            files = [handle_file(temp_path)]
+            result = client.predict({"text": system + "\n" + user, "files": files}, [], api_name="/qwen_chat_fn")
+        finally:
+            try: os.unlink(temp_path)
+            except OSError: pass
+    else:
+        result = client.predict({"text": system + "\n" + user, "files": []}, [], api_name="/qwen_chat_fn")
+    text = str(result).strip()
+    if not text:
+        raise RuntimeError("public Qwen space returned empty response")
+    return text
 
 
 def _ordered(image):
@@ -174,7 +185,7 @@ def _ordered(image):
     for p in PROVIDERS:
         try: _cfg(p); configured.append(p["name"])
         except Exception: pass
-    preferred = ["gemini","gemini-2","huggingface-vision","huggingface-space","omniroute","huggingface-text","deepseek"] if image else ["gemini","gemini-2","huggingface-text","cerebras","groq","deepseek","omniroute"]
+    preferred = ["gemini","gemini-2","huggingface-vision","huggingface-space","omniroute","huggingface-text","deepseek"] if image else ["gemini","gemini-2","huggingface-text","huggingface-space","cerebras","groq","deepseek","omniroute"]
     return [name for name in preferred if name in configured and not _is_open(name)]
 
 
@@ -218,52 +229,3 @@ def _extract_json(raw):
 
 def reasoning(system,user):
     return call(system,user,None)
-
-
-def visual(task,ui_tree,image):
-    key=hashlib.sha256(image.encode("ascii","ignore")).hexdigest()
-    now=time.monotonic(); cached=_VISION_CACHE.get(key)
-    if cached and now-cached[0] <= CACHE_TTL: return cached[1],cached[2]
-    system='You are UCOA visual perception. Inspect only the current Android screenshot and UI tree. Return ONLY valid JSON: {"screen_summary":string,"elements":[{"text":string,"role":string,"x":number,"y":number}],"visible_goal_state":string,"confidence":number}. Never invent unseen elements. Coordinates normalized 0..1000.'
-    raw,provider=call(system,json.dumps({"task":task,"ui_tree":ui_tree[:18000]},ensure_ascii=False),image)
-    value=_extract_json(raw); _VISION_CACHE[key]=(now,value,provider); return value,provider
-
-
-def safe_text_probe():
-    configured=[]
-    results=[]
-    for p in PROVIDERS:
-        try:
-            base,key,model,vision,key_name=_cfg(p)
-            configured.append({"provider":p["name"],"model":model,"vision":vision,"credential_env":key_name})
-        except Exception:
-            continue
-    for p in PROVIDERS:
-        name=p["name"]
-        try:
-            base,key,model,vision,key_name=_cfg(p)
-        except Exception:
-            continue
-        if vision and name == "huggingface-space":
-            # Skip the public UI space for text readiness; it is vision-only and can cold-start unpredictably.
-            results.append({"provider":name,"model":model,"ok":False,"skipped":True,"reason":"vision-only-public"})
-            continue
-        started=time.perf_counter()
-        try:
-            if p.get("native_gemini"):
-                raw=_gemini_generate(base,key,model,"Return only JSON.","Return exactly {\"ok\":true}.",None,min(TEXT_TIMEOUT,20))
-            else:
-                raw=_chat(base,key,model,"Return only JSON.","Return exactly {\"ok\":true}.",None,min(TEXT_TIMEOUT,20))
-            value=_extract_json(raw)
-            results.append({"provider":name,"model":model,"ok":True,"latency_s":round(time.perf_counter()-started,3),"response":value})
-            _success(name)
-            # One healthy text provider is sufficient for overall readiness.
-            break
-        except HTTPError as exc:
-            _failure(name); results.append({"provider":name,"model":model,"ok":False,"error":f"HTTP_{exc.code}"})
-        except (URLError,TimeoutError) as exc:
-            _failure(name); results.append({"provider":name,"model":model,"ok":False,"error":type(exc).__name__})
-        except Exception as exc:
-            _failure(name); results.append({"provider":name,"model":model,"ok":False,"error":str(exc)[:200]})
-    healthy=next((r for r in results if r.get("ok")),None)
-    return {"ok":bool(healthy),"configured":bool(configured),"providers":results,"configured_candidates":[{k:v for k,v in x.items() if k!="credential_env"} for x in configured]}
