@@ -111,7 +111,8 @@ jobs:
       - name: Record virtualization
         run: |
           if [ -e /dev/kvm ]; then echo "KVM_AVAILABLE=true"; else echo "KVM_AVAILABLE=false"; fi
-      - uses: reactivecircus/android-emulator-runner@v2
+      - name: Final emulator smoke
+        uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
           target: default
