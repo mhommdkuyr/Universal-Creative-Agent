@@ -88,7 +88,7 @@ jobs:
         with:
           packages: platform-tools
       - uses: gradle/actions/setup-gradle@v4
-      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
       - run: gradle -p android assembleDebug --stacktrace
       - name: Assert APK is thin cloud client
         run: |
@@ -122,11 +122,14 @@ jobs:
           if [ -e /dev/kvm ]; then echo "KVM_AVAILABLE=true"; else echo "KVM_AVAILABLE=false"; fi
       - uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 34
           target: default
           arch: x86_64
           profile: pixel_2
           force-avd-creation: true
+          cores: 2
+          ram-size: 2048M
+          disk-size: 4096M
           working-directory: .
           emulator-options: -no-window -noaudio -no-boot-anim -gpu swiftshader_indirect -no-snapshot-save -camera-back none -camera-front none
           disable-animations: true
