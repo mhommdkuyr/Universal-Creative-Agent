@@ -125,6 +125,10 @@ jobs:
           working-directory: .
           emulator-options: -no-window -noaudio -no-boot-anim -gpu swiftshader_indirect -no-snapshot-save -camera-back none -camera-front none
           disable-animations: true
+          pre-emulator-launch-script: |
+            set -eu
+            adb start-server
+            adb devices
           script: |
             set -eu
             pwd
