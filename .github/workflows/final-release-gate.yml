@@ -3,7 +3,7 @@ name: Final APK Release Gate
 on:
   workflow_dispatch:
   workflow_run:
-    workflows: ["smoke"]
+    workflows: ["CI"]
     types: [completed]
 
 concurrency:
