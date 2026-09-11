@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Final release gate: ARM-only external apps remain diagnostic-only on hosted x86_64.
 CAPCUT_APK_URL="${CAPCUT_APK_URL:-https://sf16-sg.tiktokcdn.com/obj/eden-sg/nupkuhs_yvojuh_jj/ljhwZthlaukjlkulzlp/capcut_apk/cc_website_download.apk}"
 CAPCUT_APK_PATH="${CAPCUT_APK_PATH:-/tmp/capcut.apk}"
 UCOA_APK_PATH="${UCOA_APK_PATH:-android/app/build/outputs/apk/debug/app-debug.apk}"
@@ -19,17 +20,13 @@ fi
 [ -s "$UCOA_APK_PATH" ]
 AAPT_BIN="${AAPT_BIN:-$(command -v aapt || true)}"
 if [ -z "$AAPT_BIN" ]; then AAPT_BIN="$(command -v aapt2 || true)"; fi
-if [ -z "$AAPT_BIN" ]; then
-  AAPT_BIN="$(find "${ANDROID_HOME:-$HOME/Android/Sdk}/build-tools" -type f \( -name aapt -o -name aapt2 \) 2>/dev/null | sort -V | tail -n 1)"
-fi
+if [ -z "$AAPT_BIN" ]; then AAPT_BIN="$(find "${ANDROID_HOME:-$HOME/Android/Sdk}/build-tools" -type f \( -name aapt -o -name aapt2 \) 2>/dev/null | sort -V | tail -n 1)"; fi
 [ -x "$AAPT_BIN" ]
 
 echo "UCOA_APK_PATH=$UCOA_APK_PATH"
 echo "AAPT_BIN=$AAPT_BIN"
 "$AAPT_BIN" dump badging "$CAPCUT_APK_PATH" | head -n 5 || true
-if [ -z "$CAPCUT_PACKAGE" ]; then
-  CAPCUT_PACKAGE="$("$AAPT_BIN" dump badging "$CAPCUT_APK_PATH" | sed -n "s/^package: name='\\([^']*\\)'.*/\\1/p" | head -n1)"
-fi
+if [ -z "$CAPCUT_PACKAGE" ]; then CAPCUT_PACKAGE="$("$AAPT_BIN" dump badging "$CAPCUT_APK_PATH" | sed -n "s/^package: name='\\([^']*\\)'.*/\\1/p" | head -n1)"; fi
 CAPCUT_LABEL="$("$AAPT_BIN" dump badging "$CAPCUT_APK_PATH" | sed -n "s/.*application-label='\\([^']*\\)'.*/\\1/p" | head -n1)"
 CAPCUT_NATIVE_ABIS="$("$AAPT_BIN" dump badging "$CAPCUT_APK_PATH" | sed -n "s/^native-code: //p" | head -n1 || true)"
 [ -n "$CAPCUT_PACKAGE" ]
@@ -37,21 +34,14 @@ echo "CAPCUT_PACKAGE=$CAPCUT_PACKAGE CAPCUT_LABEL=$CAPCUT_LABEL CAPCUT_NATIVE_AB
 
 START_MS="$(date +%s%3N)"
 CAPCUT_INSTALLED=true
-# Hosted x86_64 CI cannot execute ARM-only CapCut builds. Detect that before
-# invoking adb so an incompatible APK can never block the smoke test for minutes.
 CAPCUT_ABI_COMPATIBLE=true
-if [ -n "$CAPCUT_NATIVE_ABIS" ] && ! printf '%s\n' "$CAPCUT_NATIVE_ABIS" | grep -Eq 'x86_64|x86'; then
-  CAPCUT_ABI_COMPATIBLE=false
-fi
+if [ -n "$CAPCUT_NATIVE_ABIS" ] && ! printf '%s\n' "$CAPCUT_NATIVE_ABIS" | grep -Eq 'x86_64|x86'; then CAPCUT_ABI_COMPATIBLE=false; fi
 if [ "$CAPCUT_OPTIONAL" = "true" ] && [ "$CAPCUT_ABI_COMPATIBLE" = "false" ]; then
   CAPCUT_INSTALLED=false
   echo "CAPCUT_INSTALL_SKIPPED_ABI_OR_DEVICE_INCOMPATIBLE=true"
 elif ! timeout 60 adb install -r "$CAPCUT_APK_PATH"; then
   CAPCUT_INSTALLED=false
-  if [ "$CAPCUT_OPTIONAL" != "true" ]; then
-    echo "CAPCUT_INSTALL_FAILED"
-    exit 1
-  fi
+  if [ "$CAPCUT_OPTIONAL" != "true" ]; then echo "CAPCUT_INSTALL_FAILED"; exit 1; fi
   echo "CAPCUT_INSTALL_SKIPPED_ABI_OR_DEVICE_INCOMPATIBLE=true"
 fi
 adb install -r "$UCOA_APK_PATH"
@@ -77,17 +67,9 @@ if [ "$CAPCUT_INSTALLED" = true ]; then
   for i in $(seq 1 240); do
     adb logcat -d -s UCOA_CAPCUT:I UCOA_CAPCUT:E '*:S' > /tmp/ucoa-capcut-log.txt || true
     if grep -q 'UCOA_CAPCUT_SMOKE_OK' /tmp/ucoa-capcut-log.txt; then
-      END_MS="$(date +%s%3N)"
-      cat /tmp/ucoa-capcut-log.txt
-      echo "CAPCUT_LAUNCH_AND_TASK_DURATION_MS=$((END_MS-LAUNCH_MS))"
-      echo CAPCUT_E2E_OK
-      exit 0
+      END_MS="$(date +%s%3N)"; cat /tmp/ucoa-capcut-log.txt; echo "CAPCUT_LAUNCH_AND_TASK_DURATION_MS=$((END_MS-LAUNCH_MS))"; echo CAPCUT_E2E_OK; exit 0
     fi
-    if grep -q 'UCOA_CAPCUT_SMOKE_FAILED' /tmp/ucoa-capcut-log.txt; then
-      cat /tmp/ucoa-capcut-log.txt
-      echo CAPCUT_E2E_FAILED
-      exit 1
-    fi
+    if grep -q 'UCOA_CAPCUT_SMOKE_FAILED' /tmp/ucoa-capcut-log.txt; then cat /tmp/ucoa-capcut-log.txt; echo CAPCUT_E2E_FAILED; exit 1; fi
     sleep 2
   done
   cat /tmp/ucoa-capcut-log.txt || true
@@ -96,25 +78,13 @@ if [ "$CAPCUT_INSTALLED" = true ]; then
   exit 1
 fi
 
-# The hosted x86_64 runner cannot install CapCut ARM-only binaries. In optional mode
-# we still perform a real emulator/cloud/accessibility/vision/verification smoke using
-# the UCOA harness, rather than falsely claiming CapCut execution.
 adb shell am force-stop com.ucoa.app || true
 adb shell am start -n com.ucoa.app/.UcoaSmokeActivity >/tmp/ucoa-smoke-start.txt 2>&1
 rm -f /tmp/ucoa-smoke-log.txt
 for i in $(seq 1 240); do
   adb logcat -d -s UCOA_REAL_SMOKE_OK:I UCOA_REAL_SMOKE_FAILED:E '*:S' > /tmp/ucoa-smoke-log.txt || true
-  if grep -q 'UCOA_REAL_SMOKE_OK' /tmp/ucoa-smoke-log.txt; then
-    cat /tmp/ucoa-smoke-log.txt
-    echo CAPCUT_COMPATIBILITY_DIAGNOSTIC_ONLY
-    echo UCOA_EMULATOR_CLOUD_SMOKE_OK
-    exit 0
-  fi
-  if grep -q 'UCOA_REAL_SMOKE_FAILED' /tmp/ucoa-smoke-log.txt; then
-    cat /tmp/ucoa-smoke-log.txt
-    echo UCOA_EMULATOR_CLOUD_SMOKE_FAILED
-    exit 1
-  fi
+  if grep -q 'UCOA_REAL_SMOKE_OK' /tmp/ucoa-smoke-log.txt; then cat /tmp/ucoa-smoke-log.txt; echo CAPCUT_COMPATIBILITY_DIAGNOSTIC_ONLY; echo UCOA_EMULATOR_CLOUD_SMOKE_OK; exit 0; fi
+  if grep -q 'UCOA_REAL_SMOKE_FAILED' /tmp/ucoa-smoke-log.txt; then cat /tmp/ucoa-smoke-log.txt; echo UCOA_EMULATOR_CLOUD_SMOKE_FAILED; exit 1; fi
   sleep 2
 done
 cat /tmp/ucoa-smoke-log.txt || true
