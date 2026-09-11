@@ -1,3 +1,4 @@
+# Release acceptance: cloud contract + thin APK + x86_64 emulator smoke.
 name: Release Acceptance
 
 on:
