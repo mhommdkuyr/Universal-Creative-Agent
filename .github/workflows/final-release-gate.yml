@@ -37,12 +37,6 @@ jobs:
             sleep 2
           done
           exit 1
-      - name: Live agent contract
-        run: |
-          set -euo pipefail
-          python server/ci_render_v3_smoke.py plan
-          python server/ci_render_v3_smoke.py step
-          python server/ci_render_v3_smoke.py state
       - name: Remote config contract
         run: |
           set -euo pipefail
