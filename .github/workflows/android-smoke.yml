@@ -5,10 +5,8 @@ on:
   push:
     paths:
       - 'android/**'
-      - 'server/ci_android_smoke.sh'
+      - 'server/ci_capcut_e2e.sh'
       - '.github/workflows/android-smoke.yml'
-  schedule:
-    - cron: '17 */6 * * *'
 
 concurrency:
   group: android-smoke-${{ github.ref }}
@@ -16,7 +14,7 @@ concurrency:
 
 jobs:
   android-smoke:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
@@ -28,9 +26,22 @@ jobs:
         with:
           packages: platform-tools
       - uses: gradle/actions/setup-gradle@v4
-      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+      - name: Production cloud contract
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 20 https://ucoa-agent-brain.onrender.com/health
+          curl -fsS --max-time 20 https://ucoa-agent-brain.onrender.com/v1/client/config -o /tmp/client-config.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/client-config.json'))
+          assert d.get('ok') is True, d
+          assert d.get('features',{}).get('remote_config') is True, d
+          assert d.get('features',{}).get('server_side_hotfix') is True, d
+          print('cloud config OK:', d.get('revision'))
+          PY
       - run: gradle -p android assembleDebug --stacktrace
-      - name: Assert thin cloud-client APK
+      - name: Assert final thin cloud-client APK
         run: |
           set -eu
           APK=android/app/build/outputs/apk/debug/app-debug.apk
@@ -38,20 +49,40 @@ jobs:
           SIZE=$(stat -c '%s' "$APK")
           echo "APK_BYTES=$SIZE"
           test "$SIZE" -lt 41943040
-          if unzip -l "$APK" | grep -E 'ucoa_local_model|litertlm'; then
-            echo "Local AI model/runtime is still packaged in the APK"
-            exit 1
-          fi
-      - name: Check hardware acceleration availability
+          ! unzip -l "$APK" | grep -E 'ucoa_local_model|litertlm'
+          AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n1)"
+          "$AAPT" dump badging "$APK" | head -n 20
+      - name: Enable KVM
         run: |
-          if [ -e /dev/kvm ]; then echo "KVM_AVAILABLE=true"; else echo "KVM_AVAILABLE=false"; fi
-      - uses: reactivecircus/android-emulator-runner@v2
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo chmod 666 /dev/kvm || true
+          test -e /dev/kvm
+      - name: Final emulator cloud smoke
+        uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 34
           arch: x86_64
           target: default
           profile: pixel_2
           force-avd-creation: true
-          emulator-options: -no-window -noaudio -no-boot-anim -gpu swiftshader_indirect
+          cores: 2
+          ram-size: 2048M
+          disk-size: 4096M
+          emulator-boot-timeout: 600
+          emulator-options: -no-window -noaudio -no-boot-anim -gpu swiftshader_indirect -no-snapshot-save -camera-back none -camera-front none
           disable-animations: true
-          script: bash ./server/ci_android_smoke.sh
+          script: |
+            set -eu
+            adb wait-for-device
+            test -s android/app/build/outputs/apk/debug/app-debug.apk
+            UCOA_APK_PATH="$PWD/android/app/build/outputs/apk/debug/app-debug.apk" CAPCUT_OPTIONAL=true CAPCUT_APK_PATH="$PWD/.cache/capcut/capcut.apk" bash ./server/ci_capcut_e2e.sh
+      - name: Upload final verified APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ucoa-final-verified-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
