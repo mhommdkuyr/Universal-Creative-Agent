@@ -2,23 +2,23 @@ name: Final APK Release Gate
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - 'server/provider_router.py'
-      - 'server/ci_capcut_e2e.sh'
-      - 'android/**'
-      - '.github/workflows/final-release-gate.yml'
+  workflow_run:
+    workflows: ["smoke"]
+    types: [completed]
 
 concurrency:
-  group: final-apk-release-${{ github.ref }}
+  group: final-apk-release-${{ github.event.workflow_run.head_branch || github.ref }}
   cancel-in-progress: true
 
 jobs:
   cloud-contract:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -59,6 +59,8 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
