@@ -40,12 +40,6 @@ jobs:
             sleep 2
           done
           exit 1
-      - name: Provider contract diagnostic
-        continue-on-error: true
-        run: |
-          set -u
-          curl -fsS --max-time 60 https://ucoa-agent-brain.onrender.com/v1/providers/probe -o /tmp/providers.json || true
-          cat /tmp/providers.json 2>/dev/null || true
       - name: Live multimodal agent contract
         run: |
           set -euo pipefail
