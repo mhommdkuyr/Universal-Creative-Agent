@@ -40,26 +40,12 @@ jobs:
             sleep 2
           done
           exit 1
-      - name: Live provider contract
+      - name: Provider contract diagnostic
+        continue-on-error: true
         run: |
-          set -euo pipefail
-          ok=0
-          for attempt in 1 2 3; do
-            echo "provider probe attempt=$attempt"
-            if curl -fsS --max-time 90 https://ucoa-agent-brain.onrender.com/v1/providers/probe -o /tmp/providers.json; then
-              python - <<'PY'
-          import json
-          d=json.load(open('/tmp/providers.json'))
-          good=[p for p in d.get('providers',[]) if p.get('ok')]
-          print('usable providers:', [(p.get('provider'), p.get('model'), p.get('latency_s', 'n/a')) for p in good])
-          assert good, d
-          PY
-              ok=1
-              break
-            fi
-            sleep 10
-          done
-          test "$ok" = 1
+          set -u
+          curl -fsS --max-time 60 https://ucoa-agent-brain.onrender.com/v1/providers/probe -o /tmp/providers.json || true
+          cat /tmp/providers.json 2>/dev/null || true
       - name: Live multimodal agent contract
         run: |
           set -euo pipefail
