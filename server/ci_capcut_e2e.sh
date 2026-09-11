@@ -6,7 +6,7 @@ CAPCUT_APK_PATH="${CAPCUT_APK_PATH:-/tmp/capcut.apk}"
 UCOA_APK_PATH="${UCOA_APK_PATH:-android/app/build/outputs/apk/debug/app-debug.apk}"
 CAPCUT_PACKAGE="${CAPCUT_PACKAGE:-}"
 CAPCUT_OPTIONAL="${CAPCUT_OPTIONAL:-false}"
-SMOKE_POLLS="${UCOA_SMOKE_POLLS:-90}"
+SMOKE_POLLS="${UCOA_SMOKE_POLLS:-60}"
 SMOKE_INTERVAL="${UCOA_SMOKE_INTERVAL:-2}"
 
 CAPCUT_INSTALLED=false
@@ -39,8 +39,21 @@ INSTALL_MS="$(date +%s%3N)"
 echo "UCOA_INSTALL_DURATION_MS=$((INSTALL_MS-START_MS))"
 
 adb wait-for-device
-adb shell settings put secure enabled_accessibility_services com.ucoa.app/.UcoaAccessibilityService
-adb shell settings put secure accessibility_enabled 1
+adb shell settings put secure enabled_accessibility_services com.ucoa.app/.UcoaAccessibilityService || true
+adb shell settings put secure accessibility_enabled 1 || true
+ACCESS_READY=false
+for i in $(seq 1 20); do
+  if adb shell dumpsys accessibility 2>/dev/null | grep -Eq 'com\.ucoa\.app/.UcoaAccessibilityService|com\.ucoa\.app/com\.ucoa\.app\.UcoaAccessibilityService'; then
+    ACCESS_READY=true
+    break
+  fi
+  sleep 1
+done
+echo "UCOA_ACCESSIBILITY_ENABLED=$ACCESS_READY"
+if [ "$ACCESS_READY" != "true" ]; then
+  echo "UCOA_EMULATOR_CLOUD_SMOKE_FAILED: accessibility service was not enabled"
+  exit 1
+fi
 
 if [ "$CAPCUT_INSTALLED" = true ]; then
   adb shell am force-stop "$CAPCUT_PACKAGE" || true
@@ -65,7 +78,7 @@ adb shell am force-stop com.ucoa.app || true
 adb shell am start -n com.ucoa.app/.UcoaSmokeActivity >/tmp/ucoa-smoke-start.txt 2>&1
 rm -f /tmp/ucoa-smoke-log.txt
 for i in $(seq 1 "$SMOKE_POLLS"); do
-  adb logcat -d -s UCOA_REAL_SMOKE_OK:I UCOA_REAL_SMOKE_FAILED:E '*:S' > /tmp/ucoa-smoke-log.txt || true
+  adb logcat -d -s UCOA_REAL_SMOKE:I UCOA_REAL_SMOKE_FAILED:E '*:S' > /tmp/ucoa-smoke-log.txt || true
   if grep -q 'UCOA_REAL_SMOKE_OK' /tmp/ucoa-smoke-log.txt; then cat /tmp/ucoa-smoke-log.txt; echo UCOA_EMULATOR_CLOUD_SMOKE_OK; exit 0; fi
   if grep -q 'UCOA_REAL_SMOKE_FAILED' /tmp/ucoa-smoke-log.txt; then cat /tmp/ucoa-smoke-log.txt; echo UCOA_EMULATOR_CLOUD_SMOKE_FAILED; exit 1; fi
   sleep "$SMOKE_INTERVAL"
