@@ -1,4 +1,5 @@
 # Release acceptance: cloud contract + thin APK + x86_64 emulator smoke.
+# Final emulator smoke is explicitly bounded and the verified APK is uploaded only after success.
 name: Release Acceptance
 
 on:
@@ -112,6 +113,7 @@ jobs:
         run: |
           if [ -e /dev/kvm ]; then echo "KVM_AVAILABLE=true"; else echo "KVM_AVAILABLE=false"; fi
       - name: Final emulator smoke
+        timeout-minutes: 15
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
