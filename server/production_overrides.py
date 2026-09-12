@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from fastapi import Header
+
 import app_v3
 import app_v4_runtime
 
@@ -111,6 +113,18 @@ def run_step(req: Any) -> dict[str, Any]:
     value = _fallback_action(req)
     value.update({"provider":RECOVERY_PROVIDER,"vision_provider":RECOVERY_PROVIDER,"output_mode":"resilient_fallback","visual_observation":{"screen_summary":"الحماية الاحتياطية: تم اتخاذ قرار محافظ من الأدلة المتاحة","elements":[],"confidence":value.get("confidence",0.0)},"error":str(last_error) if last_error else None})
     return _save_step(sid, req, value)
+
+
+# Route the result verifier through the production V4 verifier. The older V3
+# route only compared UI-tree text; V4 also accepts screenshot evidence, which
+# is essential for real Android transitions where the tree can lag behind the
+# visual state. Keep the endpoint contract unchanged so existing APKs continue
+# to work without an app update.
+app_v3.app.routes[:] = [r for r in app_v3.app.routes if getattr(r, "path", "") != "/v1/agent/verify-result"]
+@app_v3.app.post("/v1/agent/verify-result")
+def production_verify_result(req: app_v3.ResultVerifyRequest, authorization: str | None = Header(default=None)):
+    app_v3.auth(authorization)
+    return app_v4_runtime.verify_result(req)
 
 app_v3.run_plan = run_plan
 app_v3.run_step = run_step
