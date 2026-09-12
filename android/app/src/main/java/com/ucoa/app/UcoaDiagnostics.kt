@@ -1,6 +1,7 @@
 package com.ucoa.app
 
 import android.content.Context
+import android.util.Log
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -41,6 +42,9 @@ object UcoaDiagnostics {
             persistLocked()
             created
         }
+        // CI smoke consumes the Android log stream. Keep the existing persistent trace,
+        // but also emit the exact stage/message so the emulator runner can observe terminal states.
+        Log.i(stage, event.line())
         listeners.forEach { runCatching { it(event) } }
     }
 
