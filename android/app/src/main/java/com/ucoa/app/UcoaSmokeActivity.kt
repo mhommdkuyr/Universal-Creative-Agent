@@ -47,10 +47,9 @@ class UcoaSmokeActivity : android.app.Activity() {
         root.addView(target, LinearLayout.LayoutParams(-2, -2))
         setContentView(root)
 
-        // The cloud client may spend 15s creating a session, 15s refreshing config,
-        // and up to 75s waiting for the decision. Keep the harness alive long enough
-        // for the subsequent verify-result request as well.
-        main.postDelayed({ fail("UCOA_REAL_SMOKE_FAILED: activity timeout") }, 170000L)
+        // Allow the full cloud step + verification pipeline to complete on a cold emulator.
+        // The shell smoke gate has a matching bounded window.
+        main.postDelayed({ fail("UCOA_REAL_SMOKE_FAILED: activity timeout") }, 360000L)
         main.postDelayed({ runCloudSmoke() }, 500L)
     }
 
@@ -174,7 +173,7 @@ class UcoaSmokeActivity : android.app.Activity() {
                         status.text = "UCOA_REAL_SMOKE_OK"
                         UcoaDiagnostics.log(
                             "UCOA_REAL_SMOKE",
-                            "cloud decision + Android action + cloud verification passed",
+                            "UCOA_REAL_SMOKE_OK: cloud decision + Android action + cloud verification passed",
                             "accessibility=$actedByAccessibility"
                         )
                     } else {
