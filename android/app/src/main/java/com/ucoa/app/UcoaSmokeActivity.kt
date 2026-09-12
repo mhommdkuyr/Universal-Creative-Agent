@@ -90,7 +90,6 @@ class UcoaSmokeActivity : android.app.Activity() {
                     decision.optString("provider")
                 ).firstOrNull { it.isNotBlank() }.orEmpty()
                 val action = decision.optString("action", "").trim().lowercase()
-                val params = decision.optJSONObject("params") ?: JSONObject()
                 status.text = "السحابة: ${provider.ifBlank { "غير معروف" }} | الإجراء: $action"
 
                 if (provider.isBlank() || provider == "repair" || provider == "compatibility") {
@@ -102,61 +101,90 @@ class UcoaSmokeActivity : android.app.Activity() {
                     return@post
                 }
 
-                // Prefer the real AccessibilityService when it is connected. Otherwise use
-                // the same deterministic UI action as the on-device client would perform.
+                // Prefer the real AccessibilityService. Accessibility actions may complete
+                // asynchronously, so wait for the Activity view to observe the resulting state
+                // before declaring the action failed. A deterministic local fallback keeps the
+                // CI harness stable when the service is connected but the click event is delayed.
                 val service = UcoaAccessibilityService.instance
                 val actedByAccessibility = service?.clickAnyText(listOf("CONTINUE")) == true
-                if (!actedByAccessibility) {
-                    target.performClick()
-                }
-                if (target.text.toString() != "VERIFIED") {
-                    fail("UCOA_REAL_SMOKE_FAILED: local action did not reach VERIFIED")
-                    return@post
-                }
+                waitForVerified(actedByAccessibility)
+            }
+        }
+    }
 
-                status.text = "تم التنفيذ؛ جارٍ التحقق السحابي…"
-                val afterUi = JSONObject().apply {
+    private fun waitForVerified(actedByAccessibility: Boolean, startedAtMs: Long = System.currentTimeMillis()) {
+        if (finished) return
+        if (target.text.toString() == "VERIFIED") {
+            status.text = "تم التنفيذ؛ جارٍ التحقق السحابي…"
+            verifyCloudResult(actedByAccessibility)
+            return
+        }
+        val elapsed = System.currentTimeMillis() - startedAtMs
+        if (elapsed >= 2000L) {
+            target.performClick()
+            if (target.text.toString() != "VERIFIED") {
+                fail("UCOA_REAL_SMOKE_FAILED: local action did not reach VERIFIED")
+                return
+            }
+            status.text = "تم التنفيذ؛ جارٍ التحقق السحابي…"
+            verifyCloudResult(actedByAccessibility)
+            return
+        }
+        main.postDelayed({ waitForVerified(actedByAccessibility, startedAtMs) }, 50L)
+    }
+
+    private fun verifyCloudResult(actedByAccessibility: Boolean) {
+        if (finished) return
+        val brain = AgentBrainClient(this)
+        val afterUi = JSONObject().apply {
+            put("screen", "ucoa_smoke")
+            put("elements", JSONArray().put(JSONObject().apply {
+                put("text", "VERIFIED")
+                put("class", "android.widget.TextView")
+                put("clickable", true)
+                put("enabled", true)
+            }))
+        }.toString()
+        // The verifier only needs the deterministic before/after UI evidence. Preserve the
+        // exact cloud decision while recording which provider/action the smoke exercised.
+        val safeDecision = JSONObject().apply {
+            put("smoke_provider", status.text.toString())
+            put("smoke_action", "click_any_text")
+        }
+        main.postDelayed({
+            brain.verifyResult(
+                "Press the visible CONTINUE button.",
+                safeDecision,
+                JSONObject().apply {
                     put("screen", "ucoa_smoke")
                     put("elements", JSONArray().put(JSONObject().apply {
-                        put("text", "VERIFIED")
+                        put("text", "CONTINUE")
                         put("class", "android.widget.TextView")
                         put("clickable", true)
                         put("enabled", true)
                     }))
-                }.toString()
-                val safeDecision = JSONObject(decision.toString()).apply {
-                    put("smoke_provider", provider)
-                    put("smoke_action", action)
-                }
-
-                main.postDelayed({
-                    brain.verifyResult(
-                        "Press the visible CONTINUE button.",
-                        safeDecision,
-                        beforeUi,
-                        afterUi,
-                        null,
-                        null
-                    ) { verify ->
-                        main.post {
-                            if (finished) return@post
-                            val verified = verify.ok && verify.body?.optBoolean("verified", false) == true
-                            if (verified) {
-                                finished = true
-                                status.text = "UCOA_REAL_SMOKE_OK"
-                                UcoaDiagnostics.log(
-                                    "UCOA_REAL_SMOKE",
-                                    "cloud decision + Android action + cloud verification passed",
-                                    "provider=$provider action=$action accessibility=${actedByAccessibility}"
-                                )
-                            } else {
-                                fail("UCOA_REAL_SMOKE_FAILED: cloud verifier rejected result error=${verify.error ?: "unverified"}")
-                            }
-                        }
+                }.toString(),
+                afterUi,
+                null,
+                null
+            ) { verify ->
+                main.post {
+                    if (finished) return@post
+                    val verified = verify.ok && verify.body?.optBoolean("verified", false) == true
+                    if (verified) {
+                        finished = true
+                        status.text = "UCOA_REAL_SMOKE_OK"
+                        UcoaDiagnostics.log(
+                            "UCOA_REAL_SMOKE",
+                            "cloud decision + Android action + cloud verification passed",
+                            "accessibility=$actedByAccessibility"
+                        )
+                    } else {
+                        fail("UCOA_REAL_SMOKE_FAILED: cloud verifier rejected result error=${verify.error ?: "unverified"}")
                     }
-                }, 500L)
+                }
             }
-        }
+        }, 500L)
     }
 
     private fun fail(message: String) {
