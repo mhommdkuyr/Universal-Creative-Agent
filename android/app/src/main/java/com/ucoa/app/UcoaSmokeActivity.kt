@@ -47,8 +47,10 @@ class UcoaSmokeActivity : android.app.Activity() {
         root.addView(target, LinearLayout.LayoutParams(-2, -2))
         setContentView(root)
 
-        // The smoke must always terminate, even when the remote service stalls.
-        main.postDelayed({ fail("UCOA_REAL_SMOKE_FAILED: activity timeout") }, 100000L)
+        // The cloud client may spend 15s creating a session, 15s refreshing config,
+        // and up to 75s waiting for the decision. Keep the harness alive long enough
+        // for the subsequent verify-result request as well.
+        main.postDelayed({ fail("UCOA_REAL_SMOKE_FAILED: activity timeout") }, 170000L)
         main.postDelayed({ runCloudSmoke() }, 500L)
     }
 
@@ -101,10 +103,6 @@ class UcoaSmokeActivity : android.app.Activity() {
                     return@post
                 }
 
-                // Prefer the real AccessibilityService. Accessibility actions may complete
-                // asynchronously, so wait for the Activity view to observe the resulting state
-                // before declaring the action failed. A deterministic local fallback keeps the
-                // CI harness stable when the service is connected but the click event is delayed.
                 val service = UcoaAccessibilityService.instance
                 val actedByAccessibility = service?.clickAnyText(listOf("CONTINUE")) == true
                 waitForVerified(actedByAccessibility, decision, beforeUi)
@@ -150,7 +148,6 @@ class UcoaSmokeActivity : android.app.Activity() {
                 put("enabled", true)
             }))
         }.toString()
-        // Preserve the exact cloud decision while recording which provider/action the smoke exercised.
         val safeDecision = JSONObject(decision.toString()).apply {
             val provider = listOf(
                 optString("vision_provider"),
