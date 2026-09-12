@@ -6,7 +6,10 @@ CAPCUT_APK_PATH="${CAPCUT_APK_PATH:-/tmp/capcut.apk}"
 UCOA_APK_PATH="${UCOA_APK_PATH:-android/app/build/outputs/apk/debug/app-debug.apk}"
 CAPCUT_PACKAGE="${CAPCUT_PACKAGE:-}"
 CAPCUT_OPTIONAL="${CAPCUT_OPTIONAL:-false}"
-SMOKE_POLLS="${UCOA_SMOKE_POLLS:-60}"
+# The Android smoke may spend up to 15s creating a session + 15s refreshing remote config
+# + 75s waiting for the cloud step, followed by verify-result. Keep the polling window
+# above that worst-case budget so a slow but healthy cloud run is not misclassified.
+SMOKE_POLLS="${UCOA_SMOKE_POLLS:-100}"
 SMOKE_INTERVAL="${UCOA_SMOKE_INTERVAL:-2}"
 
 CAPCUT_INSTALLED=false
