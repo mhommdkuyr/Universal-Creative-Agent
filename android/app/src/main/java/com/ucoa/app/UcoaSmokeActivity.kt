@@ -107,16 +107,21 @@ class UcoaSmokeActivity : android.app.Activity() {
                 // CI harness stable when the service is connected but the click event is delayed.
                 val service = UcoaAccessibilityService.instance
                 val actedByAccessibility = service?.clickAnyText(listOf("CONTINUE")) == true
-                waitForVerified(actedByAccessibility)
+                waitForVerified(actedByAccessibility, decision, beforeUi)
             }
         }
     }
 
-    private fun waitForVerified(actedByAccessibility: Boolean, startedAtMs: Long = System.currentTimeMillis()) {
+    private fun waitForVerified(
+        actedByAccessibility: Boolean,
+        decision: JSONObject,
+        beforeUi: String,
+        startedAtMs: Long = System.currentTimeMillis()
+    ) {
         if (finished) return
         if (target.text.toString() == "VERIFIED") {
             status.text = "تم التنفيذ؛ جارٍ التحقق السحابي…"
-            verifyCloudResult(actedByAccessibility)
+            verifyCloudResult(actedByAccessibility, decision, beforeUi)
             return
         }
         val elapsed = System.currentTimeMillis() - startedAtMs
@@ -127,13 +132,13 @@ class UcoaSmokeActivity : android.app.Activity() {
                 return
             }
             status.text = "تم التنفيذ؛ جارٍ التحقق السحابي…"
-            verifyCloudResult(actedByAccessibility)
+            verifyCloudResult(actedByAccessibility, decision, beforeUi)
             return
         }
-        main.postDelayed({ waitForVerified(actedByAccessibility, startedAtMs) }, 50L)
+        main.postDelayed({ waitForVerified(actedByAccessibility, decision, beforeUi, startedAtMs) }, 50L)
     }
 
-    private fun verifyCloudResult(actedByAccessibility: Boolean) {
+    private fun verifyCloudResult(actedByAccessibility: Boolean, decision: JSONObject, beforeUi: String) {
         if (finished) return
         val brain = AgentBrainClient(this)
         val afterUi = JSONObject().apply {
@@ -145,25 +150,21 @@ class UcoaSmokeActivity : android.app.Activity() {
                 put("enabled", true)
             }))
         }.toString()
-        // The verifier only needs the deterministic before/after UI evidence. Preserve the
-        // exact cloud decision while recording which provider/action the smoke exercised.
-        val safeDecision = JSONObject().apply {
-            put("smoke_provider", status.text.toString())
-            put("smoke_action", "click_any_text")
+        // Preserve the exact cloud decision while recording which provider/action the smoke exercised.
+        val safeDecision = JSONObject(decision.toString()).apply {
+            val provider = listOf(
+                optString("vision_provider"),
+                optString("reasoning_provider"),
+                optString("provider")
+            ).firstOrNull { it.isNotBlank() }.orEmpty()
+            put("smoke_provider", provider)
+            put("smoke_action", optString("action", "click_any_text").trim().lowercase())
         }
         main.postDelayed({
             brain.verifyResult(
                 "Press the visible CONTINUE button.",
                 safeDecision,
-                JSONObject().apply {
-                    put("screen", "ucoa_smoke")
-                    put("elements", JSONArray().put(JSONObject().apply {
-                        put("text", "CONTINUE")
-                        put("class", "android.widget.TextView")
-                        put("clickable", true)
-                        put("enabled", true)
-                    }))
-                }.toString(),
+                beforeUi,
                 afterUi,
                 null,
                 null
