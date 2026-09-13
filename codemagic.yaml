@@ -1,0 +1,41 @@
+workflows:
+  android-native-gradle:
+    name: UCOA Native Android Gradle Acceptance
+    max_build_duration: 60
+    instance_type: linux_x2
+    environment:
+      java: 17
+    scripts:
+      - name: Install Android SDK packages
+        script: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+      - name: Install Gradle 8.11.1
+        script: |
+          set -euo pipefail
+          curl -fsSL https://services.gradle.org/distributions/gradle-8.11.1-bin.zip -o /tmp/gradle.zip
+          rm -rf "$HOME/gradle"
+          mkdir -p "$HOME/gradle"
+          unzip -q /tmp/gradle.zip -d "$HOME/gradle"
+          export GRADLE_HOME="$HOME/gradle/gradle-8.11.1"
+          export PATH="$GRADLE_HOME/bin:$PATH"
+          echo "export GRADLE_HOME=$GRADLE_HOME" >> "$CM_BUILD_DIR/gradle_env.sh"
+          echo "export PATH=$GRADLE_HOME/bin:$PATH" >> "$CM_BUILD_DIR/gradle_env.sh"
+      - name: Assemble native Android APK with Gradle
+        script: |
+          set -euo pipefail
+          source "$CM_BUILD_DIR/gradle_env.sh"
+          gradle -p android assembleDebug --stacktrace
+      - name: Verify APK and embedded local model
+        script: |
+          set -euo pipefail
+          APK="$CM_BUILD_DIR/android/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          unzip -t "$APK" >/dev/null
+          unzip -l "$APK" | grep -q 'assets/ucoa_local_model.litertlm'
+          sha256sum "$APK" | tee "$CM_BUILD_DIR/ucoa_apk_sha256.txt"
+          echo "UCOA_NATIVE_GRADLE_APK_READY size=$(stat -c%s "$APK")"
+    artifacts:
+      - android/app/build/outputs/apk/debug/app-debug.apk
+      - ucoa_apk_sha256.txt
