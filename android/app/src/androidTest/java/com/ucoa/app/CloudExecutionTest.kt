@@ -14,10 +14,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class CloudExecutionTest {
-    private fun shell(device: UiDevice, command: String): String {
-        val pfd = device.executeShellCommand(command)
-        return pfd.use { android.os.ParcelFileDescriptor.AutoCloseInputStream(it).bufferedReader().use { r -> r.readText() } }
-    }
+    private fun shell(device: UiDevice, command: String): String = device.executeShellCommand(command)
 
     private fun foregroundPackage(device: UiDevice): String {
         return shell(device, "dumpsys window windows | grep -m1 mCurrentFocus")
