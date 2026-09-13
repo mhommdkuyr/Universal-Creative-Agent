@@ -1,1 +1,45 @@
-__CODEMAGIC_PLACEHOLDER__
+workflows:
+  android-native-gradle:
+    name: UCOA Cloud-Only Native Android Acceptance
+    max_build_duration: 90
+    instance_type: mac_mini_m2
+    environment:
+      vars:
+        JAVA_VERSION: "17"
+    scripts:
+      - name: Prepare Android SDK
+        script: |
+          set -euo pipefail
+          SDKMANAGER=""
+          for candidate in "${ANDROID_HOME:-}/cmdline-tools/latest/bin/sdkmanager" "${ANDROID_SDK_ROOT:-}/cmdline-tools/latest/bin/sdkmanager" "$HOME/Library/Android/sdk/cmdline-tools/latest/bin/sdkmanager"; do
+            if [ -x "$candidate" ]; then SDKMANAGER="$candidate"; break; fi
+          done
+          test -n "$SDKMANAGER"
+          "$SDKMANAGER" --version
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+      - name: Assemble cloud-only Android APK with Gradle
+        script: |
+          set -euo pipefail
+          mkdir -p "$HOME/gradle"
+          if [ ! -x "$HOME/gradle/gradle-8.11.1/bin/gradle" ]; then
+            curl -fsSL https://services.gradle.org/distributions/gradle-8.11.1-bin.zip -o /tmp/gradle.zip
+            rm -rf "$HOME/gradle/gradle-8.11.1"
+            unzip -q /tmp/gradle.zip -d "$HOME/gradle"
+          fi
+          "$HOME/gradle/gradle-8.11.1/bin/gradle" -p android assembleDebug --stacktrace
+      - name: Verify cloud-only APK
+        script: |
+          set -euo pipefail
+          APK="$CM_BUILD_DIR/android/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          unzip -t "$APK" >/dev/null
+          if unzip -l "$APK" | grep -q 'assets/ucoa_local_model\\.litertlm'; then
+            echo 'ERROR: local model asset is present in cloud-only APK'
+            exit 1
+          fi
+          shasum -a 256 "$APK" | tee "$CM_BUILD_DIR/ucoa_apk_sha256.txt"
+          echo "UCOA_CLOUD_ONLY_APK_READY size=$(stat -f%z "$APK")"
+    artifacts:
+      - android/app/build/outputs/apk/debug/app-debug.apk
+      - ucoa_apk_sha256.txt
