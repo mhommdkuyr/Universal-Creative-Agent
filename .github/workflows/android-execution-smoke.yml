@@ -1,1 +1,113 @@
-__WORKFLOW_PLACEHOLDER__
+name: Android Execution Smoke
+
+# Acceptance gate: cloud-only APK + Accessibility + real foreground verification.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'android/**'
+      - '.github/workflows/android-execution-smoke.yml'
+
+concurrency:
+  group: android-execution-smoke-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  execution-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install Android build toolchain
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Build cloud-only APK
+        run: gradle -p android assembleDebug --stacktrace
+      - name: Verify cloud-only APK package
+        run: |
+          set -eu
+          test -s android/app/build/outputs/apk/debug/app-debug.apk
+          unzip -l android/app/build/outputs/apk/debug/app-debug.apk | grep -q 'AndroidManifest.xml'
+          if unzip -l android/app/build/outputs/apk/debug/app-debug.apk | grep -q 'assets/ucoa_local_model\\.litertlm'; then exit 1; fi
+      - name: Real cloud-only accessibility execution test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: default
+          arch: x86_64
+          profile: pixel_2
+          force-avd-creation: true
+          emulator-options: -no-window -noaudio -no-boot-anim -gpu swiftshader_indirect
+          disable-animations: true
+          script: |
+            set -eu
+            adb wait-for-device
+            APK="$(find /home/runner/work -type f -path '*/android/app/build/outputs/apk/debug/app-debug.apk' -print -quit)"
+            test -n "$APK"
+            test -s "$APK"
+            adb install -r "$APK"
+            adb shell settings put secure enabled_accessibility_services com.ucoa.app/.UcoaAccessibilityService
+            adb shell settings put secure accessibility_enabled 1
+            adb shell am force-stop com.ucoa.app || true
+            adb shell am force-stop com.android.settings || true
+            adb shell am start -n com.ucoa.app/.MainActivity --es smoke_task 'افتح الإعدادات'
+            PLAN_OK=false
+            APPROVAL_OK=false
+            REAL_OK=false
+            for i in $(seq 1 150); do
+              LOG=$(adb logcat -d || true)
+              if printf '%s' "$LOG" | grep -q 'استلمت خطة من Cloud Brain'; then PLAN_OK=true; fi
+              if [ "$PLAN_OK" = true ] && [ "$APPROVAL_OK" = false ]; then
+                adb shell uiautomator dump /sdcard/ucoa.xml >/dev/null 2>&1 || true
+                XML=$(adb shell cat /sdcard/ucoa.xml 2>/dev/null || true)
+                NODE=$(printf '%s' "$XML" | grep -o 'text="تنفيذ عالمي"[^>]\+' | head -1 || true)
+                if [ -n "$NODE" ]; then
+                  BOUNDS=$(printf '%s' "$NODE" | sed -n 's/.*bounds="\[\([0-9,]*\)\]\[\([0-9,]*\)\]".*/\1 \2/p')
+                  if [ -n "$BOUNDS" ]; then
+                    X1=$(printf '%s' "$BOUNDS" | cut -d, -f1); Y1=$(printf '%s' "$BOUNDS" | cut -d, -f2)
+                    X2=$(printf '%s' "$BOUNDS" | cut -d' ' -f2 | cut -d, -f1); Y2=$(printf '%s' "$BOUNDS" | cut -d' ' -f2 | cut -d, -f2)
+                    adb shell input tap "$(( (X1 + X2) / 2 ))" "$(( (Y1 + Y2) / 2 ))"
+                    APPROVAL_OK=true
+                  fi
+                fi
+              fi
+              if printf '%s' "$LOG" | grep -q 'UCOA_REAL_SMOKE_OK'; then REAL_OK=true; break; fi
+              if printf '%s' "$LOG" | grep -q 'UCOA_REAL_SMOKE_FAILED'; then break; fi
+              sleep 1
+            done
+            FG=$(adb shell dumpsys window windows | grep -m1 'mCurrentFocus' || true)
+            FG_OK=false; if printf '%s' "$FG" | grep -q 'com.android.settings'; then FG_OK=true; fi
+            mkdir -p "$GITHUB_WORKSPACE/smoke-diagnostics"
+            adb logcat -d -v threadtime | tail -n 5000 > "$GITHUB_WORKSPACE/smoke-diagnostics/ucoa_logcat.txt" || true
+            adb shell dumpsys accessibility > "$GITHUB_WORKSPACE/smoke-diagnostics/ucoa_accessibility.txt" || true
+            adb shell dumpsys window windows > "$GITHUB_WORKSPACE/smoke-diagnostics/ucoa_windows.txt" || true
+            echo "PLAN_OK=$PLAN_OK APPROVAL_OK=$APPROVAL_OK REAL_OK=$REAL_OK FG_OK=$FG_OK"
+            test "$PLAN_OK" = true
+            test "$APPROVAL_OK" = true
+            test "$REAL_OK" = true
+            test "$FG_OK" = true
+            echo 'UCOA_REAL_EXECUTION_SMOKE_OK'
+      - name: Upload execution diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ucoa-execution-diagnostics
+          path: smoke-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ucoa-debug-apk-execution-smoke
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
