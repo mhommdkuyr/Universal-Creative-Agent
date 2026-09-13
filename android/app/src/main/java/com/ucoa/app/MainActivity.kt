@@ -31,6 +31,9 @@ class MainActivity : Activity() {
     private var latestPlan: TaskInterpreter.PlanResult? = null
     private var latestTaskText = ""
     private var latestPlanCard: View? = null
+    private var smokePlanSeen = false
+    private var smokeExecutionSeen = false
+    private var smokeVerificationSeen = false
     private val pickMedia = 401
     private val speech = 402
 
@@ -317,12 +320,15 @@ class MainActivity : Activity() {
 
     private fun executePlan(card: View) {
         if (!PermissionCoordinator.isServiceLive()) { UcoaDiagnostics.log("EXECUTOR", "منع بدء الوكيل", "service_live=false"); Toast.makeText(this, "فعّل ربط الهاتف أولًا.", Toast.LENGTH_LONG).show(); connectPhone(); return }
+        UcoaDiagnostics.log("APPROVAL", "تم اعتماد الخطة من واجهة المستخدم", "task=$latestTaskText")
         UcoaDiagnostics.log("EXECUTOR", "بدء دورة الوكيل العالمي", "task=$latestTaskText")
         card.isEnabled = false; addAssistantBubble("بدأ الوكيل العالمي: ملاحظة الشاشة ← قرار AI ← تنفيذ ← تحقق.")
         UniversalAgentLoop(brain).start(latestTaskText + "\\nالخطة المعتمدة: " + (latestPlan?.steps?.mapIndexed { i, s -> "${i + 1}. $s" }?.joinToString("\\n") ?: ""), object : UniversalAgentLoop.Listener {
             override fun onEvent(text: String) {
                 runOnUiThread {
                     UcoaDiagnostics.log("AGENT", text)
+                    if (smokePlanSeen && text.startsWith("التنفيذ")) smokeExecutionSeen = true
+                    if (smokePlanSeen && text.startsWith("التحقق")) smokeVerificationSeen = true
                     status.text = text.take(260)
                     if (text.contains("—") || text.startsWith("العقل") || text.startsWith("التنفيذ") || text.startsWith("التحقق")) addAssistantBubble(text.take(900))
                 }
@@ -331,6 +337,12 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     card.isEnabled = true
                     UcoaDiagnostics.log("AGENT", if (success) "انتهت دورة الوكيل بنجاح" else "انتهت دورة الوكيل بفشل", "success=$success")
+                    if (smokePlanSeen) {
+                        val foreground = UcoaAccessibilityService.instance?.foregroundPackageName().orEmpty()
+                        val realSmokeOk = success && smokeExecutionSeen && smokeVerificationSeen && foreground == "com.android.settings"
+                        UcoaDiagnostics.log("UCOA_REAL_SMOKE", if (realSmokeOk) "UCOA_REAL_SMOKE_OK: plan + approval + execution + accessibility + foreground verification passed" else "UCOA_REAL_SMOKE_FAILED", "success=$success execution=$smokeExecutionSeen verification=$smokeVerificationSeen foreground=$foreground accessibility=${PermissionCoordinator.isServiceLive()}")
+                        if (realSmokeOk) android.util.Log.i("UCOA_SMOKE", "UCOA_REAL_SMOKE_OK")
+                    }
                     addAssistantBubble(if (success) "✅ اكتملت المهمة بعد التحقق." else "⚠️ توقفت الدورة قبل إثبات الاكتمال. راجع سجل التشخيص أعلاه.")
                 }
             }

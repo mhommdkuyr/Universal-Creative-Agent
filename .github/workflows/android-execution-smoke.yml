@@ -18,7 +18,7 @@ concurrency:
 jobs:
   execution-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -33,7 +33,17 @@ jobs:
         uses: actions/cache@v4
         with:
           path: android/app/src/main/assets/ucoa_local_model.litertlm
-          key: ucoa-qwen3-0.6b-nothink-int4-v2
+          key: ucoa-qwen3-0.6b-nothink-int4-v3
+      - name: Fetch verified local model
+        run: |
+          set -euo pipefail
+          mkdir -p android/app/src/main/assets
+          MODEL=android/app/src/main/assets/ucoa_local_model.litertlm
+          if [ ! -s "$MODEL" ]; then
+            curl -fL --retry 5 --retry-delay 2 --connect-timeout 20 -o "$MODEL" "https://huggingface.co/litert-community/Qwen3-0.6B-int4/resolve/main/qwen3_0.6b_nothink_q4_block32_ekv1280.litertlm?download=true"
+          fi
+          test "$(stat -c%s "$MODEL")" -gt 300000000
+          printf '%s  %s\n' "2df6821ec12702dafd33915e7a1a1adc7c4b053f3672fd9555dfaf3a114c4139" "$MODEL" | sha256sum -c -
       - name: Install Android build toolchain
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - name: Build APK with embedded local model
@@ -64,30 +74,42 @@ jobs:
             adb shell settings put secure accessibility_enabled 1
             adb shell am force-stop com.ucoa.app || true
             adb shell am force-stop com.android.settings || true
-            adb shell am start -n com.ucoa.app/.MainActivity --es smoke_task 'افتح الإعدادات' --ez smoke_local_only true
-            EXEC_OK=false
-            FG_OK=false
-            LOCAL_MODEL_OK=false
-            LOCAL_ROUTE_OK=false
-            for i in $(seq 1 90); do
+            adb shell am start -n com.ucoa.app/.MainActivity --es smoke_task 'افتح الإعدادات'
+            PLAN_OK=false
+            APPROVAL_OK=false
+            REAL_OK=false
+            for i in $(seq 1 150); do
               LOG=$(adb logcat -d || true)
-              if printf '%s' "$LOG" | grep -q 'UCOA_LOCAL_EXECUTION_OK app='; then EXEC_OK=true; fi
-              if printf '%s' "$LOG" | grep -q 'LOCAL_BRAIN.*bundled=true'; then LOCAL_MODEL_OK=true; fi
-              if printf '%s' "$LOG" | grep -q 'LOCAL_BRAIN.*العقل المحلي فهم المهمة'; then LOCAL_ROUTE_OK=true; fi
-              FG=$(adb shell dumpsys window windows | grep -m1 'mCurrentFocus' || true)
-              if printf '%s' "$FG" | grep -q 'com.android.settings'; then FG_OK=true; fi
-              if [ "$EXEC_OK" = true ] && [ "$FG_OK" = true ] && [ "$LOCAL_MODEL_OK" = true ] && [ "$LOCAL_ROUTE_OK" = true ]; then break; fi
+              if printf '%s' "$LOG" | grep -q 'استلمت خطة من Cloud Brain'; then PLAN_OK=true; fi
+              if [ "$PLAN_OK" = true ] && [ "$APPROVAL_OK" = false ]; then
+                adb shell uiautomator dump /sdcard/ucoa.xml >/dev/null 2>&1 || true
+                XML=$(adb shell cat /sdcard/ucoa.xml 2>/dev/null || true)
+                NODE=$(printf '%s' "$XML" | grep -o 'text="تنفيذ عالمي"[^>]\+' | head -1 || true)
+                if [ -n "$NODE" ]; then
+                  BOUNDS=$(printf '%s' "$NODE" | sed -n 's/.*bounds="\[\([0-9,]*\)\]\[\([0-9,]*\)\]".*/ \2/p')
+                  if [ -n "$BOUNDS" ]; then
+                    X1=$(printf '%s' "$BOUNDS" | cut -d, -f1); Y1=$(printf '%s' "$BOUNDS" | cut -d, -f2)
+                    X2=$(printf '%s' "$BOUNDS" | cut -d' ' -f2 | cut -d, -f1); Y2=$(printf '%s' "$BOUNDS" | cut -d' ' -f2 | cut -d, -f2)
+                    adb shell input tap "$(( (X1 + X2) / 2 ))" "$(( (Y1 + Y2) / 2 ))"
+                    APPROVAL_OK=true
+                  fi
+                fi
+              fi
+              if printf '%s' "$LOG" | grep -q 'UCOA_REAL_SMOKE_OK'; then REAL_OK=true; break; fi
+              if printf '%s' "$LOG" | grep -q 'UCOA_REAL_SMOKE_FAILED'; then break; fi
               sleep 1
             done
+            FG=$(adb shell dumpsys window windows | grep -m1 'mCurrentFocus' || true)
+            FG_OK=false; if printf '%s' "$FG" | grep -q 'com.android.settings'; then FG_OK=true; fi
             mkdir -p "$GITHUB_WORKSPACE/smoke-diagnostics"
             adb logcat -d -v threadtime | tail -n 5000 > "$GITHUB_WORKSPACE/smoke-diagnostics/ucoa_logcat.txt" || true
             adb shell dumpsys accessibility > "$GITHUB_WORKSPACE/smoke-diagnostics/ucoa_accessibility.txt" || true
             adb shell dumpsys window windows > "$GITHUB_WORKSPACE/smoke-diagnostics/ucoa_windows.txt" || true
-            echo "EXEC_OK=$EXEC_OK FG_OK=$FG_OK LOCAL_MODEL_OK=$LOCAL_MODEL_OK LOCAL_ROUTE_OK=$LOCAL_ROUTE_OK"
-            test "$EXEC_OK" = true
+            echo "PLAN_OK=$PLAN_OK APPROVAL_OK=$APPROVAL_OK REAL_OK=$REAL_OK FG_OK=$FG_OK"
+            test "$PLAN_OK" = true
+            test "$APPROVAL_OK" = true
+            test "$REAL_OK" = true
             test "$FG_OK" = true
-            test "$LOCAL_MODEL_OK" = true
-            test "$LOCAL_ROUTE_OK" = true
             echo 'UCOA_REAL_EXECUTION_SMOKE_OK'
       - name: Upload execution diagnostics
         if: always()
