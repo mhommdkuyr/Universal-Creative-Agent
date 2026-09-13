@@ -68,33 +68,37 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Discover a physical Android device
+      - name: Discover an available physical Android device
         id: device
+        shell: bash
         run: |
           set -euo pipefail
-          gcloud --quiet components update
           gcloud firebase test android models list --format=json > /tmp/ftl-models.json
-          python3 - <<'PY' > /tmp/ftl-device.env
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json
           data=json.load(open('/tmp/ftl-models.json'))
           models=data.get('models', data) if isinstance(data, dict) else data
-          physical=[]
+          candidates=[]
           for m in models:
               if str(m.get('form','')).upper() != 'PHYSICAL':
                   continue
               mid=m.get('id') or m.get('modelId')
               versions=m.get('versionIds') or m.get('supportedVersionIds') or []
-              if mid and versions:
-                  physical.append((mid, versions))
-          if not physical:
-              raise SystemExit('No physical Firebase Test Lab Android device with supported versions was returned')
-          mid, versions = physical[0]
-          version = str(sorted([str(v) for v in versions], key=lambda x: [int(p) if p.isdigit() else p for p in x.split('.')])[-1])
+              versions=[str(v) for v in versions]
+              if not mid or not versions:
+                  continue
+              preferred=next((v for v in ('35','34','33','32') if v in versions), None)
+              if preferred is None:
+                  numeric=[v for v in versions if v.isdigit()]
+                  preferred=max(numeric, key=int) if numeric else versions[0]
+              candidates.append((str(mid), preferred))
+          if not candidates:
+              raise SystemExit('No physical Firebase Test Lab Android device with supported Android versions was returned')
+          mid, version = candidates[0]
           print(f'MODEL={mid}')
           print(f'VERSION={version}')
           PY
-          cat /tmp/ftl-device.env
-          cat /tmp/ftl-device.env >> "$GITHUB_OUTPUT"
+          cat /tmp/ftl-models.json >/dev/null
 
       - name: Run real execution on Firebase Test Lab physical device
         env:
@@ -113,8 +117,6 @@ jobs:
           test -n "$PROJECT_ID"
           echo "Firebase project: $PROJECT_ID"
           echo "Firebase physical device: $MODEL / Android $VERSION"
-
-          set +e
           gcloud firebase test android run \
             --project="$PROJECT_ID" \
             --type=instrumentation \
@@ -123,14 +125,9 @@ jobs:
             --device model="$MODEL",version="$VERSION",locale=en,orientation=portrait \
             --timeout 15m \
             --num-flaky-test-attempts 0 \
-            --results-bucket="gs://${PROJECT_ID}-test-lab-results" \
-            --results-dir="ucoa/${GITHUB_SHA}/${GITHUB_RUN_ID}" \
             --environment-variables "UCOA_SMOKE_TASK=افتح الإعدادات" \
             --format=json > ftl-result.json
-          STATUS=$?
-          set -e
           cat ftl-result.json
-          exit "$STATUS"
 
       - name: Upload Firebase Test Lab result and APK artifacts
         if: always()
