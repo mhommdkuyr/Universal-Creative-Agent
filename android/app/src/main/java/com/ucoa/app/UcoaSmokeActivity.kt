@@ -67,6 +67,11 @@ class UcoaSmokeActivity : android.app.Activity() {
             }))
         }.toString()
 
+        runCloudStepWithRetry(brain, beforeUi, 0)
+    }
+
+    private fun runCloudStepWithRetry(brain: AgentBrainClient, beforeUi: String, attempt: Int) {
+        if (finished) return
         brain.step(
             "Press the visible CONTINUE button. Stop only after the screen changes to VERIFIED.",
             0,
@@ -80,6 +85,11 @@ class UcoaSmokeActivity : android.app.Activity() {
             main.post {
                 if (finished) return@post
                 if (!response.ok || response.body == null) {
+                    if (attempt < 15) {
+                        status.text = "إعادة المحاولة بسبب تعثر الاتصال بالسحابة (${attempt + 1}/15)…"
+                        main.postDelayed({ runCloudStepWithRetry(brain, beforeUi, attempt + 1) }, 2000L)
+                        return@post
+                    }
                     fail("UCOA_REAL_SMOKE_FAILED: cloud step ${response.error ?: "no result"}")
                     return@post
                 }

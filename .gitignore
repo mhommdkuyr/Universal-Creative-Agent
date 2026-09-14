@@ -1,0 +1,17 @@
+# Environments and virtualenvs
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+
+# Local UCOA databases and state
+.ucoa-local/
+*.db
+
+# Android build outputs and Gradle cache
+.gradle/
+android/.gradle/
+android/app/build/
+android/build/
+*.apk

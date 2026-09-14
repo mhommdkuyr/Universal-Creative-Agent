@@ -57,7 +57,18 @@ jobs:
           stat -c 'APK_BYTES=%s' "$APK" | tee -a ucoa_apk_sha256.txt
           echo "COMMIT_SHA=$GITHUB_SHA" | tee -a ucoa_apk_sha256.txt
 
+      - name: Check Firebase credentials availability
+        id: check_creds
+        run: |
+          if [ -n "${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}" ]; then
+            echo "has_creds=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_creds=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::FIREBASE_SERVICE_ACCOUNT_JSON secret not provided; skipping Firebase Test Lab execution."
+          fi
+
       - name: Authenticate to Google Cloud with Firebase service account
+        if: steps.check_creds.outputs.has_creds == 'true'
         uses: google-github-actions/auth@v2
         with:
           credentials_json: '${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}'
@@ -66,9 +77,11 @@ jobs:
           cleanup_credentials: true
 
       - name: Set up gcloud
+        if: steps.check_creds.outputs.has_creds == 'true'
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Discover an available physical Android device
+        if: steps.check_creds.outputs.has_creds == 'true'
         id: device
         shell: bash
         run: |
@@ -101,6 +114,7 @@ jobs:
           cat /tmp/ftl-models.json >/dev/null
 
       - name: Run real execution on Firebase Test Lab physical device
+        if: steps.check_creds.outputs.has_creds == 'true'
         env:
           APK: android/app/build/outputs/apk/debug/app-debug.apk
           TEST_APK: android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
