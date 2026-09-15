@@ -53,7 +53,7 @@ jobs:
           arch: x86_64
           profile: pixel_2
           force-avd-creation: true
-          emulator-options: -no-window -noaudio -no-boot-anim -gpu swiftshader_indirect
+          emulator-options: -no-window -noaudio -no-boot-anim -gpu swiftshader_indirect -dns-server 8.8.8.8
           disable-animations: true
           script: |
             set -eu
