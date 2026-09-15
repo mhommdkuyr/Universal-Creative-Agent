@@ -30,8 +30,8 @@ jobs:
       - name: Production cloud contract
         run: |
           set -euo pipefail
-          curl -fsS --max-time 20 https://ucoa-agent-brain.onrender.com/health
-          curl -fsS --max-time 20 https://ucoa-agent-brain.onrender.com/v1/client/config -o /tmp/client-config.json
+          curl -fsS --retry 5 --retry-connrefused --retry-delay 5 --max-time 60 https://ucoa-agent-brain.onrender.com/health
+          curl -fsS --retry 5 --retry-connrefused --retry-delay 5 --max-time 60 https://ucoa-agent-brain.onrender.com/v1/client/config -o /tmp/client-config.json
           python3 - <<'PY'
           import json
           d=json.load(open('/tmp/client-config.json'))
@@ -76,7 +76,7 @@ jobs:
           ram-size: 2048M
           disk-size: 4096M
           emulator-boot-timeout: 600
-          emulator-options: -no-window -noaudio -no-boot-anim -gpu swiftshader_indirect -no-snapshot-save -camera-back none -camera-front none
+          emulator-options: -no-window -noaudio -no-boot-anim -gpu swiftshader_indirect -no-snapshot-save -camera-back none -camera-front none -dns-server 8.8.8.8
           disable-animations: true
           script: |
             set -eu

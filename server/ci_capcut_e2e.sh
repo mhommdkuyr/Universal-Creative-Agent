@@ -76,6 +76,12 @@ fi
 
 echo CAPCUT_COMPATIBILITY_DIAGNOSTIC_ONLY
 adb shell am force-stop com.ucoa.app || true
+
+for i in $(seq 1 15); do
+  if adb shell ping -c 1 8.8.8.8 >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+
 adb shell am start -n com.ucoa.app/.UcoaSmokeActivity >/tmp/ucoa-smoke-start.txt 2>&1
 rm -f /tmp/ucoa-smoke-log.txt
 for i in $(seq 1 "$SMOKE_POLLS"); do

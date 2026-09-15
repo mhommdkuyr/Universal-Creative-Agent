@@ -5,6 +5,7 @@ import json
 import os
 import secrets
 import sqlite3
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,7 @@ import durable_state
 SESSION_TTL_SECONDS = int(os.getenv("UCOA_CLIENT_SESSION_TTL", str(30 * 24 * 3600)))
 CONFIG_VERSION = os.getenv("UCOA_REMOTE_CONFIG_VERSION", "1")
 CONFIG_REVISION = os.getenv("UCOA_REMOTE_CONFIG_REVISION", "2026-09-11.1")
-REMOTE_SQLITE = Path(os.getenv("UCOA_REMOTE_OPS_DB", "/opt/render/project/src/.ucoa-local/remote_ops.db"))
+REMOTE_SQLITE = app_v3._default_db_path("UCOA_REMOTE_OPS_DB", "remote_ops.db")
 REMOTE_SQLITE.parent.mkdir(parents=True, exist_ok=True)
 
 def _pg_conn():

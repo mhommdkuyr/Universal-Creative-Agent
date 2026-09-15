@@ -24,7 +24,16 @@ EXT_BASE = os.getenv("UCOA_FALLBACK_BASE_URL", "").rstrip("/")
 EXT_MODEL = os.getenv("UCOA_FALLBACK_MODEL", "")
 EXT_KEY = os.getenv("UCOA_FALLBACK_API_KEY", "")
 AGENT_TOKEN = os.getenv("UCOA_AGENT_TOKEN", "")
-DB_PATH = Path(os.getenv("UCOA_STATE_DB", "/opt/render/project/src/.ucoa-local/state.db"))
+def _default_db_path(env_var: str, default_filename: str) -> Path:
+    val = os.getenv(env_var, "").strip()
+    if val:
+        return Path(val)
+    render_parent = Path("/opt/render/project/src")
+    if render_parent.exists():
+        return render_parent / ".ucoa-local" / default_filename
+    return Path.cwd() / ".ucoa-local" / default_filename
+
+DB_PATH = _default_db_path("UCOA_STATE_DB", "state.db")
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 JOBS: dict[str, dict[str, Any]] = {}; JOB_LOCK = threading.Lock(); DB_LOCK = threading.Lock(); EXECUTOR = ThreadPoolExecutor(max_workers=2)
