@@ -19,15 +19,19 @@ import java.io.ByteArrayOutputStream
 class UcoaAccessibilityService : AccessibilityService() {
     companion object { @Volatile var instance: UcoaAccessibilityService? = null }
     @Volatile private var lastForegroundPackage: String? = null
+    private var remoteBridge: RemoteCommandBridge? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         UcoaDiagnostics.init(this)
         UcoaDiagnostics.log("ACCESSIBILITY", "خدمة الوصول اتصلت فعليًا", "package=$packageName")
+        remoteBridge = RemoteCommandBridge(this, this).also { it.start() }
     }
 
     override fun onDestroy() {
+        remoteBridge?.stop()
+        remoteBridge = null
         UcoaDiagnostics.log("ACCESSIBILITY", "خدمة الوصول انقطعت")
         instance = null
         super.onDestroy()
