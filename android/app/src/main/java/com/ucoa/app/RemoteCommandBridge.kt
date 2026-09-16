@@ -67,7 +67,7 @@ class RemoteCommandBridge(private val context: Context, private val service: Uco
             brain.telemetry("remote_step_prepare", JSONObject().put("command_id", id).put("step", step))
             val beforeUi = safeObserveUi()
             val beforeShot = awaitScreenshot()
-            brain.telemetry("remote_step_evidence_ready", JSONObject().put("command_id", id).put("step", step).put("ui_chars", beforeUi.length()).put("has_screenshot", !beforeShot.isNullOrBlank()))
+            brain.telemetry("remote_step_evidence_ready", JSONObject().put("command_id", id).put("step", step).put("ui_chars", beforeUi.length).put("has_screenshot", !beforeShot.isNullOrBlank()))
             val result = awaitStep(task, step, history, beforeUi, beforeShot, attachments)
             if (!result.first || result.second == null) { lastError = result.third ?: "step failed"; break }
             val action = result.second!!; history.put(action)
