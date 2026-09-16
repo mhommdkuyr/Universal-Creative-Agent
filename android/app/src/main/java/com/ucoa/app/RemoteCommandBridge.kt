@@ -8,6 +8,7 @@ import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
@@ -40,28 +41,44 @@ class RemoteCommandBridge(private val context: Context, private val service: Uco
 
     private fun executeCommand(command: JSONObject) {
         val id = command.optString("id")
+        try {
+            executeCommandInternal(command)
+        } catch (e: Exception) {
+            UcoaDiagnostics.log("REMOTE_BRIDGE", "استثناء أثناء تنفيذ المهمة", "id=$id error=${e.javaClass.simpleName}: ${e.message}")
+            report(id, "failed", JSONObject().put("stage", "executor").put("error", e.message ?: e.javaClass.simpleName))
+        }
+    }
+
+    private fun executeCommandInternal(command: JSONObject) {
+        val id = command.optString("id")
         val kind = command.optString("kind")
         val payload = command.optJSONObject("payload") ?: JSONObject()
         if (kind != "task") { report(id, "failed", JSONObject().put("error", "Unsupported command kind: $kind")); return }
         val task = payload.optString("task").trim(); val attachments = list(payload.optJSONArray("attachments"))
         if (task.isBlank()) { report(id, "failed", JSONObject().put("error", "Empty task")); return }
         UcoaDiagnostics.log("REMOTE_BRIDGE", "استلام مهمة سحابية", "id=$id task=${task.take(180)}")
+        brain.telemetry("remote_task_received", JSONObject().put("command_id", id))
         val plan = awaitPlan(task, attachments)
         if (!plan.first) { report(id, "failed", JSONObject().put("stage", "plan").put("error", plan.third ?: "plan failed")); return }
 
         val history = JSONArray(); var completed = false; var lastError = ""
         for (step in 0 until 60) {
             if (!running) return
-            val beforeUi = service.observeUi(); val beforeShot = awaitScreenshot()
+            brain.telemetry("remote_step_prepare", JSONObject().put("command_id", id).put("step", step))
+            val beforeUi = safeObserveUi()
+            val beforeShot = awaitScreenshot()
+            brain.telemetry("remote_step_evidence_ready", JSONObject().put("command_id", id).put("step", step).put("ui_chars", beforeUi.length()).put("has_screenshot", !beforeShot.isNullOrBlank()))
             val result = awaitStep(task, step, history, beforeUi, beforeShot, attachments)
             if (!result.first || result.second == null) { lastError = result.third ?: "step failed"; break }
             val action = result.second!!; history.put(action)
             val name = action.optString("action"); val actionOk = executeAction(action, attachments)
             Thread.sleep(action.optLong("wait_after_ms", 700L).coerceIn(100L, 8000L))
-            val afterUi = service.observeUi(); val afterShot = awaitScreenshot()
+            val afterUi = safeObserveUi()
+            val afterShot = awaitScreenshot()
             val verification = awaitVerification(task, action, beforeUi, afterUi, beforeShot, afterShot)
             if (!verification.first && name != "observe") lastError = verification.third ?: "verification failed"
             UcoaDiagnostics.log("REMOTE_BRIDGE", "تنفيذ أمر سحابي", "id=$id step=$step action=$name ok=$actionOk verified=${verification.first}")
+            brain.telemetry("remote_step_done", JSONObject().put("command_id", id).put("step", step).put("action", name).put("action_ok", actionOk).put("verified", verification.first))
             if (name == "done" || action.optBoolean("done", false)) { completed = actionOk || action.optBoolean("done", false); break }
             if (!actionOk && !action.optBoolean("optional", false)) lastError = action.optString("error", "action failed")
         }
@@ -69,6 +86,20 @@ class RemoteCommandBridge(private val context: Context, private val service: Uco
             put("task", task.take(2000)); put("steps", history.length()); put("final_foreground", service.foregroundPackageName() ?: "")
             if (lastError.isNotBlank()) put("error", lastError.take(2000))
         })
+    }
+
+    private fun safeObserveUi(timeoutMs: Long = 3000L): String {
+        return try {
+            val executor = Executors.newSingleThreadExecutor()
+            try {
+                executor.submit<String> { service.observeUi() }.get(timeoutMs, TimeUnit.MILLISECONDS)
+            } finally {
+                executor.shutdownNow()
+            }
+        } catch (e: Exception) {
+            UcoaDiagnostics.log("REMOTE_BRIDGE", "تعذر قراءة شجرة الواجهة؛ سيتم المتابعة بدونها", e.javaClass.simpleName)
+            "[]"
+        }
     }
 
     private fun executeAction(a: JSONObject, attachments: List<String>): Boolean = when (a.optString("action")) {
@@ -100,18 +131,26 @@ class RemoteCommandBridge(private val context: Context, private val service: Uco
         return Triple(r.ok, r.body, r.error)
     }
 
-    private fun awaitVerification(task: String, action: JSONObject, beforeUi: String, afterUi: String, beforeShot: String?, afterShot: String?): Triple<Boolean, JSONObject?, String?> {
+    private fun awaitVerification(task: String, action: JSONObject, beforeUi: String, afterUi: String, beforeScreenshot: String?, afterScreenshot: String?): Triple<Boolean, JSONObject?, String?> {
         val latch = CountDownLatch(1); var r = AgentBrainClient.Response(false, null, null)
-        brain.verifyResult(task, action, beforeUi, afterUi, beforeShot, afterShot) { x -> r = x; latch.countDown() }; latch.await(35, TimeUnit.SECONDS)
+        brain.verifyResult(task, action, beforeUi, afterUi, beforeScreenshot, afterScreenshot) { x -> r = x; latch.countDown() }; latch.await(35, TimeUnit.SECONDS)
         return Triple(r.ok, r.body, r.error)
     }
 
     private fun awaitScreenshot(): String? {
         val latch = CountDownLatch(1); var value: String? = null
-        service.captureScreenshotBase64 { x -> value = x; latch.countDown() }; latch.await(8, TimeUnit.SECONDS); return value
+        service.captureScreenshotBase64 { x -> value = x; latch.countDown() }
+        latch.await(8, TimeUnit.SECONDS)
+        return value
     }
 
-    private fun report(id: String, status: String, result: JSONObject) { runCatching { requestJson("POST", "/v1/client/commands/$id/result", JSONObject().apply { put("install_id", installId()); put("status", status); put("result", result) }, 15000) }.onFailure { e -> UcoaDiagnostics.log("REMOTE_BRIDGE", "فشل إرسال نتيجة المهمة", e.message ?: e.javaClass.simpleName) } }
+    private fun report(id: String, status: String, result: JSONObject) {
+        runCatching {
+            requestJson("POST", "/v1/client/commands/$id/result", JSONObject().apply {
+                put("install_id", installId()); put("status", status); put("result", result)
+            }, 15000)
+        }.onFailure { e -> UcoaDiagnostics.log("REMOTE_BRIDGE", "فشل إرسال نتيجة المهمة", e.message ?: e.javaClass.simpleName) }
+    }
 
     private fun requestJson(method: String, path: String, body: JSONObject?, timeout: Int): JSONObject {
         val prefs = context.getSharedPreferences("ucoa_brain", Context.MODE_PRIVATE)
