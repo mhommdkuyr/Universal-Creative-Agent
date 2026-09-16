@@ -1,0 +1,41 @@
+name: UCOA Cloud Device Bridge APK
+
+on:
+  push:
+    branches:
+      - ucoa/cloud-device-bridge
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Make Gradle executable
+        run: chmod +x android/gradlew
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew :app:assembleDebug --no-daemon
+
+      - name: Calculate SHA256
+        working-directory: android
+        run: sha256sum app/build/outputs/apk/debug/app-debug.apk | tee app-debug.apk.sha256
+
+      - name: Upload bridge APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ucoa-cloud-device-bridge-apk
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app-debug.apk.sha256
+          retention-days: 30
