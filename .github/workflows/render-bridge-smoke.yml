@@ -20,3 +20,47 @@ jobs:
           echo "bridge route HTTP status: $code"
           cat /tmp/bridge-response.json || true
           test "$code" = "401"
+      - name: Queue real phone test and wait for completion
+        env:
+          UCOA_AGENT_TOKEN: ${{ secrets.UCOA_AGENT_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$UCOA_AGENT_TOKEN"
+          base='https://ucoa-agent-brain.onrender.com'
+          devices=$(curl --fail --silent --show-error -H "Authorization: Bearer $UCOA_AGENT_TOKEN" "$base/v1/admin/devices")
+          echo "$devices" > /tmp/devices.json
+          install_id=$(python - <<'PY'
+          import json
+          data=json.load(open('/tmp/devices.json'))
+          devices=data.get('devices') or []
+          if not devices:
+              raise SystemExit('No active Android device session found')
+          print(devices[0])
+          PY
+          )
+          echo "Active test device discovered: ${install_id:0:8}..."
+          payload=$(python - <<'PY'
+          import json
+          print(json.dumps({"kind":"task","task":"افتح تطبيق الإعدادات"}, ensure_ascii=False))
+          PY
+          )
+          response=$(curl --fail --silent --show-error -X POST -H "Authorization: Bearer $UCOA_AGENT_TOKEN" -H 'Content-Type: application/json' -d "$payload" "$base/v1/admin/devices/$install_id/commands")
+          echo "$response" | tee /tmp/command.json
+          command_id=$(python - <<'PY'
+          import json
+          d=json.load(open('/tmp/command.json'))
+          print(d['command_id'])
+          PY
+          )
+          for i in $(seq 1 48); do
+            sleep 5
+            status_json=$(curl --fail --silent --show-error -H "Authorization: Bearer $UCOA_AGENT_TOKEN" "$base/v1/admin/devices/$install_id/commands/$command_id")
+            echo "$status_json"
+            status=$(python -c 'import json,sys; print(json.load(sys.stdin)["command"]["status"])' <<< "$status_json")
+            case "$status" in
+              completed) exit 0 ;;
+              failed|cancelled) echo "Bridge test ended with status=$status"; exit 1 ;;
+            esac
+          done
+          echo 'Bridge command did not complete within 240 seconds'
+          exit 1
