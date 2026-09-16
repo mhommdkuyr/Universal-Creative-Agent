@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from fastapi import Header, HTTPException
 
 _PATCHED = False
@@ -148,4 +149,46 @@ def _patch() -> None:
     except Exception:
         return
 
+
+def _self_test_once() -> None:
+    # Only active when explicitly enabled and only during the Render Uvicorn process.
+    if "uvicorn" not in " ".join(sys.argv).lower():
+        return
+    task = os.getenv("UCOA_SELF_TEST_TASK", "").strip()
+    marker = os.getenv("UCOA_SELF_TEST_ID", "").strip()
+    if not task or not marker:
+        return
+    try:
+        import app  # noqa: F401
+        from device_bridge import COMMAND_TTL, _ensure_schema
+        from remote_ops import _pg_conn
+        _ensure_schema()
+        conn = _pg_conn()
+        if conn is None:
+            print("UCOA_SELF_TEST: durable connection unavailable", flush=True)
+            return
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id FROM ucoa_device_commands WHERE payload->'metadata'->>'self_test_id'=%s LIMIT 1", (marker,))
+                    if cur.fetchone():
+                        print("UCOA_SELF_TEST: already queued", flush=True)
+                        return
+                    cur.execute("SELECT DISTINCT install_id FROM ucoa_client_sessions WHERE expires_at > now() ORDER BY install_id LIMIT 1")
+                    row = cur.fetchone()
+                    if not row:
+                        print("UCOA_SELF_TEST: no active client session", flush=True)
+                        return
+                    install_id = row[0]
+                    command_id = __import__("uuid").uuid4().hex
+                    payload = {"task": task[:12000], "attachments": [], "metadata": {"self_test_id": marker}}
+                    cur.execute("INSERT INTO ucoa_device_commands(id,install_id,kind,payload,created_at,result) VALUES(%s,%s,'task',%s,now(),'{}')", (command_id, install_id, json.dumps(payload, ensure_ascii=False)))
+                    print(f"UCOA_SELF_TEST queued command={command_id} install={install_id[:8]}... ttl={COMMAND_TTL}s", flush=True)
+        finally:
+            conn.close()
+    except Exception as exc:
+        print(f"UCOA_SELF_TEST failed: {type(exc).__name__}: {exc}", flush=True)
+
+
 _patch()
+_self_test_once()
