@@ -3,6 +3,7 @@ name: UCOA Cloud Device Bridge APK
 on:
   push:
     branches:
+      - main
       - ucoa/cloud-device-bridge
   workflow_dispatch:
 
