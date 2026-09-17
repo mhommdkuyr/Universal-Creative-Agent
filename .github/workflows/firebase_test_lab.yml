@@ -77,12 +77,13 @@ jobs:
           gcloud config get-value project | tee firebase-project.txt
           gcloud firebase test android models list --format=json > ftl-models.json
 
-      - name: Select a ready physical Android device
+      - name: Select a physical Android device and version
         id: device
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import json
+          import os
           from pathlib import Path
 
           data = json.loads(Path('ftl-models.json').read_text())
@@ -90,35 +91,54 @@ jobs:
           if not isinstance(models, list):
               raise SystemExit('Unexpected Firebase models response format')
 
-          def norm(v):
-              return str(v or '').upper()
+          def versions_for(model):
+              supported = [str(v) for v in (model.get('supportedVersionIds') or [])]
+              if supported:
+                  return supported
+              return [
+                  str(v.get('versionId'))
+                  for v in (model.get('perVersionInfo') or [])
+                  if isinstance(v, dict) and v.get('versionId')
+              ]
 
-          physical = [
-              m for m in models
-              if norm(m.get('form')) == 'PHYSICAL'
-          ]
-          ready = [m for m in physical if norm(m.get('state')) in {'READY', 'AVAILABLE'}] or physical
-          if not ready:
-              raise SystemExit('No physical Android device is available in Firebase Test Lab')
+          physical = [m for m in models if str(m.get('form', '')).upper() == 'PHYSICAL']
+          candidates = []
+          for model in physical:
+              versions = versions_for(model)
+              for version in versions:
+                  candidates.append((model, version))
+
+          if not candidates:
+              raise SystemExit('Firebase returned no physical device/version combinations')
 
           preferred = [
-              m for m in ready
-              if (m.get('id') or m.get('modelId')) == 'oriole'
-              and str(m.get('versionId') or m.get('version') or '') == '33'
+              pair for pair in candidates
+              if (pair[0].get('id') or pair[0].get('modelId')) == 'oriole' and pair[1] == '33'
           ]
-          chosen = preferred[0] if preferred else ready[0]
-
+          chosen, version = preferred[0] if preferred else candidates[0]
           model_id = chosen.get('id') or chosen.get('modelId')
-          version = chosen.get('versionId') or chosen.get('version')
-          if not model_id or not version:
-              raise SystemExit(f'Invalid Firebase device record: {chosen}')
+          if not model_id:
+              raise SystemExit(f'Invalid Firebase physical device record: {chosen}')
 
-          with open('${GITHUB_OUTPUT}', 'a') as out:
-              out.write(f'DEVICE_MODEL={model_id}\\n')
-              out.write(f'DEVICE_VERSION={version}\\n')
-              out.write('DEVICE_FORM=PHYSICAL\\n')
+          out_path = os.environ['GITHUB_OUTPUT']
+          env_path = os.environ['GITHUB_ENV']
+          with open(out_path, 'a', encoding='utf-8') as out:
+              out.write(f'DEVICE_MODEL={model_id}\n')
+              out.write(f'DEVICE_VERSION={version}\n')
+              out.write('DEVICE_FORM=PHYSICAL\n')
+          with open(env_path, 'a', encoding='utf-8') as env:
+              env.write(f'DEVICE_MODEL={model_id}\n')
+              env.write(f'DEVICE_VERSION={version}\n')
+              env.write('DEVICE_FORM=PHYSICAL\n')
 
-          print(json.dumps(chosen, indent=2))
+          print(json.dumps({
+              'model': model_id,
+              'version': version,
+              'form': chosen.get('form'),
+              'name': chosen.get('name'),
+              'manufacturer': chosen.get('manufacturer'),
+              'perVersionInfo': chosen.get('perVersionInfo', []),
+          }, indent=2))
           PY
 
       - name: Run AccessibilityService instrumentation on Firebase Test Lab physical device
@@ -165,11 +185,11 @@ jobs:
               if isinstance(value, dict):
                   if 'testMatrixId' in value or 'outcomeSummary' in value:
                       matrices.append(value)
-                  for v in value.values():
-                      walk(v)
+                  for child in value.values():
+                      walk(child)
               elif isinstance(value, list):
-                  for v in value:
-                      walk(v)
+                  for child in value:
+                      walk(child)
           walk(data)
 
           matrix_ids = [m.get('testMatrixId') for m in matrices if m.get('testMatrixId')]
@@ -186,10 +206,10 @@ jobs:
               raise SystemExit('Firebase Test Lab did not report PASSED; physical-device acceptance is not successful.')
 
           Path('firebase-status.txt').write_text(
-              'STATUS=SUCCESS\\n'
-              f"DEVICE_MODEL={os.environ.get('DEVICE_MODEL', '')}\\n"
-              f"DEVICE_VERSION={os.environ.get('DEVICE_VERSION', '')}\\n"
-              f"MATRIX_IDS={','.join(matrix_ids)}\\n"
+              'STATUS=SUCCESS\n'
+              f"DEVICE_MODEL={os.environ.get('DEVICE_MODEL', '')}\n"
+              f"DEVICE_VERSION={os.environ.get('DEVICE_VERSION', '')}\n"
+              f"MATRIX_IDS={','.join(matrix_ids)}\n"
           )
           PY
 
