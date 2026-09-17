@@ -77,21 +77,29 @@ jobs:
           gcloud services enable toolresults.googleapis.com --project="$PROJECT"
           gcloud services list --enabled --filter='config.name=toolresults.googleapis.com' --format='value(config.name)'
 
-      - name: Grant Test Lab staging upload permission to active service account
+      - name: Prepare dedicated Firebase Test Lab results bucket
         run: |
           set -euo pipefail
           PROJECT="$(gcloud config get-value project)"
           ACCOUNT="$(gcloud auth list --filter='status:ACTIVE' --format='value(account)' | head -n1)"
-          test -n "$ACCOUNT"
-          echo "Active service account: $ACCOUNT"
-          gcloud projects add-iam-policy-binding "$PROJECT" \
+          BUCKET="ucoa-ftl-results-${PROJECT}"
+          echo "Using dedicated Test Lab results bucket: gs://$BUCKET"
+
+          if ! gcloud storage buckets describe "gs://$BUCKET" --project="$PROJECT" >/dev/null 2>&1; then
+            gcloud storage buckets create "gs://$BUCKET" \
+              --project="$PROJECT" \
+              --location=US \
+              --uniform-bucket-level-access
+          fi
+
+          gcloud storage buckets add-iam-policy-binding "gs://$BUCKET" \
             --member="serviceAccount:$ACCOUNT" \
-            --role="roles/storage.objectCreator" \
-            --condition=None
-          gcloud projects get-iam-policy "$PROJECT" \
-            --flatten='bindings[].members' \
-            --filter="bindings.members=serviceAccount:$ACCOUNT AND bindings.role=roles/storage.objectCreator" \
-            --format='table(bindings.role,bindings.members)'
+            --role="roles/storage.objectAdmin"
+
+          gcloud storage buckets describe "gs://$BUCKET" --project="$PROJECT" \
+            --format='yaml(name,location,iamConfiguration.uniformBucketLevelAccess.enabled)'
+
+          echo "FTL_RESULTS_BUCKET=gs://$BUCKET" >> "$GITHUB_ENV"
 
       - name: Verify Google Cloud / Firebase access
         run: |
@@ -169,6 +177,8 @@ jobs:
             --test "$TEST_APK" \
             --device "model=${{ steps.device.outputs.DEVICE_MODEL }},version=${{ steps.device.outputs.DEVICE_VERSION }},locale=en,orientation=portrait" \
             --environment-variables clearPackageData=true \
+            --results-bucket="$FTL_RESULTS_BUCKET" \
+            --client-details matrixLabel="UCOA physical AccessibilityService acceptance" \
             --format=json > ftl-result.json 2> ftl-stderr.log
           RC=$?
           set -e
@@ -227,6 +237,7 @@ jobs:
               'STATUS=SUCCESS\n'
               f"DEVICE_MODEL={os.environ.get('DEVICE_MODEL', '')}\n"
               f"DEVICE_VERSION={os.environ.get('DEVICE_VERSION', '')}\n"
+              f"RESULTS_BUCKET={os.environ.get('FTL_RESULTS_BUCKET', '')}\n"
               f"MATRIX_IDS={','.join(matrix_ids)}\n"
           )
           PY
