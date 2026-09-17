@@ -77,24 +77,38 @@ jobs:
           gcloud services enable toolresults.googleapis.com --project="$PROJECT"
           gcloud services list --enabled --filter='config.name=toolresults.googleapis.com' --format='value(config.name)'
 
-      - name: Prepare dedicated Firebase Test Lab results bucket
+      - name: Find an existing project storage bucket for Firebase results
         run: |
           set -euo pipefail
           PROJECT="$(gcloud config get-value project)"
           ACCOUNT="$(gcloud auth list --filter='status:ACTIVE' --format='value(account)' | head -n1)"
-          BUCKET="ucoa-ftl-results-${PROJECT}"
-          echo "Using dedicated Test Lab results bucket: gs://$BUCKET"
+          mapfile -t BUCKETS < <(gcloud storage buckets list --project="$PROJECT" --format='value(name)')
+          echo "Existing project buckets:"
+          printf '%s\n' "${BUCKETS[@]:-<none>}"
 
-          if ! gcloud storage buckets describe "gs://$BUCKET" --project="$PROJECT" >/dev/null 2>&1; then
-            gcloud storage buckets create "gs://$BUCKET" \
-              --project="$PROJECT" \
-              --location=US \
-              --uniform-bucket-level-access
+          if [ "${#BUCKETS[@]}" -eq 0 ]; then
+            echo "No existing Cloud Storage bucket is available. The project billing account is disabled, so a new bucket cannot be created." >&2
+            exit 2
           fi
 
+          BUCKET=""
+          for candidate in "${BUCKETS[@]}"; do
+            case "$candidate" in
+              *.appspot.com|*firebase*|*ucoa*|*chatapp*) BUCKET="$candidate"; break ;;
+            esac
+          done
+          if [ -z "$BUCKET" ]; then
+            BUCKET="${BUCKETS[0]}"
+          fi
+
+          echo "Selected existing Test Lab results bucket: gs://$BUCKET"
           gcloud storage buckets add-iam-policy-binding "gs://$BUCKET" \
             --member="serviceAccount:$ACCOUNT" \
             --role="roles/storage.objectAdmin"
+
+          echo "firebase-results-probe-${GITHUB_RUN_ID}" > /tmp/ucoa-ftl-probe.txt
+          gcloud storage cp /tmp/ucoa-ftl-probe.txt "gs://$BUCKET/_ucoa-ftl-probe/${GITHUB_RUN_ID}.txt"
+          gcloud storage rm "gs://$BUCKET/_ucoa-ftl-probe/${GITHUB_RUN_ID}.txt"
 
           gcloud storage buckets describe "gs://$BUCKET" --project="$PROJECT" \
             --format='yaml(name,location,iamConfiguration.uniformBucketLevelAccess.enabled)'
