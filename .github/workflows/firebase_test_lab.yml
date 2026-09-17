@@ -1,4 +1,4 @@
-name: Firebase Test Lab Android Testing Pipeline
+name: Firebase Test Lab Android Physical Acceptance
 
 on:
   push:
@@ -9,14 +9,18 @@ on:
 
 concurrency:
   group: firebase-test-lab-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
-  firebase-test-lab:
+  firebase-test-lab-physical:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
+
+    env:
+      APK: android/app/build/outputs/apk/debug/app-debug.apk
+      TEST_APK: android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 
     steps:
       - name: Checkout code
@@ -36,21 +40,26 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Verify Firebase credential secret is available
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$GCP_SA_KEY" || { echo "GCP_SA_KEY is missing; Firebase Test Lab cannot run." >&2; exit 2; }
+
       - name: Build Debug and Instrumentation Test APKs
         run: |
           set -euo pipefail
           gradle -p android assembleDebug assembleDebugAndroidTest --stacktrace
 
-      - name: Verify APK Artifacts
+      - name: Verify APK artifacts and hashes
         run: |
           set -euo pipefail
-          APK=android/app/build/outputs/apk/debug/app-debug.apk
-          TEST_APK=android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
           test -s "$APK"
           test -s "$TEST_APK"
+          sha256sum "$APK" "$TEST_APK" | tee firebase-apk-sha256.txt
 
       - name: Authenticate to Google Cloud
-        if: ${{ secrets.GCP_SA_KEY != '' }}
         uses: google-github-actions/auth@v2
         with:
           credentials_json: '${{ secrets.GCP_SA_KEY }}'
@@ -59,19 +68,117 @@ jobs:
           cleanup_credentials: true
 
       - name: Set up Google Cloud SDK
-        if: ${{ secrets.GCP_SA_KEY != '' }}
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Run AccessibilityService Instrumentation Tests on Firebase Test Lab
-        if: ${{ secrets.GCP_SA_KEY != '' }}
-        env:
-          APK: android/app/build/outputs/apk/debug/app-debug.apk
-          TEST_APK: android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+      - name: Verify Google Cloud / Firebase access
         run: |
           set -euo pipefail
+          gcloud auth list
+          gcloud config get-value project | tee firebase-project.txt
+          gcloud firebase test android models list --format=json > ftl-models.json
+
+      - name: Select a ready physical Android device
+        id: device
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path('ftl-models.json').read_text())
+          models = data.get('models', data if isinstance(data, list) else [])
+          if isinstance(models, dict):
+              models = models.get('models', [])
+
+          def norm(v):
+              return str(v or '').upper()
+
+          ready = [
+              m for m in models
+              if norm(m.get('form')) == 'PHYSICAL' and norm(m.get('state')) in {'READY', 'AVAILABLE'}
+          ]
+          if not ready:
+              ready = [m for m in models if norm(m.get('form')) == 'PHYSICAL']
+          if not ready:
+              raise SystemExit('No physical Android device is available in Firebase Test Lab')
+
+          preferred = [m for m in ready if m.get('id') == 'oriole' and str(m.get('versionId', m.get('version', ''))) == '33']
+          chosen = preferred[0] if preferred else ready[0]
+          model_id = chosen.get('id') or chosen.get('modelId')
+          version = chosen.get('versionId') or chosen.get('version')
+          if not model_id or not version:
+              raise SystemExit(f'Invalid Firebase device record: {chosen}')
+
+          print(f"MODEL={model_id}")
+          print(f"VERSION={version}")
+          print(f"FORM={chosen.get('form')}")
+          print(f"DEVICE_MODEL={model_id}" >> __import__('os').environ['GITHUB_OUTPUT'])
+          print(f"DEVICE_VERSION={version}" >> __import__('os').environ['GITHUB_OUTPUT'])
+          print(json.dumps(chosen, indent=2))
+          PY
+
+      - name: Run AccessibilityService instrumentation on Firebase Test Lab physical device
+        id: ftl
+        run: |
+          set +e
           gcloud firebase test android run \
             --type instrumentation \
             --app "$APK" \
             --test "$TEST_APK" \
-            --device model=oriole,version=33,locale=en,orientation=portrait \
-            --environment-variables clearPackageData=true
+            --device "model=${{ steps.device.outputs.DEVICE_MODEL }},version=${{ steps.device.outputs.DEVICE_VERSION }},locale=en,orientation=portrait" \
+            --environment-variables clearPackageData=true \
+            --format=json > ftl-result.json 2> ftl-stderr.log
+          RC=$?
+          set -e
+          echo "gcloud firebase test return code: $RC"
+          cat ftl-result.json || true
+          cat ftl-stderr.log || true
+          echo "GCP_RUN_RC=$RC" >> "$GITHUB_ENV"
+
+      - name: Validate Firebase Test Lab completed and passed
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          result_path = Path('ftl-result.json')
+          text = result_path.read_text(errors='replace') if result_path.exists() else ''
+          matrix_ids = set(re.findall(r'(?i)testMatrixId[^A-Za-z0-9_-]*([A-Za-z0-9_-]+)', text))
+          outcome_summaries = set(re.findall(r'(?i)outcomeSummary[^A-Za-z0-9_-]*([A-Za-z_]+)', text))
+          states = set(re.findall(r'(?i)(?:testMatrix[.])?state[^A-Za-z0-9_-]*([A-Z_]+)', text))
+
+          print('matrix_ids=', sorted(matrix_ids))
+          print('outcome_summaries=', sorted(outcome_summaries))
+          print('states=', sorted(states))
+
+          rc = int(os.environ.get('GCP_RUN_RC', '99'))
+          if rc != 0:
+              raise SystemExit(f'Firebase Test Lab command failed with return code {rc}')
+          if 'PASSED' not in outcome_summaries:
+              raise SystemExit('Firebase Test Lab did not report PASSED; the physical-device acceptance test is not successful.')
+
+          Path('firebase-status.txt').write_text(
+              'STATUS=SUCCESS\\n'
+              + f"DEVICE_MODEL={os.environ.get('DEVICE_MODEL', '')}\\n"
+              + f"DEVICE_VERSION={os.environ.get('DEVICE_VERSION', '')}\\n"
+              + f"MATRIX_IDS={','.join(sorted(matrix_ids))}\\n"
+          )
+          PY
+
+      - name: Upload Firebase evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firebase-test-lab-physical-evidence
+          path: |
+            ftl-result.json
+            ftl-stderr.log
+            ftl-models.json
+            firebase-project.txt
+            firebase-apk-sha256.txt
+            firebase-status.txt
+          if-no-files-found: warn
+          retention-days: 30
