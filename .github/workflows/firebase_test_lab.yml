@@ -70,6 +70,13 @@ jobs:
       - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
+      - name: Enable Firebase Test Lab required API
+        run: |
+          set -euo pipefail
+          PROJECT="$(gcloud config get-value project)"
+          gcloud services enable toolresults.googleapis.com --project="$PROJECT"
+          gcloud services list --enabled --filter='config.name=toolresults.googleapis.com' --format='value(config.name)'
+
       - name: Verify Google Cloud / Firebase access
         run: |
           set -euo pipefail
@@ -102,12 +109,7 @@ jobs:
               ]
 
           physical = [m for m in models if str(m.get('form', '')).upper() == 'PHYSICAL']
-          candidates = []
-          for model in physical:
-              versions = versions_for(model)
-              for version in versions:
-                  candidates.append((model, version))
-
+          candidates = [(m, v) for m in physical for v in versions_for(m)]
           if not candidates:
               raise SystemExit('Firebase returned no physical device/version combinations')
 
