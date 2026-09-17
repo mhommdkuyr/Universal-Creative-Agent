@@ -2,13 +2,15 @@ name: Firebase Test Lab Android Physical Acceptance
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - 'codex/firebase-testlab-physical-acceptance'
   pull_request:
     branches: [main]
   workflow_dispatch:
 
 concurrency:
-  group: firebase-test-lab-${{ github.ref }}
+  group: firebase-test-lab-${{ github.event_name }}-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -132,8 +134,21 @@ jobs:
           candidates = [(m, v) for m in physical for v in versions_for(m)]
           if not candidates:
               raise SystemExit('Firebase returned no physical device/version combinations')
-          preferred = [p for p in candidates if (p[0].get('id') or p[0].get('modelId')) == 'oriole' and p[1] == '33']
-          chosen, version = preferred[0] if preferred else candidates[0]
+          preferred_models = [
+              ('CPH2449', '34'),
+              ('A402SO', '34'),
+              ('oriole', '33'),
+          ]
+          chosen_pair = None
+          for preferred_model, preferred_version in preferred_models:
+              for model, version in candidates:
+                  model_id = model.get('id') or model.get('modelId')
+                  if model_id == preferred_model and version == preferred_version:
+                      chosen_pair = (model, version)
+                      break
+              if chosen_pair:
+                  break
+          chosen, version = chosen_pair or candidates[0]
           model_id = chosen.get('id') or chosen.get('modelId')
           if not model_id:
               raise SystemExit('Selected model has no id')
@@ -177,7 +192,9 @@ jobs:
           printf '%s\n' "$RC" > firebase-command-exit.txt
           echo "GCP_RUN_RC=$RC" >> "$GITHUB_ENV"
           echo "gcloud return code: $RC"
+          echo '--- ftl-result.json ---'
           cat ftl-result.json || true
+          echo '--- ftl-stderr.log ---'
           cat ftl-stderr.log || true
 
       - name: Collect Firebase raw device results
@@ -185,10 +202,8 @@ jobs:
         run: |
           set +e
           mkdir -p ftl-raw-results
-          RESULT_URL="$(grep -oE 'https://console\.developers\.google\.com/storage/browser/[^]]+' ftl-stderr.log | head -n1 || true)"
-          if [ -n "$RESULT_URL" ]; then
-            RESULT_PATH="${RESULT_URL#https://console.developers.google.com/storage/browser/}"
-            RESULT_URI="gs://$RESULT_PATH"
+          RESULT_URI="$(sed -n 's/.*\[https:\/\/console\.developers\.google\.com\/storage\/browser\/\([^]]*\)\/\].*/gs:\/\/\1/p' ftl-stderr.log | head -n1)"
+          if [ -n "$RESULT_URI" ]; then
             echo "$RESULT_URI" > firebase-results-uri.txt
             gcloud storage cp --recursive "$RESULT_URI" ftl-raw-results/ > ftl-raw-download.log 2>&1
           else
@@ -213,8 +228,7 @@ jobs:
               data = json.loads(raw)
           except json.JSONDecodeError as exc:
               raise SystemExit(f'Firebase result was not valid JSON: {exc}')
-          outcomes = []
-          matrix_ids = []
+          outcomes, matrix_ids = [], []
           def walk(v):
               if isinstance(v, dict):
                   if v.get('testMatrixId'): matrix_ids.append(str(v['testMatrixId']))
@@ -237,6 +251,15 @@ jobs:
               f'MATRIX_IDS={",".join(matrix_ids)}\n'
           )
           PY
+
+      - name: Upload verified Debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ucoa-verified-debug-apk
+          path: ${{ env.APK }}
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Revoke temporary Editor role after Firebase test
         if: always() && env.EDITOR_ROLE_ALREADY_PRESENT == 'false'
