@@ -50,8 +50,8 @@ jobs:
           script: |
             set -eu
             adb wait-for-device
-            APK="$(find "$GITHUB_WORKSPACE" -type f -path '*/android/app/build/outputs/apk/debug/app-debug.apk' -print -quit)"
-            if [ -z "$APK" ]; then APK="$(find . -type f -name 'app-debug.apk' -print -quit)"; fi
+            APK="android/app/build/outputs/apk/debug/app-debug.apk"
+            if [ ! -f "$APK" ]; then APK="$(find . -name 'app-debug.apk' | head -n 1)"; fi
             test -n "$APK"
             test -s "$APK"
             adb install -r "$APK"
