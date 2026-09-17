@@ -1,0 +1,8 @@
+*.pyc
+__pycache__/
+.pytest_cache/
+android/app/build/
+android/.gradle/
+android/build/
+.ucoa-local/
+*.db

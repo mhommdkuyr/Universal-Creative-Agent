@@ -1,0 +1,77 @@
+name: Firebase Test Lab Android Testing Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: firebase-test-lab-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  firebase-test-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build Debug and Instrumentation Test APKs
+        run: |
+          set -euo pipefail
+          gradle -p android assembleDebug assembleDebugAndroidTest --stacktrace
+
+      - name: Verify APK Artifacts
+        run: |
+          set -euo pipefail
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          TEST_APK=android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          test -s "$APK"
+          test -s "$TEST_APK"
+
+      - name: Authenticate to Google Cloud
+        if: ${{ secrets.GCP_SA_KEY != '' }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.GCP_SA_KEY }}'
+          create_credentials_file: true
+          export_environment_variables: true
+          cleanup_credentials: true
+
+      - name: Set up Google Cloud SDK
+        if: ${{ secrets.GCP_SA_KEY != '' }}
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Run AccessibilityService Instrumentation Tests on Firebase Test Lab
+        if: ${{ secrets.GCP_SA_KEY != '' }}
+        env:
+          APK: android/app/build/outputs/apk/debug/app-debug.apk
+          TEST_APK: android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+        run: |
+          set -euo pipefail
+          gcloud firebase test android run \
+            --type instrumentation \
+            --app "$APK" \
+            --test "$TEST_APK" \
+            --device model=oriole,version=33,locale=en,orientation=portrait \
+            --environment-variables clearPackageData=true

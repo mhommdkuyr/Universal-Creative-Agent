@@ -21,6 +21,7 @@ jobs:
           cat /tmp/bridge-response.json || true
           test "$code" = "401"
       - name: Queue real phone test and wait for completion
+        if: ${{ secrets.UCOA_AGENT_TOKEN != '' }}
         env:
           UCOA_AGENT_TOKEN: ${{ secrets.UCOA_AGENT_TOKEN }}
         run: |

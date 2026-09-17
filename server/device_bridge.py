@@ -18,6 +18,7 @@ DB_PATH = Path(os.getenv("UCOA_REMOTE_OPS_DB", "/opt/render/project/src/.ucoa-lo
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 COMMAND_TTL = max(60, int(os.getenv("UCOA_COMMAND_TTL_SECONDS", "900")))
 CLAIM_TTL = max(30, int(os.getenv("UCOA_COMMAND_CLAIM_TTL_SECONDS", "120")))
+MAX_CLAIM_DURATION = max(180, int(os.getenv("UCOA_COMMAND_MAX_CLAIM_SECONDS", "300")))
 
 
 def _ensure_schema() -> None:
@@ -46,16 +47,43 @@ def _requeue_stale() -> None:
         try:
             with conn:
                 with conn.cursor() as cur:
-                    cur.execute("UPDATE ucoa_device_commands SET status='queued', claimed_at=NULL WHERE status='claimed' AND claimed_at < now() - (%s || ' seconds')::interval", (CLAIM_TTL,))
-            conn.close(); return
+                    cur.execute(
+                        "UPDATE ucoa_device_commands SET status='failed', completed_at=now(), result='{\"error\":\"Command execution timed out in claimed state\"}'::jsonb WHERE status='claimed' AND claimed_at < now() - (%s || ' seconds')::interval",
+                        (MAX_CLAIM_DURATION,),
+                    )
+                    cur.execute(
+                        "UPDATE ucoa_device_commands SET status='cancelled', completed_at=now(), result='{\"error\":\"Command expired\"}'::jsonb WHERE status IN ('queued', 'claimed') AND created_at < now() - (%s || ' seconds')::interval",
+                        (COMMAND_TTL,),
+                    )
+                    cur.execute(
+                        "UPDATE ucoa_device_commands SET status='queued', claimed_at=NULL WHERE status='claimed' AND claimed_at < now() - (%s || ' seconds')::interval",
+                        (CLAIM_TTL,),
+                    )
+            conn.close()
+            return
         except Exception:
-            try: conn.close()
-            except Exception: pass
+            try:
+                conn.close()
+            except Exception:
+                pass
     conn = sqlite3.connect(DB_PATH, timeout=15)
     try:
-        conn.execute("UPDATE device_commands SET status='queued', claimed_at=NULL WHERE status='claimed' AND claimed_at < ?", (time.time() - CLAIM_TTL,))
+        now = time.time()
+        conn.execute(
+            "UPDATE device_commands SET status='failed', completed_at=?, result=? WHERE status='claimed' AND claimed_at < ?",
+            (now, json.dumps({"error": "Command execution timed out in claimed state"}), now - MAX_CLAIM_DURATION),
+        )
+        conn.execute(
+            "UPDATE device_commands SET status='cancelled', completed_at=?, result=? WHERE status IN ('queued', 'claimed') AND created_at < ?",
+            (now, json.dumps({"error": "Command expired"}), now - COMMAND_TTL),
+        )
+        conn.execute(
+            "UPDATE device_commands SET status='queued', claimed_at=NULL WHERE status='claimed' AND claimed_at < ?",
+            (now - CLAIM_TTL,),
+        )
         conn.commit()
-    finally: conn.close()
+    finally:
+        conn.close()
 
 
 class DeviceCommandRequest(BaseModel):
@@ -155,7 +183,7 @@ def complete_device_command(command_id: str, req: DeviceCommandResult, authoriza
 @app_v3.app.get("/v1/admin/devices/{install_id}/commands/{command_id}")
 def inspect_device_command(install_id: str, command_id: str, authorization: str | None = Header(default=None)):
     if not _master_ok(authorization): raise HTTPException(401, "Admin token required")
-    _ensure_schema(); conn = _pg_conn()
+    _ensure_schema(); _requeue_stale(); conn = _pg_conn()
     if conn is not None:
         try:
             with conn:

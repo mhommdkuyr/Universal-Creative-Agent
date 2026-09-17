@@ -84,12 +84,26 @@ class UcoaAccessibilityService : AccessibilityService() {
 
     fun openApp(pkg: String): Boolean {
         return try {
-            val intent = packageManager.getLaunchIntentForPackage(pkg)
+            val intent = if (pkg == "com.android.settings") {
+                Intent(android.provider.Settings.ACTION_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+            } else {
+                val launchIntent = packageManager.getLaunchIntentForPackage(pkg)
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                } else {
+                    val mainIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setPackage(pkg)
+                    val resolveInfo = packageManager.queryIntentActivities(mainIntent, 0).firstOrNull()
+                    if (resolveInfo != null) {
+                        Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                            .setClassName(resolveInfo.activityInfo.packageName, resolveInfo.activityInfo.name)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    } else null
+                }
+            }
             if (intent == null) {
                 UcoaDiagnostics.log("EXECUTOR", "لم نجد launch intent", "package=$pkg")
                 false
             } else {
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 startActivity(intent)
                 UcoaDiagnostics.log("EXECUTOR", "تم استدعاء startActivity", "package=$pkg")
                 true
