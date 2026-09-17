@@ -1,0 +1,99 @@
+name: Firebase Test Lab Android Virtual Acceptance
+
+on:
+  push:
+    branches:
+      - 'codex/virtual-acceptance'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  firebase-test-lab-virtual:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    env:
+      APK: android/app/build/outputs/apk/debug/app-debug.apk
+      TEST_APK: android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build APKs
+        run: gradle -p android assembleDebug assembleDebugAndroidTest --stacktrace
+      - name: Authenticate
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.GCP_SA_KEY }}'
+          create_credentials_file: true
+          export_environment_variables: true
+          cleanup_credentials: true
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Enable Test Lab API
+        run: gcloud services enable toolresults.googleapis.com --project="$(gcloud config get-value project)"
+      - name: Select available virtual device
+        id: device
+        run: |
+          set -euo pipefail
+          gcloud firebase test android models list --format=json > models.json
+          python3 - <<'PY'
+          import json, os
+          data=json.load(open('models.json'))
+          models=data.get('models',data) if isinstance(data,dict) else data
+          candidates=[]
+          for m in models:
+              if str(m.get('form','')).upper()!='VIRTUAL':
+                  continue
+              mid=m.get('id') or m.get('modelId')
+              for i in m.get('perVersionInfo') or []:
+                  v=str(i.get('versionId') or '')
+                  if not mid or not v:
+                      continue
+                  est=i.get('interactiveDeviceAvailabilityEstimate')
+                  cap=str(i.get('deviceCapacity') or '')
+                  candidates.append((0 if est=='30s' else 1, {'DEVICE_CAPACITY_HIGH':0,'DEVICE_CAPACITY_MEDIUM':1,'DEVICE_CAPACITY_LOW':2}.get(cap,3),mid,v,m.get('name')))
+          if not candidates:
+              raise SystemExit('No virtual device/version available')
+          candidates.sort()
+          _,_,mid,v,name=candidates[0]
+          with open(os.environ['GITHUB_OUTPUT'],'a') as o:
+              o.write(f'DEVICE_MODEL={mid}\nDEVICE_VERSION={v}\n')
+          print({'model':mid,'version':v,'name':name})
+          PY
+      - name: Run virtual acceptance
+        run: |
+          set +e
+          gcloud firebase test android run             --type instrumentation             --app "$APK"             --test "$TEST_APK"             --device "model=${{ steps.device.outputs.DEVICE_MODEL }},version=${{ steps.device.outputs.DEVICE_VERSION }},locale=en,orientation=portrait"             --environment-variables clearPackageData=true             --client-details matrixLabel="UCOA virtual acceptance"             --format=json > result.json 2> stderr.log
+          rc=$?
+          set -e
+          echo "$rc" > exit.txt
+          cat result.json || true
+          cat stderr.log || true
+          exit "$rc"
+      - name: Validate virtual result
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          d=json.load(open('result.json'))
+          print(d)
+          rows=d if isinstance(d,list) else [d]
+          if not any(str(r.get('outcome','')).upper()=='PASSED' for r in rows):
+              raise SystemExit('Virtual Test Lab acceptance did not pass')
+          PY
+      - name: Upload verified APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ucoa-virtual-verified-debug-apk
+          path: ${{ env.APK }}
+          if-no-files-found: error
+          retention-days: 14
