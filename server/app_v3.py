@@ -32,7 +32,7 @@ JOBS: dict[str, dict[str, Any]] = {}; JOB_LOCK = threading.Lock(); DB_LOCK = thr
 class PlanRequest(BaseModel):
     task: str; attachments: list[str] = Field(default_factory=list); device: dict[str, Any] = Field(default_factory=dict); session_id: str | None = None
 class StepRequest(BaseModel):
-    task: str; step: int = 0; max_steps: int = 60; history: list[dict[str, Any]] = Field(default_factory=list); ui_tree: str = "[]"; screenshot_base64: str | None = None; installed_apps: list[str] = Field(default_factory=list); attachments: list[str] = Field(default_factory=list); capabilities: list[str] = Field(default_factory=lambda: ACTIONS.copy()); session_id: str | None = None; approved_risks: bool = False
+    task: str; step: int = 0; max_steps: int = 60; history: list[dict[str, Any]] = Field(default_factory=list); ui_tree: str = "[]"; screenshot_base64: str | None = None; installed_apps: list[str] = Field(default_factory=list); attachments: list[str] = Field(default_factory=list); capabilities: list[str] = Field(default_factory=lambda: ACTIONS.copy()); session_id: str | None = None; approved_risks: bool = False; foreground_package: str | None = None
 class VerifyRequest(BaseModel):
     task: str; decision: dict[str, Any]; approved_risks: bool = False; session_id: str | None = None
 class ResultVerifyRequest(BaseModel):

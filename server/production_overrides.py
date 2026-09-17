@@ -21,6 +21,40 @@ _BASE_CALL_VISION = app_v3.call_vision
 
 RECOVERY_PROVIDER = "ucoa-resilient-fallback"
 
+APP_TARGETS = (
+    (("إعدادات", "اعدادات", "الضبط", "settings"), "Settings", "settings"),
+    (("يوتيوب", "youtube"), "YouTube", "youtube"),
+    (("واتساب", "whatsapp"), "WhatsApp", "whatsapp"),
+    (("كاب كات", "capcut"), "CapCut", "lemon"),
+    (("كانفا", "canva"), "Canva", "canva"),
+    (("كروم", "chrome"), "Chrome", "chrome"),
+    (("انستجرام", "انستغرام", "instagram"), "Instagram", "instagram"),
+    (("تليجرام", "telegram"), "Telegram", "telegram"),
+)
+
+
+def _detect_target_app(task: str) -> tuple[str, str] | None:
+    t = task.lower()
+    for keywords, label, pkg_sub in APP_TARGETS:
+        if any(kw in t for kw in keywords):
+            return label, pkg_sub
+    return None
+
+
+def _is_app_in_foreground(req: Any, pkg_sub: str) -> bool:
+    fg = (getattr(req, "foreground_package", None) or "").lower()
+    if fg and pkg_sub in fg:
+        return True
+    ui = (getattr(req, "ui_tree", None) or "").lower()
+    if pkg_sub in ui:
+        return True
+    return False
+
+
+def _is_open_task(task: str) -> bool:
+    t = task.lower()
+    return "افتح" in t or "open" in t or "تشغيل" in t or "إفتح" in t
+
 
 def _extract_plan(raw: str) -> tuple[list[str], str]:
     value = app_v3.extract_json(raw)
@@ -54,15 +88,47 @@ def run_plan(req: Any) -> dict[str, Any]:
 
 
 def _fallback_action(req: Any) -> dict[str, Any]:
-    task, ui = req.task.lower(), req.ui_tree.lower(); merged = task + " " + ui
-    if req.step == 0:
-        for key, label in (("يوتيوب","YouTube"),("youtube","YouTube"),("واتساب","WhatsApp"),("whatsapp","WhatsApp"),("capcut","CapCut"),("كاب كات","CapCut"),("canva","Canva"),("كانفا","Canva"),("chrome","Chrome"),("كروم","Chrome")):
-            if key in task:
-                return {"action":"open_app_by_name","params":{"app_name":label},"message":f"فتح {label}","done":False,"wait_after_ms":1000,"confidence":0.8}
-    for label in ("continue","متابعة","التالي","موافق","ok","submit","إرسال"):
-        if label in merged:
-            return {"action":"click_any_text","params":{"texts":[label]},"message":"اختيار هدف ظاهر ثم التحقق من التغير","done":False,"wait_after_ms":700,"confidence":0.7}
-    return {"action":"observe","params":{},"message":"لم يثبت الهدف بعد؛ إعادة الملاحظة بدل التخمين","done":False,"wait_after_ms":700,"confidence":0.2}
+    task, ui = req.task.lower(), req.ui_tree.lower()
+    merged = task + " " + ui
+    target = _detect_target_app(req.task)
+    if target:
+        label, pkg_sub = target
+        if _is_app_in_foreground(req, pkg_sub):
+            return {
+                "action": "done",
+                "params": {},
+                "message": f"تطبيق {label} مفتوح حاليًا.",
+                "done": True,
+                "wait_after_ms": 500,
+                "confidence": 0.95,
+            }
+        if req.step == 0:
+            return {
+                "action": "open_app_by_name",
+                "params": {"app_name": label},
+                "message": f"فتح {label}",
+                "done": False,
+                "wait_after_ms": 1000,
+                "confidence": 0.85,
+            }
+    for label_text in ("continue", "متابعة", "التالي", "موافق", "ok", "submit", "إرسال"):
+        if label_text in merged:
+            return {
+                "action": "click_any_text",
+                "params": {"texts": [label_text]},
+                "message": "اختيار هدف ظاهر ثم التحقق من التغير",
+                "done": False,
+                "wait_after_ms": 700,
+                "confidence": 0.7,
+            }
+    return {
+        "action": "observe",
+        "params": {},
+        "message": "لم يثبت الهدف بعد؛ إعادة الملاحظة بدل التخمين",
+        "done": False,
+        "wait_after_ms": 700,
+        "confidence": 0.2,
+    }
 
 
 def _save_step(sid: str, req: Any, value: dict[str, Any]) -> dict[str, Any]:
@@ -96,6 +162,13 @@ def run_step(req: Any) -> dict[str, Any]:
         }, ensure_ascii=False)
         raw, provider = provider_router.reasoning(app_v4_runtime.CONTROLLER, controller_payload)
         result = app_v4_runtime._normalize_action(app_v3.extract_json(raw), req.screenshot_base64)
+        target = _detect_target_app(req.task)
+        if target and _is_open_task(req.task):
+            label, pkg_sub = target
+            if _is_app_in_foreground(req, pkg_sub):
+                result["action"] = "done"
+                result["done"] = True
+                result["message"] = f"تطبيق {label} مفتوح حاليًا في الواجهة."
         result.update({
             "provider": provider,
             "reasoning_provider": provider,

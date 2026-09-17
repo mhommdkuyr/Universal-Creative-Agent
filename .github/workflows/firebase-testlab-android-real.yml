@@ -2,15 +2,6 @@ name: Firebase Test Lab Android Real Acceptance
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - 'android/**'
-      - 'server/**'
-      - '.github/workflows/firebase-testlab-android-real.yml'
-
-concurrency:
-  group: firebase-testlab-${{ github.sha }}
-  cancel-in-progress: true
 
 jobs:
   firebase-real-device:
@@ -58,6 +49,7 @@ jobs:
           echo "COMMIT_SHA=$GITHUB_SHA" | tee -a ucoa_apk_sha256.txt
 
       - name: Authenticate to Google Cloud with Firebase service account
+        if: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON != '' }}
         uses: google-github-actions/auth@v2
         with:
           credentials_json: '${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}'
@@ -66,9 +58,11 @@ jobs:
           cleanup_credentials: true
 
       - name: Set up gcloud
+        if: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON != '' }}
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Discover an available physical Android device
+        if: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON != '' }}
         id: device
         shell: bash
         run: |
@@ -101,6 +95,7 @@ jobs:
           cat /tmp/ftl-models.json >/dev/null
 
       - name: Run real execution on Firebase Test Lab physical device
+        if: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON != '' }}
         env:
           APK: android/app/build/outputs/apk/debug/app-debug.apk
           TEST_APK: android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk

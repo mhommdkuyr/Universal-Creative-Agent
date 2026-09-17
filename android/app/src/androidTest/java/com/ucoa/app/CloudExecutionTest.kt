@@ -1,9 +1,11 @@
 package com.ucoa.app
 
+import android.app.UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES
 import android.content.Intent
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.Configurator
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 import org.junit.Assert.assertEquals
@@ -17,14 +19,16 @@ class CloudExecutionTest {
     private fun shell(device: UiDevice, command: String): String = device.executeShellCommand(command)
 
     private fun foregroundPackage(device: UiDevice): String {
-        return shell(device, "dumpsys window windows | grep -m1 mCurrentFocus")
-            .substringAfter("u0 ", "")
-            .substringBefore("/")
-            .trim()
+        return device.currentPackageName.orEmpty()
     }
 
     @Test
     fun realCloudExecution() {
+        // UiAutomator normally suppresses third-party AccessibilityServices while
+        // instrumentation owns UiAutomation. The product's real execution path
+        // depends on the accessibility bridge, so explicitly keep it alive.
+        Configurator.getInstance().uiAutomationFlags = FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES
+
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val device = UiDevice.getInstance(instrumentation)
@@ -32,7 +36,6 @@ class CloudExecutionTest {
         shell(device, "settings put secure enabled_accessibility_services com.ucoa.app/.UcoaAccessibilityService")
         shell(device, "settings put secure accessibility_enabled 1")
         shell(device, "am force-stop com.android.settings")
-        shell(device, "am force-stop com.ucoa.app")
 
         val intent = Intent(context, MainActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
