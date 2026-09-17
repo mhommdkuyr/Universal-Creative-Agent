@@ -1,0 +1,82 @@
+name: Jules Physical Acceptance Watchdog
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  rearm-jules:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rearm Jules issue when no recent Jules activity exists
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueNumber = 15;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const issue = await github.rest.issues.get({
+              owner,
+              repo,
+              issue_number: issueNumber,
+            });
+
+            if (issue.data.state !== "open") {
+              core.info(`Issue #${issueNumber} is closed; watchdog will not rearm it.`);
+              return;
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: issueNumber,
+              per_page: 100,
+            });
+
+            const julesComments = comments
+              .filter(c => c.user && c.user.login === "google-labs-jules[bot]")
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+            const lastJules = julesComments[0];
+            const ageHours = lastJules
+              ? (Date.now() - new Date(lastJules.created_at).getTime()) / 3600000
+              : Infinity;
+
+            core.info(`latest Jules comment ageHours=${ageHours}`);
+
+            // Issue-label integration is the repo-level trigger for Jules.
+            // Rearm only after a long quiet period to avoid duplicate concurrent tasks.
+            if (ageHours < 8) {
+              core.info("Recent Jules activity exists; no rearm.");
+              return;
+            }
+
+            try {
+              await github.rest.issues.removeLabel({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                name: "jules",
+              });
+            } catch (e) {
+              core.info("jules label was already absent; continuing.");
+            }
+
+            await new Promise(r => setTimeout(r, 1000));
+
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number: issueNumber,
+              labels: ["jules"],
+            });
+
+            await core.summary
+              .addHeading("Jules rearmed")
+              .addRaw(`Issue #${issueNumber} had no Jules activity for at least 8 hours, so the \`jules\` label was re-applied to trigger a new Jules task.`)
+              .write();
