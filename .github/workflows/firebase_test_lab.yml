@@ -1,15 +1,9 @@
 name: Firebase Test Lab Android Physical Acceptance
 
 on:
-  push:
-    branches:
-      - main
-      - 'codex/firebase-testlab-physical-acceptance'
   workflow_dispatch:
-
-concurrency:
-  group: firebase-test-lab-${{ github.sha }}
-  cancel-in-progress: true
+  schedule:
+    - cron: '15 7 * * *'
 
 jobs:
   firebase-test-lab-physical:
