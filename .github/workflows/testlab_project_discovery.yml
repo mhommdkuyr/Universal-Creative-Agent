@@ -1,0 +1,67 @@
+name: Discover alternate Test Lab projects
+
+on:
+  push:
+    branches:
+      - 'codex/firebase-testlab-physical-acceptance'
+  workflow_dispatch:
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.GCP_SA_KEY }}'
+          create_credentials_file: true
+          export_environment_variables: true
+          cleanup_credentials: true
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Discover accessible projects and Test Lab physical catalogs
+        run: |
+          set -euo pipefail
+          CURRENT="$(gcloud config get-value project)"
+          echo "CURRENT_PROJECT=$CURRENT" | tee discovery.txt
+          gcloud projects list --format='value(projectId)' > projects.txt
+          : > candidates.txt
+          while read -r P; do
+            [ -n "$P" ] || continue
+            [ "$P" = "$CURRENT" ] && continue
+            if gcloud firebase test android models list --project="$P" --format=json > "models-$P.json" 2>/dev/null; then
+              python3 - "$P" >> candidates.txt <<'PY'
+          import json, sys
+          p=sys.argv[1]
+          d=json.load(open(f"models-{p}.json"))
+          models=d.get("models", d) if isinstance(d, dict) else d
+          physical=[m for m in models if str(m.get("form","")).upper()=="PHYSICAL"]
+          if physical:
+              print(p)
+              for m in physical[:5]:
+                  print("  ",m.get("id"),m.get("name"),m.get("supportedVersionIds"))
+          PY
+            fi
+          done < projects.txt
+          echo '--- projects with physical Test Lab devices ---'
+          cat candidates.txt || true
+          echo '--- project list ---'
+          cat projects.txt
+          echo '--- end ---'
+
+      - name: Upload discovery evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: testlab-project-discovery
+          path: |
+            discovery.txt
+            projects.txt
+            candidates.txt
+            models-*.json
+          if-no-files-found: warn
+          retention-days: 7
