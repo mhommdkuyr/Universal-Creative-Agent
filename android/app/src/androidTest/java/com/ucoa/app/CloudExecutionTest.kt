@@ -17,10 +17,7 @@ class CloudExecutionTest {
     private fun shell(device: UiDevice, command: String): String = device.executeShellCommand(command)
 
     private fun foregroundPackage(device: UiDevice): String {
-        return shell(device, "dumpsys window windows | grep -m1 mCurrentFocus")
-            .substringAfter("u0 ", "")
-            .substringBefore("/")
-            .trim()
+        return device.currentPackageName.orEmpty()
     }
 
     @Test
