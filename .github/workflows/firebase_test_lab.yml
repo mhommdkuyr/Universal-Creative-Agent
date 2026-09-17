@@ -153,7 +153,11 @@ jobs:
                   'DEVICE_CAPACITY_MEDIUM': 1,
                   'DEVICE_CAPACITY_LOW': 2,
               }.get(c['capacity'], 3)
-              return (estimate_score, direct_score, capacity_score, c['model'], c['version'])
+              try:
+                  version_score = -int(c['version'])
+              except ValueError:
+                  version_score = 0
+              return (estimate_score, direct_score, capacity_score, version_score, c['model'])
 
           candidates.sort(key=score)
           chosen = candidates[0]
@@ -198,41 +202,62 @@ jobs:
           set -e
           printf '%s\n' "$RC" > firebase-command-exit.txt
           echo "GCP_RUN_RC=$RC" >> "$GITHUB_ENV"
+
+          MATRIX_ID="$(grep -oE 'Test \[(matrix-[a-z0-9-]+)\] has been created' ftl-stderr.log | sed -E 's/.*\[(matrix-[^]]+)\].*/\1/' | tail -n1)"
+          if [ -z "$MATRIX_ID" ]; then
+            echo "Firebase Test Matrix ID could not be extracted." >&2
+            exit 1
+          fi
+          printf '%s\n' "$MATRIX_ID" > firebase-matrix-id.txt
+          echo "FIREBASE_MATRIX_ID=$MATRIX_ID" >> "$GITHUB_ENV"
+
           echo "gcloud return code: $RC"
+          echo "Firebase Test Matrix: $MATRIX_ID"
           echo '--- ftl-result.json ---'
           cat ftl-result.json || true
           echo '--- ftl-stderr.log ---'
           cat ftl-stderr.log || true
 
-      - name: Collect Firebase raw device results
-        if: always()
+      - name: Query Firebase Test Matrix and wait for terminal result
         run: |
-          set +e
-          mkdir -p ftl-raw-results
-          RESULT_URI="$(sed -n 's/.*\[https:\/\/console\.developers\.google\.com\/storage\/browser\/\([^]]*\)\/\].*/gs:\/\/\1/p' ftl-stderr.log | head -n1)"
-          if [ -n "$RESULT_URI" ]; then
-            echo "$RESULT_URI" > firebase-results-uri.txt
-            gcloud storage cp --recursive "$RESULT_URI" ftl-raw-results/ > ftl-raw-download.log 2>&1
-          else
-            echo "No raw Firebase results URI was found in ftl-stderr.log" > ftl-raw-download.log
-          fi
-          set -e
+          set -euo pipefail
+          PROJECT="$(gcloud config get-value project)"
+          MATRIX_ID="$(cat firebase-matrix-id.txt)"
+          TOKEN="$(gcloud auth print-access-token)"
+          for attempt in $(seq 1 30); do
+            curl -fsS \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Accept: application/json" \
+              "https://testing.googleapis.com/v1/projects/$PROJECT/testMatrices/$MATRIX_ID" \
+              -o firebase-matrix.json
+
+            STATE="$(python3 -c 'import json; print(str(json.load(open("firebase-matrix.json")).get("state","")).upper())')"
+            OUTCOME="$(python3 -c 'import json; print(str(json.load(open("firebase-matrix.json")).get("outcomeSummary","")).upper())')"
+            echo "matrix state=$STATE outcome=$OUTCOME attempt=$attempt"
+            if [ "$STATE" = "FINISHED" ] || [ "$STATE" = "ERROR" ]; then
+              break
+            fi
+            sleep 10
+            TOKEN="$(gcloud auth print-access-token)"
+          done
 
       - name: Validate Firebase Test Lab completed and passed
         run: |
           set -euo pipefail
           RC="$(cat firebase-command-exit.txt)"
           test -n "$RC"
-
           test -s firebase-matrix.json
-          python3 - <<'PY'
-          import json, os
+          test -s firebase-matrix-id.txt
+
+          python3 - "$RC" <<'PY'
+          import json, os, sys
           from pathlib import Path
 
           d = json.loads(Path('firebase-matrix.json').read_text())
           state = str(d.get('state', '')).upper()
           outcome = str(d.get('outcomeSummary', '')).upper()
           executions = d.get('testExecutions') or []
+          rc = int(sys.argv[1])
 
           print('state=', state)
           print('outcomeSummary=', outcome)
@@ -241,15 +266,15 @@ jobs:
               raise SystemExit('Firebase Test Matrix contains no test executions.')
 
           for i, ex in enumerate(executions):
-              print(f'execution[{i}]=', json.dumps(ex, ensure_ascii=False)[:1800])
+              print(f'execution[{i}]=', json.dumps(ex, ensure_ascii=False)[:2200])
 
           if state != 'FINISHED':
               raise SystemExit(f'Firebase Test Matrix is not terminal: {state}')
           if outcome not in {'SUCCESS', 'PASSED'}:
               raise SystemExit(f'Firebase Test Matrix did not pass: {outcome}')
-          if int(os.environ.get('RC', '0') or '0') != 0:
-              raise SystemExit('Firebase gcloud command returned non-zero.')
-          
+          if rc != 0:
+              raise SystemExit(f'Firebase gcloud command returned non-zero: {rc}')
+
           matrix_id = Path('firebase-matrix-id.txt').read_text().strip()
           if not matrix_id:
               raise SystemExit('Firebase matrix id is missing.')
@@ -260,6 +285,7 @@ jobs:
               f'DEVICE_VERSION={os.environ.get("DEVICE_VERSION","")}\n'
               f'MATRIX_ID={matrix_id}\n'
               f'OUTCOME_SUMMARY={outcome}\n'
+              f'COMMIT_SHA={os.environ.get("GITHUB_SHA","")}\n'
           )
           PY
 
