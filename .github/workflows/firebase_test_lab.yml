@@ -77,6 +77,22 @@ jobs:
           gcloud services enable toolresults.googleapis.com --project="$PROJECT"
           gcloud services list --enabled --filter='config.name=toolresults.googleapis.com' --format='value(config.name)'
 
+      - name: Grant Test Lab staging upload permission to active service account
+        run: |
+          set -euo pipefail
+          PROJECT="$(gcloud config get-value project)"
+          ACCOUNT="$(gcloud auth list --filter='status:ACTIVE' --format='value(account)' | head -n1)"
+          test -n "$ACCOUNT"
+          echo "Active service account: $ACCOUNT"
+          gcloud projects add-iam-policy-binding "$PROJECT" \
+            --member="serviceAccount:$ACCOUNT" \
+            --role="roles/storage.objectCreator" \
+            --condition=None
+          gcloud projects get-iam-policy "$PROJECT" \
+            --flatten='bindings[].members' \
+            --filter="bindings.members=serviceAccount:$ACCOUNT AND bindings.role=roles/storage.objectCreator" \
+            --format='table(bindings.role,bindings.members)'
+
       - name: Verify Google Cloud / Firebase access
         run: |
           set -euo pipefail
@@ -174,6 +190,9 @@ jobs:
               raise SystemExit('Firebase Test Lab did not produce a result file')
 
           raw = p.read_text(errors='replace').strip()
+          rc = int(os.environ.get('GCP_RUN_RC', '99'))
+          if rc != 0:
+              raise SystemExit(f'Firebase Test Lab command failed with return code {rc}')
           if not raw:
               raise SystemExit('Firebase Test Lab result is empty')
 
@@ -201,9 +220,6 @@ jobs:
           print('outcomes=', outcomes)
           print('states=', states)
 
-          rc = int(os.environ.get('GCP_RUN_RC', '99'))
-          if rc != 0:
-              raise SystemExit(f'Firebase Test Lab command failed with return code {rc}')
           if 'PASSED' not in outcomes:
               raise SystemExit('Firebase Test Lab did not report PASSED; physical-device acceptance is not successful.')
 
