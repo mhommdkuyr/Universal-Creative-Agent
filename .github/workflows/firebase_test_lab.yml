@@ -45,7 +45,7 @@ jobs:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
         run: |
           set -euo pipefail
-          test -n "$GCP_SA_KEY" || { echo "GCP_SA_KEY is missing; Firebase Test Lab cannot run." >&2; exit 2; }
+          test -n "$GCP_SA_KEY" || { echo "GCP_SA_KEY is missing." >&2; exit 2; }
 
       - name: Build Debug and Instrumentation Test APKs
         run: |
@@ -75,10 +75,8 @@ jobs:
           set -euo pipefail
           PROJECT="$(gcloud config get-value project)"
           gcloud services enable toolresults.googleapis.com --project="$PROJECT"
-          gcloud services list --enabled --filter='config.name=toolresults.googleapis.com' --format='value(config.name)'
 
       - name: Grant temporary Editor role required by Firebase default results bucket
-        id: editor-role
         run: |
           set -euo pipefail
           PROJECT="$(gcloud config get-value project)"
@@ -90,23 +88,19 @@ jobs:
             --format='value(bindings.role)' | head -n1)"
           if [ "$HAS_EDITOR" = "roles/editor" ]; then
             echo "EDITOR_ROLE_ALREADY_PRESENT=true" >> "$GITHUB_ENV"
-            echo "The active service account already has roles/editor."
           else
             gcloud projects add-iam-policy-binding "$PROJECT" \
               --member="serviceAccount:$ACCOUNT" \
               --role="roles/editor" \
               --condition=None
             echo "EDITOR_ROLE_ALREADY_PRESENT=false" >> "$GITHUB_ENV"
-            echo "Temporary roles/editor granted to the active service account."
           fi
-
-          echo "Waiting for IAM propagation before Firebase's managed results bucket is used..."
+          echo "Waiting for IAM propagation..."
           for i in $(seq 1 12); do
             if gcloud projects get-iam-policy "$PROJECT" \
               --flatten='bindings[].members' \
               --filter="bindings.members=serviceAccount:$ACCOUNT AND bindings.role=roles/editor" \
               --format='value(bindings.role)' | grep -qx 'roles/editor'; then
-              echo "roles/editor is visible in project IAM policy (attempt $i)."
               break
             fi
             sleep 10
@@ -125,140 +119,122 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json
-          import os
+          import json, os
           from pathlib import Path
-
           data = json.loads(Path('ftl-models.json').read_text())
-          models = data.get('models') if isinstance(data, dict) else data
-          if not isinstance(models, list):
-              raise SystemExit('Unexpected Firebase models response format')
-
+          models = data.get('models', data) if isinstance(data, dict) else data
           def versions_for(model):
               supported = [str(v) for v in (model.get('supportedVersionIds') or [])]
               if supported:
                   return supported
-              return [
-                  str(v.get('versionId'))
-                  for v in (model.get('perVersionInfo') or [])
-                  if isinstance(v, dict) and v.get('versionId')
-              ]
-
+              return [str(v.get('versionId')) for v in (model.get('perVersionInfo') or []) if isinstance(v, dict) and v.get('versionId')]
           physical = [m for m in models if str(m.get('form', '')).upper() == 'PHYSICAL']
           candidates = [(m, v) for m in physical for v in versions_for(m)]
           if not candidates:
               raise SystemExit('Firebase returned no physical device/version combinations')
-
-          preferred = [
-              pair for pair in candidates
-              if (pair[0].get('id') or pair[0].get('modelId')) == 'oriole' and pair[1] == '33'
-          ]
+          preferred = [p for p in candidates if (p[0].get('id') or p[0].get('modelId')) == 'oriole' and p[1] == '33']
           chosen, version = preferred[0] if preferred else candidates[0]
           model_id = chosen.get('id') or chosen.get('modelId')
           if not model_id:
-              raise SystemExit(f'Invalid Firebase physical device record: {chosen}')
-
-          out_path = os.environ['GITHUB_OUTPUT']
-          env_path = os.environ['GITHUB_ENV']
-          with open(out_path, 'a', encoding='utf-8') as out:
-              out.write(f'DEVICE_MODEL={model_id}\n')
-              out.write(f'DEVICE_VERSION={version}\n')
-              out.write('DEVICE_FORM=PHYSICAL\n')
-          with open(env_path, 'a', encoding='utf-8') as env:
-              env.write(f'DEVICE_MODEL={model_id}\n')
-              env.write(f'DEVICE_VERSION={version}\n')
-              env.write('DEVICE_FORM=PHYSICAL\n')
-
-          print(json.dumps({
-              'model': model_id,
-              'version': version,
-              'form': chosen.get('form'),
-              'name': chosen.get('name'),
-              'manufacturer': chosen.get('manufacturer'),
-              'perVersionInfo': chosen.get('perVersionInfo', []),
-          }, indent=2))
+              raise SystemExit('Selected model has no id')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f'DEVICE_MODEL={model_id}\nDEVICE_VERSION={version}\nDEVICE_FORM=PHYSICAL\n')
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write(f'DEVICE_MODEL={model_id}\nDEVICE_VERSION={version}\nDEVICE_FORM=PHYSICAL\n')
+          print(json.dumps({'model': model_id, 'version': version, 'form': chosen.get('form'), 'name': chosen.get('name')}, indent=2))
           PY
 
       - name: Run AccessibilityService instrumentation on Firebase Test Lab physical device
         id: ftl
         run: |
           set +e
-          run_ftl() {
+          RESULTS_DIR="ucoa/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          gcloud firebase test android run \
+            --type instrumentation \
+            --app "$APK" \
+            --test "$TEST_APK" \
+            --device "model=${{ steps.device.outputs.DEVICE_MODEL }},version=${{ steps.device.outputs.DEVICE_VERSION }},locale=en,orientation=portrait" \
+            --environment-variables clearPackageData=true \
+            --results-dir "$RESULTS_DIR" \
+            --client-details matrixLabel="UCOA physical AccessibilityService acceptance" \
+            --format=json > ftl-result.json 2> ftl-stderr.log
+          RC=$?
+          if [ "$RC" -ne 0 ] && grep -q 'storage.objects.create' ftl-stderr.log; then
+            echo "Detected Test Lab managed-bucket IAM propagation failure; retrying once..."
+            sleep 60
             gcloud firebase test android run \
               --type instrumentation \
               --app "$APK" \
               --test "$TEST_APK" \
               --device "model=${{ steps.device.outputs.DEVICE_MODEL }},version=${{ steps.device.outputs.DEVICE_VERSION }},locale=en,orientation=portrait" \
               --environment-variables clearPackageData=true \
-              --client-details matrixLabel="UCOA physical AccessibilityService acceptance" \
+              --results-dir "${RESULTS_DIR}-retry" \
+              --client-details matrixLabel="UCOA physical AccessibilityService acceptance retry" \
               --format=json > ftl-result.json 2> ftl-stderr.log
-          }
-
-          run_ftl
-          RC=$?
-          if [ "$RC" -ne 0 ] && grep -q 'storage.objects.create' ftl-stderr.log; then
-            echo "Detected Test Lab managed-bucket IAM propagation failure; waiting and retrying once..."
-            sleep 60
-            run_ftl
             RC=$?
           fi
           set -e
-          echo "gcloud firebase test return code: $RC"
+          printf '%s\n' "$RC" > firebase-command-exit.txt
+          echo "GCP_RUN_RC=$RC" >> "$GITHUB_ENV"
+          echo "gcloud return code: $RC"
           cat ftl-result.json || true
           cat ftl-stderr.log || true
-          echo "GCP_RUN_RC=$RC" >> "$GITHUB_ENV"
+
+      - name: Collect Firebase raw device results
+        if: always()
+        run: |
+          set +e
+          mkdir -p ftl-raw-results
+          RESULT_URL="$(grep -oE 'https://console\.developers\.google\.com/storage/browser/[^]]+' ftl-stderr.log | head -n1 || true)"
+          if [ -n "$RESULT_URL" ]; then
+            RESULT_PATH="${RESULT_URL#https://console.developers.google.com/storage/browser/}"
+            RESULT_URI="gs://$RESULT_PATH"
+            echo "$RESULT_URI" > firebase-results-uri.txt
+            gcloud storage cp --recursive "$RESULT_URI" ftl-raw-results/ > ftl-raw-download.log 2>&1
+          else
+            echo "No raw Firebase results URI was found in ftl-stderr.log" > ftl-raw-download.log
+          fi
+          set -e
 
       - name: Validate Firebase Test Lab completed and passed
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json
-          import os
+          import json, os
           from pathlib import Path
-
           p = Path('ftl-result.json')
-          if not p.exists():
-              raise SystemExit('Firebase Test Lab did not produce a result file')
-
-          raw = p.read_text(errors='replace').strip()
+          raw = p.read_text(errors='replace').strip() if p.exists() else ''
           rc = int(os.environ.get('GCP_RUN_RC', '99'))
           if rc != 0:
               raise SystemExit(f'Firebase Test Lab command failed with return code {rc}')
           if not raw:
               raise SystemExit('Firebase Test Lab result is empty')
-
           try:
               data = json.loads(raw)
           except json.JSONDecodeError as exc:
               raise SystemExit(f'Firebase result was not valid JSON: {exc}')
-
-          matrices = []
-          def walk(value):
-              if isinstance(value, dict):
-                  if 'testMatrixId' in value or 'outcomeSummary' in value:
-                      matrices.append(value)
-                  for child in value.values():
-                      walk(child)
-              elif isinstance(value, list):
-                  for child in value:
-                      walk(child)
+          outcomes = []
+          matrix_ids = []
+          def walk(v):
+              if isinstance(v, dict):
+                  if v.get('testMatrixId'): matrix_ids.append(str(v['testMatrixId']))
+                  for key in ('outcomeSummary', 'outcome'):
+                      if v.get(key) is not None: outcomes.append(str(v[key]).upper())
+                  for child in v.values(): walk(child)
+              elif isinstance(v, list):
+                  for child in v: walk(child)
           walk(data)
-
-          matrix_ids = [m.get('testMatrixId') for m in matrices if m.get('testMatrixId')]
-          outcomes = [str(m.get('outcomeSummary', '')).upper() for m in matrices if m.get('outcomeSummary')]
-          states = [str(m.get('state', '')).upper() for m in matrices if m.get('state')]
+          outcomes = list(dict.fromkeys(outcomes))
+          matrix_ids = list(dict.fromkeys(matrix_ids))
           print('matrix_ids=', matrix_ids)
           print('outcomes=', outcomes)
-          print('states=', states)
-
           if 'PASSED' not in outcomes:
               raise SystemExit('Firebase Test Lab did not report PASSED; physical-device acceptance is not successful.')
-
           Path('firebase-status.txt').write_text(
               'STATUS=SUCCESS\n'
-              f"DEVICE_MODEL={os.environ.get('DEVICE_MODEL', '')}\n"
-              f"DEVICE_VERSION={os.environ.get('DEVICE_VERSION', '')}\n"
-              f"MATRIX_IDS={','.join(matrix_ids)}\n"
+              f'DEVICE_MODEL={os.environ.get("DEVICE_MODEL", "")}\n'
+              f'DEVICE_VERSION={os.environ.get("DEVICE_VERSION", "")}\n'
+              f'MATRIX_IDS={",".join(matrix_ids)}\n'
           )
           PY
 
@@ -288,5 +264,9 @@ jobs:
             firebase-project.txt
             firebase-apk-sha256.txt
             firebase-status.txt
+            firebase-command-exit.txt
+            firebase-results-uri.txt
+            ftl-raw-download.log
+            ftl-raw-results/**
           if-no-files-found: warn
           retention-days: 30
