@@ -19,7 +19,11 @@ SESSION_TTL_SECONDS = int(os.getenv("UCOA_CLIENT_SESSION_TTL", str(30 * 24 * 360
 CONFIG_VERSION = os.getenv("UCOA_REMOTE_CONFIG_VERSION", "1")
 CONFIG_REVISION = os.getenv("UCOA_REMOTE_CONFIG_REVISION", "2026-09-11.1")
 REMOTE_SQLITE = Path(os.getenv("UCOA_REMOTE_OPS_DB", "/opt/render/project/src/.ucoa-local/remote_ops.db"))
-REMOTE_SQLITE.parent.mkdir(parents=True, exist_ok=True)
+try:
+    REMOTE_SQLITE.parent.mkdir(parents=True, exist_ok=True)
+except (PermissionError, OSError):
+    REMOTE_SQLITE = Path(".ucoa-local/remote_ops.db")
+    REMOTE_SQLITE.parent.mkdir(parents=True, exist_ok=True)
 
 def _pg_conn():
     try:
