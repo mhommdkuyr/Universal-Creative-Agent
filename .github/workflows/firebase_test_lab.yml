@@ -86,34 +86,38 @@ jobs:
           from pathlib import Path
 
           data = json.loads(Path('ftl-models.json').read_text())
-          models = data.get('models', data if isinstance(data, list) else [])
-          if isinstance(models, dict):
-              models = models.get('models', [])
+          models = data.get('models') if isinstance(data, dict) else data
+          if not isinstance(models, list):
+              raise SystemExit('Unexpected Firebase models response format')
 
           def norm(v):
               return str(v or '').upper()
 
-          ready = [
+          physical = [
               m for m in models
-              if norm(m.get('form')) == 'PHYSICAL' and norm(m.get('state')) in {'READY', 'AVAILABLE'}
+              if norm(m.get('form')) == 'PHYSICAL'
           ]
-          if not ready:
-              ready = [m for m in models if norm(m.get('form')) == 'PHYSICAL']
+          ready = [m for m in physical if norm(m.get('state')) in {'READY', 'AVAILABLE'}] or physical
           if not ready:
               raise SystemExit('No physical Android device is available in Firebase Test Lab')
 
-          preferred = [m for m in ready if m.get('id') == 'oriole' and str(m.get('versionId', m.get('version', ''))) == '33']
+          preferred = [
+              m for m in ready
+              if (m.get('id') or m.get('modelId')) == 'oriole'
+              and str(m.get('versionId') or m.get('version') or '') == '33'
+          ]
           chosen = preferred[0] if preferred else ready[0]
+
           model_id = chosen.get('id') or chosen.get('modelId')
           version = chosen.get('versionId') or chosen.get('version')
           if not model_id or not version:
               raise SystemExit(f'Invalid Firebase device record: {chosen}')
 
-          print(f"MODEL={model_id}")
-          print(f"VERSION={version}")
-          print(f"FORM={chosen.get('form')}")
-          print(f"DEVICE_MODEL={model_id}" >> __import__('os').environ['GITHUB_OUTPUT'])
-          print(f"DEVICE_VERSION={version}" >> __import__('os').environ['GITHUB_OUTPUT'])
+          with open('${GITHUB_OUTPUT}', 'a') as out:
+              out.write(f'DEVICE_MODEL={model_id}\\n')
+              out.write(f'DEVICE_VERSION={version}\\n')
+              out.write('DEVICE_FORM=PHYSICAL\\n')
+
           print(json.dumps(chosen, indent=2))
           PY
 
@@ -141,30 +145,51 @@ jobs:
           python3 - <<'PY'
           import json
           import os
-          import re
           from pathlib import Path
 
-          result_path = Path('ftl-result.json')
-          text = result_path.read_text(errors='replace') if result_path.exists() else ''
-          matrix_ids = set(re.findall(r'(?i)testMatrixId[^A-Za-z0-9_-]*([A-Za-z0-9_-]+)', text))
-          outcome_summaries = set(re.findall(r'(?i)outcomeSummary[^A-Za-z0-9_-]*([A-Za-z_]+)', text))
-          states = set(re.findall(r'(?i)(?:testMatrix[.])?state[^A-Za-z0-9_-]*([A-Z_]+)', text))
+          p = Path('ftl-result.json')
+          if not p.exists():
+              raise SystemExit('Firebase Test Lab did not produce a result file')
 
-          print('matrix_ids=', sorted(matrix_ids))
-          print('outcome_summaries=', sorted(outcome_summaries))
-          print('states=', sorted(states))
+          raw = p.read_text(errors='replace').strip()
+          if not raw:
+              raise SystemExit('Firebase Test Lab result is empty')
+
+          try:
+              data = json.loads(raw)
+          except json.JSONDecodeError as exc:
+              raise SystemExit(f'Firebase result was not valid JSON: {exc}')
+
+          matrices = []
+          def walk(value):
+              if isinstance(value, dict):
+                  if 'testMatrixId' in value or 'outcomeSummary' in value:
+                      matrices.append(value)
+                  for v in value.values():
+                      walk(v)
+              elif isinstance(value, list):
+                  for v in value:
+                      walk(v)
+          walk(data)
+
+          matrix_ids = [m.get('testMatrixId') for m in matrices if m.get('testMatrixId')]
+          outcomes = [str(m.get('outcomeSummary', '')).upper() for m in matrices if m.get('outcomeSummary')]
+          states = [str(m.get('state', '')).upper() for m in matrices if m.get('state')]
+          print('matrix_ids=', matrix_ids)
+          print('outcomes=', outcomes)
+          print('states=', states)
 
           rc = int(os.environ.get('GCP_RUN_RC', '99'))
           if rc != 0:
               raise SystemExit(f'Firebase Test Lab command failed with return code {rc}')
-          if 'PASSED' not in outcome_summaries:
-              raise SystemExit('Firebase Test Lab did not report PASSED; the physical-device acceptance test is not successful.')
+          if 'PASSED' not in outcomes:
+              raise SystemExit('Firebase Test Lab did not report PASSED; physical-device acceptance is not successful.')
 
           Path('firebase-status.txt').write_text(
               'STATUS=SUCCESS\\n'
-              + f"DEVICE_MODEL={os.environ.get('DEVICE_MODEL', '')}\\n"
-              + f"DEVICE_VERSION={os.environ.get('DEVICE_VERSION', '')}\\n"
-              + f"MATRIX_IDS={','.join(sorted(matrix_ids))}\\n"
+              f"DEVICE_MODEL={os.environ.get('DEVICE_MODEL', '')}\\n"
+              f"DEVICE_VERSION={os.environ.get('DEVICE_VERSION', '')}\\n"
+              f"MATRIX_IDS={','.join(matrix_ids)}\\n"
           )
           PY
 
