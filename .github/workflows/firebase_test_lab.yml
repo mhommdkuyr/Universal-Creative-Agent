@@ -16,7 +16,7 @@ concurrency:
 jobs:
   firebase-test-lab-physical:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: read
 
@@ -116,47 +116,62 @@ jobs:
           gcloud config get-value project | tee firebase-project.txt
           gcloud firebase test android models list --format=json > ftl-models.json
 
-      - name: Select a physical Android device and version
+      - name: Select an available physical Android device and version
         id: device
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import json, os
           from pathlib import Path
+
           data = json.loads(Path('ftl-models.json').read_text())
           models = data.get('models', data) if isinstance(data, dict) else data
-          def versions_for(model):
-              supported = [str(v) for v in (model.get('supportedVersionIds') or [])]
-              if supported:
-                  return supported
-              return [str(v.get('versionId')) for v in (model.get('perVersionInfo') or []) if isinstance(v, dict) and v.get('versionId')]
-          physical = [m for m in models if str(m.get('form', '')).upper() == 'PHYSICAL']
-          candidates = [(m, v) for m in physical for v in versions_for(m)]
+          candidates = []
+
+          for model in models:
+              if str(model.get('form', '')).upper() != 'PHYSICAL':
+                  continue
+              model_id = model.get('id') or model.get('modelId')
+              if not model_id:
+                  continue
+              for info in model.get('perVersionInfo') or []:
+                  version = str(info.get('versionId') or '')
+                  if not version:
+                      continue
+                  direct = bool((info.get('directAccessVersionInfo') or {}).get('directAccessSupported'))
+                  estimate = info.get('interactiveDeviceAvailabilityEstimate')
+                  capacity = str(info.get('deviceCapacity') or '')
+                  candidates.append({
+                      'model': model_id,
+                      'version': version,
+                      'name': model.get('name'),
+                      'direct': direct,
+                      'estimate': estimate,
+                      'capacity': capacity,
+                  })
+
           if not candidates:
               raise SystemExit('Firebase returned no physical device/version combinations')
-          preferred_models = [
-              ('CPH2449', '34'),
-              ('A402SO', '34'),
-              ('oriole', '33'),
-          ]
-          chosen_pair = None
-          for preferred_model, preferred_version in preferred_models:
-              for model, version in candidates:
-                  model_id = model.get('id') or model.get('modelId')
-                  if model_id == preferred_model and version == preferred_version:
-                      chosen_pair = (model, version)
-                      break
-              if chosen_pair:
-                  break
-          chosen, version = chosen_pair or candidates[0]
-          model_id = chosen.get('id') or chosen.get('modelId')
-          if not model_id:
-              raise SystemExit('Selected model has no id')
+
+          def score(c):
+              estimate_score = 0 if c['estimate'] == '30s' else (1 if c['estimate'] is None else 2)
+              direct_score = 0 if c['direct'] else 1
+              capacity_score = {
+                  'DEVICE_CAPACITY_HIGH': 0,
+                  'DEVICE_CAPACITY_MEDIUM': 1,
+                  'DEVICE_CAPACITY_LOW': 2,
+              }.get(c['capacity'], 3)
+              return (estimate_score, direct_score, capacity_score, c['model'], c['version'])
+
+          candidates.sort(key=score)
+          chosen = candidates[0]
+
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
-              out.write(f'DEVICE_MODEL={model_id}\nDEVICE_VERSION={version}\nDEVICE_FORM=PHYSICAL\n')
+              out.write(f"DEVICE_MODEL={chosen['model']}\nDEVICE_VERSION={chosen['version']}\nDEVICE_FORM=PHYSICAL\n")
           with open(os.environ['GITHUB_ENV'], 'a') as env:
-              env.write(f'DEVICE_MODEL={model_id}\nDEVICE_VERSION={version}\nDEVICE_FORM=PHYSICAL\n')
-          print(json.dumps({'model': model_id, 'version': version, 'form': chosen.get('form'), 'name': chosen.get('name')}, indent=2))
+              env.write(f"DEVICE_MODEL={chosen['model']}\nDEVICE_VERSION={chosen['version']}\nDEVICE_FORM=PHYSICAL\n")
+
+          print(json.dumps(chosen, indent=2, ensure_ascii=False))
           PY
 
       - name: Run AccessibilityService instrumentation on Firebase Test Lab physical device
@@ -214,41 +229,45 @@ jobs:
       - name: Validate Firebase Test Lab completed and passed
         run: |
           set -euo pipefail
+          RC="$(cat firebase-command-exit.txt)"
+          test -n "$RC"
+
+          test -s firebase-matrix.json
           python3 - <<'PY'
           import json, os
           from pathlib import Path
-          p = Path('ftl-result.json')
-          raw = p.read_text(errors='replace').strip() if p.exists() else ''
-          rc = int(os.environ.get('GCP_RUN_RC', '99'))
-          if rc != 0:
-              raise SystemExit(f'Firebase Test Lab command failed with return code {rc}')
-          if not raw:
-              raise SystemExit('Firebase Test Lab result is empty')
-          try:
-              data = json.loads(raw)
-          except json.JSONDecodeError as exc:
-              raise SystemExit(f'Firebase result was not valid JSON: {exc}')
-          outcomes, matrix_ids = [], []
-          def walk(v):
-              if isinstance(v, dict):
-                  if v.get('testMatrixId'): matrix_ids.append(str(v['testMatrixId']))
-                  for key in ('outcomeSummary', 'outcome'):
-                      if v.get(key) is not None: outcomes.append(str(v[key]).upper())
-                  for child in v.values(): walk(child)
-              elif isinstance(v, list):
-                  for child in v: walk(child)
-          walk(data)
-          outcomes = list(dict.fromkeys(outcomes))
-          matrix_ids = list(dict.fromkeys(matrix_ids))
-          print('matrix_ids=', matrix_ids)
-          print('outcomes=', outcomes)
-          if 'PASSED' not in outcomes:
-              raise SystemExit('Firebase Test Lab did not report PASSED; physical-device acceptance is not successful.')
+
+          d = json.loads(Path('firebase-matrix.json').read_text())
+          state = str(d.get('state', '')).upper()
+          outcome = str(d.get('outcomeSummary', '')).upper()
+          executions = d.get('testExecutions') or []
+
+          print('state=', state)
+          print('outcomeSummary=', outcome)
+          print('executionCount=', len(executions))
+          if not executions:
+              raise SystemExit('Firebase Test Matrix contains no test executions.')
+
+          for i, ex in enumerate(executions):
+              print(f'execution[{i}]=', json.dumps(ex, ensure_ascii=False)[:1800])
+
+          if state != 'FINISHED':
+              raise SystemExit(f'Firebase Test Matrix is not terminal: {state}')
+          if outcome not in {'SUCCESS', 'PASSED'}:
+              raise SystemExit(f'Firebase Test Matrix did not pass: {outcome}')
+          if int(os.environ.get('RC', '0') or '0') != 0:
+              raise SystemExit('Firebase gcloud command returned non-zero.')
+          
+          matrix_id = Path('firebase-matrix-id.txt').read_text().strip()
+          if not matrix_id:
+              raise SystemExit('Firebase matrix id is missing.')
+
           Path('firebase-status.txt').write_text(
               'STATUS=SUCCESS\n'
-              f'DEVICE_MODEL={os.environ.get("DEVICE_MODEL", "")}\n'
-              f'DEVICE_VERSION={os.environ.get("DEVICE_VERSION", "")}\n'
-              f'MATRIX_IDS={",".join(matrix_ids)}\n'
+              f'DEVICE_MODEL={os.environ.get("DEVICE_MODEL","")}\n'
+              f'DEVICE_VERSION={os.environ.get("DEVICE_VERSION","")}\n'
+              f'MATRIX_ID={matrix_id}\n'
+              f'OUTCOME_SUMMARY={outcome}\n'
           )
           PY
 
