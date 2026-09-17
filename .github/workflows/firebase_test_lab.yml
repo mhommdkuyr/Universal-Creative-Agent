@@ -100,6 +100,19 @@ jobs:
             echo "Temporary roles/editor granted to the active service account."
           fi
 
+          echo "Waiting for IAM propagation before Firebase's managed results bucket is used..."
+          for i in $(seq 1 12); do
+            if gcloud projects get-iam-policy "$PROJECT" \
+              --flatten='bindings[].members' \
+              --filter="bindings.members=serviceAccount:$ACCOUNT AND bindings.role=roles/editor" \
+              --format='value(bindings.role)' | grep -qx 'roles/editor'; then
+              echo "roles/editor is visible in project IAM policy (attempt $i)."
+              break
+            fi
+            sleep 10
+          done
+          sleep 30
+
       - name: Verify Google Cloud / Firebase access
         run: |
           set -euo pipefail
@@ -170,15 +183,25 @@ jobs:
         id: ftl
         run: |
           set +e
-          gcloud firebase test android run \
-            --type instrumentation \
-            --app "$APK" \
-            --test "$TEST_APK" \
-            --device "model=${{ steps.device.outputs.DEVICE_MODEL }},version=${{ steps.device.outputs.DEVICE_VERSION }},locale=en,orientation=portrait" \
-            --environment-variables clearPackageData=true \
-            --client-details matrixLabel="UCOA physical AccessibilityService acceptance" \
-            --format=json > ftl-result.json 2> ftl-stderr.log
+          run_ftl() {
+            gcloud firebase test android run \
+              --type instrumentation \
+              --app "$APK" \
+              --test "$TEST_APK" \
+              --device "model=${{ steps.device.outputs.DEVICE_MODEL }},version=${{ steps.device.outputs.DEVICE_VERSION }},locale=en,orientation=portrait" \
+              --environment-variables clearPackageData=true \
+              --client-details matrixLabel="UCOA physical AccessibilityService acceptance" \
+              --format=json > ftl-result.json 2> ftl-stderr.log
+          }
+
+          run_ftl
           RC=$?
+          if [ "$RC" -ne 0 ] && grep -q 'storage.objects.create' ftl-stderr.log; then
+            echo "Detected Test Lab managed-bucket IAM propagation failure; waiting and retrying once..."
+            sleep 60
+            run_ftl
+            RC=$?
+          fi
           set -e
           echo "gcloud firebase test return code: $RC"
           cat ftl-result.json || true
