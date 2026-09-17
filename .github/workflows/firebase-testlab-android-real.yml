@@ -2,15 +2,6 @@ name: Firebase Test Lab Android Real Acceptance
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - 'android/**'
-      - 'server/**'
-      - '.github/workflows/firebase-testlab-android-real.yml'
-
-concurrency:
-  group: firebase-testlab-${{ github.sha }}
-  cancel-in-progress: true
 
 jobs:
   firebase-real-device:
