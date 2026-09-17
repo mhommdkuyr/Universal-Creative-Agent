@@ -52,7 +52,7 @@ def _requeue_stale() -> None:
                         (MAX_CLAIM_DURATION,),
                     )
                     cur.execute(
-                        "UPDATE ucoa_device_commands SET status='cancelled', completed_at=now(), result='{\"error\":\"Command expired in queue\"}'::jsonb WHERE status='queued' AND created_at < now() - (%s || ' seconds')::interval",
+                        "UPDATE ucoa_device_commands SET status='cancelled', completed_at=now(), result='{\"error\":\"Command expired\"}'::jsonb WHERE status IN ('queued', 'claimed') AND created_at < now() - (%s || ' seconds')::interval",
                         (COMMAND_TTL,),
                     )
                     cur.execute(
@@ -74,8 +74,8 @@ def _requeue_stale() -> None:
             (now, json.dumps({"error": "Command execution timed out in claimed state"}), now - MAX_CLAIM_DURATION),
         )
         conn.execute(
-            "UPDATE device_commands SET status='cancelled', completed_at=?, result=? WHERE status='queued' AND created_at < ?",
-            (now, json.dumps({"error": "Command expired in queue"}), now - COMMAND_TTL),
+            "UPDATE device_commands SET status='cancelled', completed_at=?, result=? WHERE status IN ('queued', 'claimed') AND created_at < ?",
+            (now, json.dumps({"error": "Command expired"}), now - COMMAND_TTL),
         )
         conn.execute(
             "UPDATE device_commands SET status='queued', claimed_at=NULL WHERE status='claimed' AND claimed_at < ?",

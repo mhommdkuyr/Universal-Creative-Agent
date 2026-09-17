@@ -93,7 +93,7 @@ def _fallback_action(req: Any) -> dict[str, Any]:
     target = _detect_target_app(req.task)
     if target:
         label, pkg_sub = target
-        if _is_app_in_foreground(req, pkg_sub) or (req.step >= 1 and _is_open_task(req.task)):
+        if _is_app_in_foreground(req, pkg_sub):
             return {
                 "action": "done",
                 "params": {},
