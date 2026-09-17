@@ -1,0 +1,19 @@
+# Build & Cache directories
+**/build/
+**/.gradle/
+**/__pycache__/
+.pytest_cache/
+.ucoa-local/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE & OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo

@@ -12,10 +12,15 @@ from fastapi import Header, HTTPException
 from pydantic import BaseModel, Field
 
 import app_v3
+import durable_state
 from remote_ops import _master_ok, _pg_conn, _require_client
 
 DB_PATH = Path(os.getenv("UCOA_REMOTE_OPS_DB", "/opt/render/project/src/.ucoa-local/remote_ops.db"))
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+try:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+except (PermissionError, OSError):
+    DB_PATH = Path(".ucoa-local/remote_ops.db")
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 COMMAND_TTL = max(60, int(os.getenv("UCOA_COMMAND_TTL_SECONDS", "900")))
 CLAIM_TTL = max(30, int(os.getenv("UCOA_COMMAND_CLAIM_TTL_SECONDS", "120")))
 
@@ -131,6 +136,10 @@ def complete_device_command(command_id: str, req: DeviceCommandResult, authoriza
     if not install_id or install_id != req.install_id: raise HTTPException(403, "install_id mismatch")
     status = req.status.strip().lower()
     if status not in {"completed", "failed", "cancelled"}: raise HTTPException(400, "Invalid command status")
+    try:
+        durable_state.save_state(command_id, install_id, str(req.result.get("task", "device_command")), 0, status, req.result)
+    except Exception:
+        pass
     _ensure_schema(); result = json.dumps(req.result, ensure_ascii=False)[:50000]; conn = _pg_conn()
     if conn is not None:
         try:

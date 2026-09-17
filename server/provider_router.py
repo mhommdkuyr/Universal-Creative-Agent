@@ -230,3 +230,37 @@ def visual(task, ui_tree, image):
 
 def reasoning(system,user):
     return call(system,user,None)
+
+
+def safe_text_probe() -> dict:
+    rows = []
+    working_provider = None
+    for p in PROVIDERS:
+        name = p["name"]
+        try:
+            base, key, model, vision, key_name = _cfg(p)
+        except Exception:
+            continue
+        started = time.perf_counter()
+        try:
+            if p.get("native_gemini"):
+                raw = _gemini_generate(base, key, model, "Return ONLY JSON.", "Return exactly {\"ok\":true}.", None, 15)
+            elif p.get("public"):
+                raw = _space_call("Return ONLY JSON.", "Return exactly {\"ok\":true}.", None, 15)
+            else:
+                raw = _chat(base, key, model, "Return ONLY JSON.", "Return exactly {\"ok\":true}.", None, 15)
+            parsed = _extract_json(raw)
+            ok = bool(parsed.get("ok"))
+            latency = round(time.perf_counter() - started, 3)
+            rows.append({"provider": name, "model": model, "ok": ok, "vision": bool(p.get("vision")), "latency_s": latency})
+            if ok and not working_provider:
+                working_provider = name
+        except Exception as exc:
+            rows.append({"provider": name, "model": model, "ok": False, "vision": bool(p.get("vision")), "error": type(exc).__name__})
+
+    return {
+        "ok": working_provider is not None,
+        "configured": True,
+        "providers": rows,
+        "runtime": {"ok": working_provider is not None, "provider": working_provider or "none"}
+    }

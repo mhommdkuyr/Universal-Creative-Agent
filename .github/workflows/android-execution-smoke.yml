@@ -50,8 +50,7 @@ jobs:
           script: |
             set -eu
             adb wait-for-device
-            APK="$(find /home/runner/work -type f -path '*/android/app/build/outputs/apk/debug/app-debug.apk' -print -quit)"
-            test -n "$APK"
+            APK="${GITHUB_WORKSPACE}/android/app/build/outputs/apk/debug/app-debug.apk"
             test -s "$APK"
             adb install -r "$APK"
             adb shell settings put secure enabled_accessibility_services com.ucoa.app/.UcoaAccessibilityService
