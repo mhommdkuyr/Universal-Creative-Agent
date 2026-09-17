@@ -157,19 +157,39 @@ class RemoteCommandBridge(private val context: Context, private val service: Uco
         val endpoint = (prefs.getString("endpoint", "https://ucoa-agent-brain.onrender.com") ?: "").trim().trimEnd('/')
         val token = prefs.getString("token", "")?.trim().orEmpty()
         if (endpoint.isBlank() || token.isBlank()) throw IllegalStateException("Cloud session not ready")
-        var conn: HttpURLConnection? = null
-        try {
-            conn = (URL(endpoint + path).openConnection() as HttpURLConnection).apply {
-                requestMethod = method; connectTimeout = timeout; readTimeout = timeout; doInput = true
-                setRequestProperty("Authorization", "Bearer $token")
-                if (body != null) { doOutput = true; setRequestProperty("Content-Type", "application/json") }
+        var lastExc: Exception? = null
+        for (attempt in 0 until 3) {
+            var conn: HttpURLConnection? = null
+            try {
+                conn = (URL(endpoint + path).openConnection() as HttpURLConnection).apply {
+                    requestMethod = method; connectTimeout = timeout; readTimeout = timeout; doInput = true
+                    setRequestProperty("Authorization", "Bearer $token")
+                    if (body != null) { doOutput = true; setRequestProperty("Content-Type", "application/json") }
+                }
+                if (body != null) conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+                val code = conn.responseCode
+                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                val text = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
+                if (code in 200..299) return JSONObject(text)
+                val err = "HTTP $code: ${text.take(1000)}"
+                lastExc = IllegalStateException(err)
+                if (code in setOf(500, 502, 503, 504) && attempt < 2) {
+                    Thread.sleep(1500L * (attempt + 1))
+                    continue
+                }
+                throw lastExc
+            } catch (e: Exception) {
+                lastExc = e
+                if (attempt < 2 && (e is java.io.IOException || e is java.net.SocketTimeoutException)) {
+                    Thread.sleep(1500L * (attempt + 1))
+                    continue
+                }
+                throw e
+            } finally {
+                conn?.disconnect()
             }
-            if (body != null) conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = conn.responseCode; val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-            val text = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
-            if (code !in 200..299) throw IllegalStateException("HTTP $code: ${text.take(1000)}")
-            return JSONObject(text)
-        } finally { conn?.disconnect() }
+        }
+        throw lastExc ?: IllegalStateException("Request failed")
     }
 
     private fun installId(): String = context.getSharedPreferences("ucoa_brain", Context.MODE_PRIVATE).getString("install_id", "")?.trim().orEmpty()
