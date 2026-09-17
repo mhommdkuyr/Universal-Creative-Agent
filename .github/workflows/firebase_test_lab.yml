@@ -5,13 +5,11 @@ on:
     branches:
       - main
       - 'codex/firebase-testlab-physical-acceptance'
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
-  group: firebase-test-lab-${{ github.event_name }}-${{ github.ref }}-${{ github.sha }}
-  cancel-in-progress: false
+  group: firebase-test-lab-${{ github.sha }}
+  cancel-in-progress: true
 
 jobs:
   firebase-test-lab-physical:
