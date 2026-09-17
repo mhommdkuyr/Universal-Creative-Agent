@@ -29,7 +29,6 @@ class CloudExecutionTest {
         shell(device, "settings put secure enabled_accessibility_services com.ucoa.app/.UcoaAccessibilityService")
         shell(device, "settings put secure accessibility_enabled 1")
         shell(device, "am force-stop com.android.settings")
-        shell(device, "am force-stop com.ucoa.app")
 
         val intent = Intent(context, MainActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
