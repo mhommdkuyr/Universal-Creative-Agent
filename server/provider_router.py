@@ -223,11 +223,15 @@ def call(system, user, image=None):
                 raise RuntimeError("provider does not support vision")
             with span("ai.provider", f"{name} inference", provider=name, model=model, multimodal=bool(image), credential=key_name):
                 if p.get("native_gemini"):
-                    raw, usage = _gemini_generate(base, key, model, system, user, image, timeout)
+                    response = _gemini_generate(base, key, model, system, user, image, timeout)
                 elif p.get("public"):
-                    raw, usage = _space_call(system, user, image, timeout)
+                    response = _space_call(system, user, image, timeout)
                 else:
-                    raw, usage = _chat(base, key, model, system, user, image, timeout)
+                    response = _chat(base, key, model, system, user, image, timeout)
+                if isinstance(response, tuple) and len(response) == 2:
+                    raw, usage = response
+                else:
+                    raw, usage = str(response), {}
             latency_ms = round((time.perf_counter() - started) * 1000, 2)
             inp, out, total = _usage_totals(usage)
             _set_call_meta(
