@@ -20,3 +20,7 @@ Next automated step already committed to `main`: pass the results bucket as `gs:
 - The workflow now supports a preconfigured `FIREBASE_TEST_RESULTS_BUCKET` or `RESULTS_BUCKET` secret and will otherwise try to provision its own results bucket when billing permits.
 - This run produced **no physical-device execution result** and must not be reported as app success.
 - Required next gate: a billing-enabled GCS bucket accessible for Firebase Test Lab results, followed by a completed physical Test Matrix with `outcomeSummary=SUCCESS` and the real execution assertions passing.
+
+## Live phone test started — 2026-09-18 22:02 +03:00
+
+A cloud-to-phone live validation cycle was started after installing the corrected APK. Acceptance requires UCOA-owned live overlay evidence plus post-action UI verification; opening an external app alone is not sufficient.
