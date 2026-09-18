@@ -74,24 +74,16 @@ def parse_json(text):
 
 def model_lists(catalog,selected):
  rows=catalog.get('models',[]) if isinstance(catalog,dict) else []
- vision=[m for m in rows if 'image' in (m.get('input_modalities') or [])]
- decision=[m for m in rows if m.get('id') and 'text' in (m.get('input_modalities') or ['text'])]
- def sortkey(m):
-  p=m.get('pricing') or {}; return (0 if str(p.get('prompt',''))=='0' and str(p.get('completion',''))=='0' else 1, m.get('id',''))
- vision=sorted(vision,key=sortkey); decision=sorted(decision,key=sortkey)
- ids=[m.get('id') for m in rows]
- preferred_v=['google/gemini-3.8-flash','google/gemini-3.7-flash','inclusionai/ling-3.0-flash-vl:free','nex-agi/nex-n2.5-pro:free','qwen/qwen3.8-27b:free']
- preferred_d=['openai/gpt-6-astra','qwen/qwen3.8-27b:free','nex-agi/nex-n2.5-pro:free','inclusionai/ling-3.0-flash-sante:free']
- if selected=='openrouter':
-  v=[x for x in preferred_v if x in ids]; d=[x for x in preferred_d if x in ids]
-  for m in vision:
-   if len(v)>=4: break
-   if m.get('id') not in v: v.append(m.get('id'))
-  for m in decision:
-   if len(d)>=4: break
-   if m.get('id') not in d: d.append(m.get('id'))
-  return v[:4],d[:4]
- return [m.get('id') for m in vision[:4]],[m.get('id') for m in decision[:4]]
+ ids={m.get('id') for m in rows if m.get('id')}
+ if selected=='cheaperinference':
+  vision_candidates=['gemini-3.7-flash','gemini-3.6-flash','gemini-3-5-flash','gemini-2.5-flash','google/gemini-3.5-flash-lite']
+  decision_candidates=['gpt-6-astra','gpt-5.6-luna','gpt-5.6-sol','gpt-5.5','gpt-5.4-mini']
+  vision=[m for m in vision_candidates if m in ids]
+  decision=[m for m in decision_candidates if m in ids]
+  return vision[:4],decision[:4]
+ vision=[m.get('id') for m in rows if 'image' in ((m.get('input_modalities') or []))][:4]
+ decision=[m.get('id') for m in rows if m.get('id')][:4]
+ return vision,decision
 
 def usage_counts(u):
  i=u.get('prompt_tokens',u.get('promptTokenCount',u.get('inputTokenCount')))
