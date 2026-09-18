@@ -28,7 +28,7 @@ jobs:
           packages: platform-tools
       - uses: gradle/actions/setup-gradle@v4
       - name: Install Android build toolchain
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
       - name: Build cloud-only APK
         run: gradle -p android assembleDebug --stacktrace
       - name: Verify cloud-only APK package
@@ -40,7 +40,7 @@ jobs:
       - name: Real cloud-only accessibility execution test
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 34
           target: default
           arch: x86_64
           profile: pixel_2
