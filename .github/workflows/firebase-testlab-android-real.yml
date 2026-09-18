@@ -105,7 +105,7 @@ jobs:
         id: bucket
         shell: bash
         env:
-          CONFIGURED_RESULTS_BUCKET: ${{ secrets.FIREBASE_TEST_RESULTS_BUCKET || secrets.RESULTS_BUCKET || ''}
+          CONFIGURED_RESULTS_BUCKET: ${{ secrets.FIREBASE_TEST_RESULTS_BUCKET || secrets.RESULTS_BUCKET || '' }}
         run: |
           set -euo pipefail
           PROJECT_ID="$(python3 - <<'PY'
@@ -118,61 +118,38 @@ jobs:
           print(json.load(open(os.environ['GOOGLE_GHA_CREDS_PATH']))['client_email'])
           PY
           )"
-
           normalize_bucket() {
             local value="$1"
-            if [ -n "$value" ] && [[ "$value" != gs://* ]]; then
-              value="gs://$value"
-            fi
-            printf '%s' "$value"
+            if [ -n "$value" ] && [[ "$value" != gs://* ]]; then value="gs://$value"; fi
+            printf "%s" "$value"
           }
-
           BUCKET="$(normalize_bucket "$CONFIGURED_RESULTS_BUCKET")"
           if [ -z "$BUCKET" ]; then
-            CANDIDATE="gs://ucoa-ftl-results-${PROJECT_ID}"
-            echo "No custom bucket configured. Ensuring writable bucket exists: $CANDIDATE"
-            if ! gcloud storage buckets describe "$CANDIDATE" >/dev/null 2>&1; then
-              gcloud storage buckets create "$CANDIDATE" --project="$PROJECT_ID" --location=us-central1 --uniform-bucket-level-access
+            BUCKET="gs://ucoa-ftl-results-${PROJECT_ID}"
+            echo "Ensuring writable bucket: $BUCKET"
+            if ! gcloud storage buckets describe "$BUCKET" >/dev/null 2>&1; then
+              gcloud storage buckets create "$BUCKET" --project="$PROJECT_ID" --location=us-central1 --uniform-bucket-level-access
             fi
-            BUCKET="$CANDIDATE"
           fi
-
-          echo "Granting object create permission on $BUCKET to $CLIENT_EMAIL"
-          gcloud storage buckets add-iam-policy-binding "$BUCKET" \
-            --member="serviceAccount:$CLIENT_EMAIL" \
-            --role="roles/storage.objectCreator" \
-            --quiet
-
+          echo "Granting object create permission to $CLIENT_EMAIL on $BUCKET"
+          gcloud storage buckets add-iam-policy-binding "$BUCKET" --member="serviceAccount:$CLIENT_EMAIL" --role="roles/storage.objectCreator" --quiet
           echo "BUCKET=$BUCKET" >> "$GITHUB_OUTPUT"
           echo "RESULTS_BUCKET=$BUCKET" >> "$GITHUB_ENV"
           echo "Prepared writable results bucket: $BUCKET"
+
       - name: Verify results bucket access
         env:
           RESULTS_BUCKET: ${{ steps.bucket.outputs.BUCKET }}
         run: |
           set -euo pipefail
-          if [ -z "$RESULTS_BUCKET" ]; then
-            echo "No custom bucket configured; skipping custom-bucket access probe."
-            exit 0
-          fi
-          echo "Checking Firebase Test Lab results bucket: $RESULTS_BUCKET"
+          test -n "$RESULTS_BUCKET"
           gcloud storage ls "$RESULTS_BUCKET"
           PROBE="/tmp/ucoa-results-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
           printf "ucoa-results-probe\n" > "$PROBE"
           PROBE_OBJECT="${RESULTS_BUCKET%/}/ucoa-ci-probes/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
           gcloud storage cp "$PROBE" "$PROBE_OBJECT"
           gcloud storage rm "$PROBE_OBJECT"
-          echo "RESULTS_BUCKET_WRITE_OK=$RESULTS_BUCKET" >> "$GITHUB_ENV"          set -euo pipefail
-          test -n "$RESULTS_BUCKET"
-          echo "Checking Firebase Test Lab results bucket: $RESULTS_BUCKET"
-          gcloud storage ls "$RESULTS_BUCKET"
-          PROBE="/tmp/ucoa-results-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
-          printf 'ucoa-results-probe\n' > "$PROBE"
-          PROBE_OBJECT="${RESULTS_BUCKET%/}/ucoa-ci-probes/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
-          gcloud storage cp "$PROBE" "$PROBE_OBJECT"
-          gcloud storage rm "$PROBE_OBJECT"
           echo "RESULTS_BUCKET_WRITE_OK=$RESULTS_BUCKET" >> "$GITHUB_ENV"
-
       - name: Run real execution on Firebase Test Lab physical device
         id: ftl
         env:
