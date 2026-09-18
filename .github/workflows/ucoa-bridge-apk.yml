@@ -30,6 +30,12 @@ jobs:
       - name: Calculate SHA256
         run: sha256sum android/app/build/outputs/apk/debug/app-debug.apk | tee android/app-debug.apk.sha256
 
+      - name: Verify APK exists and is installable
+        run: |
+          test -s android/app/build/outputs/apk/debug/app-debug.apk
+          file android/app/build/outputs/apk/debug/app-debug.apk
+          unzip -t android/app/build/outputs/apk/debug/app-debug.apk >/dev/null
+
       - name: Upload bridge APK
         uses: actions/upload-artifact@v4
         with:
@@ -38,3 +44,8 @@ jobs:
             android/app/build/outputs/apk/debug/app-debug.apk
             android/app-debug.apk.sha256
           retention-days: 30
+
+      - name: Publish installable APK summary
+        run: |
+          echo "UCOA APK ready: android/app/build/outputs/apk/debug/app-debug.apk"
+          echo "SHA256: $(cut -d' ' -f1 android/app-debug.apk.sha256)"
