@@ -31,3 +31,5 @@ dependencies {
 // trigger AWS Device Farm acceptance after SDK setup fix
 
 // trigger AWS Device Farm after SDK preparation fix
+
+// trigger AWS Device Farm after Gradle layout fix
