@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - "scripts/my_first_key_benchmark.py"
+      - "scripts/ci_provider_benchmark.py"
       - ".github/workflows/my-first-key-provider-discovery.yml"
 
 permissions:
@@ -25,9 +26,16 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${PROVIDER_KEY}"
-          python scripts/my_first_key_benchmark.py
+          python scripts/my_first_key_benchmark.py --out provider-discovery.json
+      - name: Benchmark selected vision and decision pairs
+        run: |
+          set -euo pipefail
+          test -s provider-discovery.json
+          python scripts/ci_provider_benchmark.py --out provider-benchmark.json --catalog provider-discovery.json
       - uses: actions/upload-artifact@v4
         with:
           name: my-first-key-provider-discovery
-          path: provider-discovery.json
+          path: |
+            provider-discovery.json
+            provider-benchmark.json
           retention-days: 14
