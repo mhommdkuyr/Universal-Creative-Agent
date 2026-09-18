@@ -1,4 +1,5 @@
 name: UCOA Live Phone QA
+# Re-run acceptance whenever a live Android client is connected.
 
 on:
   push:
