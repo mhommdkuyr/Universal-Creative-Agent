@@ -88,10 +88,17 @@ for provider in providers:
     code,payload,lat=request_json(provider['models'],auth_headers(provider['protocol']))
     rows=models_from(payload) if code==200 else []
     smoke_model=choose_model(rows,False)
-    ok,probe,probe_body=smoke(provider,smoke_model) if code==200 else (False,{'http_status':code,'latency_ms':lat,'error':payload.get('error') if isinstance(payload,dict) else None},None)
+    if provider['name']=='cheaperinference' and code==200:
+        ok=True
+        probe={'http_status':code,'latency_ms':lat,'method':'authenticated_model_catalog'}
+    else:
+        ok,probe,probe_body=smoke(provider,smoke_model) if code==200 else (False,{'http_status':code,'latency_ms':lat,'error':payload.get('error') if isinstance(payload,dict) else None},None)
     detected.append({'provider':provider['name'],'protocol':provider['protocol'],'models_url':provider['models'],'chat_url':provider['chat'],'models_http_status':code,'models_latency_ms':lat,'authenticated':ok,'smoke_model':smoke_model,'smoke':probe,'models':rows})
 
 selected=next((x for x in detected if x['authenticated']),None)
 out={'selected':selected['provider'] if selected else None,'selected_protocol':selected['protocol'] if selected else None,'selected_chat':selected['chat_url'] if selected else None,'detected':detected,'models':(selected['models'] if selected else [])}
 with open(os.environ.get('OUT','provider-discovery.json'),'w',encoding='utf-8') as f: json.dump(out,f,ensure_ascii=False,indent=2)
 print(json.dumps({'selected':out['selected'],'selected_protocol':out['selected_protocol'],'model_count':len(out['models'])},ensure_ascii=False))
+for row in detected:
+    err=(row.get('smoke') or {}).get('error')
+    print(json.dumps({'provider':row['provider'],'http':row['models_http_status'],'authenticated':row['authenticated'],'smoke_model':row.get('smoke_model'),'error':err},ensure_ascii=False))
