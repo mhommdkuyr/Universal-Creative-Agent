@@ -44,7 +44,8 @@ def call(protocol,chat_url,model,messages,image=None):
   url=chat_url
  req=Request(url,data=json.dumps(body,ensure_ascii=False).encode(),headers=headers,method='POST')
  try:
-  with urlopen(req,timeout=TIMEOUT) as r: data=json.loads(r.read().decode())
+  with urlopen(req,timeout=TIMEOUT) as r:
+   response_headers=dict(r.headers.items()); data=json.loads(r.read().decode())
  except HTTPError as e:
   raise RuntimeError('HTTP '+str(e.code)+': '+e.read().decode('utf-8','replace')[:250])
  elapsed=round((time.perf_counter()-started)*1000,2)
@@ -54,6 +55,14 @@ def call(protocol,chat_url,model,messages,image=None):
  else:
   text=(data.get('choices') or [{}])[0].get('message',{}).get('content','')
   if isinstance(text,list): text=''.join(str(x.get('text','') if isinstance(x,dict) else x) for x in text)
+ if protocol=='cheaperinference':
+  ci=data.get('cheaper_inference') or {}
+  usage=dict(usage or {})
+  usage['_billed_cost_usd']=ci.get('billed_cost_usd')
+  usage['_routing_overhead_ms']=response_headers.get('x-ci-routing-overhead-ms')
+  usage['_model_response_ms']=response_headers.get('x-ci-model-response-ms')
+  usage['_tokens_saved']=response_headers.get('x-ci-tokens-saved')
+  usage['_saved_usd']=response_headers.get('x-ci-saved-usd')
  return str(text),usage,elapsed
 
 def parse_json(text):
@@ -93,6 +102,10 @@ def usage_counts(u):
 def cost(model,usage,pricing):
  p=pricing.get(model) or {}
  i,o=usage_counts(usage)[:2]
+ billed=usage.get('_billed_cost_usd') if isinstance(usage,dict) else None
+ if billed is not None:
+  try:return float(billed)
+  except Exception: pass
  if i is None or o is None: return None
  try:return (float(i)*float(p.get('prompt',0))+float(o)*float(p.get('completion',0)))/1000000.0
  except Exception:return None
@@ -123,7 +136,7 @@ def main(out_file,catalog_file):
      params=dobj.get('params',{}) if isinstance(dobj,dict) else {}; texts=params.get('texts',[]) if isinstance(params,dict) else []; texts=[texts] if isinstance(texts,str) else texts
      dok=action=='click_any_text' and any(str(x).strip().lower()==task['target'].lower() for x in texts)
      vc=cost(vm,vu,pricing); dc=cost(dm,du,pricing)
-     results.append({'task':task['name'],'vision_model':vm,'decision_model':dm,'vision_ok':vok,'decision_ok':dok,'pair_ok':vok and dok,'vision_latency_ms':vl,'decision_latency_ms':dl,'total_latency_ms':round(vl+dl,2),'vision_usage':vu,'decision_usage':du,'vision_cost_usd':vc,'decision_cost_usd':dc,'pair_cost_usd':(vc or 0)+(dc or 0),'vision_text':txt[:1000],'decision_text':dt[:1000]})
+     results.append({'task':task['name'],'vision_model':vm,'decision_model':dm,'vision_ok':vok,'decision_ok':dok,'pair_ok':vok and dok,'vision_latency_ms':vl,'decision_latency_ms':dl,'total_latency_ms':round(vl+dl,2),'vision_usage':vu,'decision_usage':du,'vision_cost_usd':vc,'decision_cost_usd':dc,'pair_cost_usd':(vc or 0)+(dc or 0),'vision_routing_ms':vu.get('_routing_overhead_ms'),'vision_model_response_ms':vu.get('_model_response_ms'),'decision_routing_ms':du.get('_routing_overhead_ms'),'decision_model_response_ms':du.get('_model_response_ms'),'vision_billed_cost_usd':vu.get('_billed_cost_usd'),'decision_billed_cost_usd':du.get('_billed_cost_usd'),'vision_text':txt[:1000],'decision_text':dt[:1000]})
     except Exception as e: results.append({'task':task['name'],'vision_model':vm,'decision_model':dm,'vision_ok':vok,'decision_ok':False,'pair_ok':False,'error':'DECISION:'+str(e)[:300]})
  summary={}
  for r in results:
