@@ -104,6 +104,8 @@ jobs:
       - name: Discover results storage bucket
         id: bucket
         shell: bash
+        env:
+          CONFIGURED_RESULTS_BUCKET: ${{ secrets.FIREBASE_TEST_RESULTS_BUCKET || secrets.RESULTS_BUCKET || '' }}
         run: |
           set -euo pipefail
           PROJECT_ID="$(python3 - <<'PY'
@@ -112,7 +114,19 @@ jobs:
           print(json.load(open(path))['project_id'])
           PY
           )"
-          BUCKET="$(PROJECT_ID="$PROJECT_ID" python3 - <<'PY'
+
+          normalize_bucket() {
+            local value="$1"
+            if [ -n "$value" ] && [[ "$value" != gs://* ]]; then
+              value="gs://$value"
+            fi
+            printf '%s' "$value"
+          }
+
+          BUCKET="$(normalize_bucket "$CONFIGURED_RESULTS_BUCKET")"
+
+          if [ -z "$BUCKET" ]; then
+            BUCKET="$(PROJECT_ID="$PROJECT_ID" python3 - <<'PY'
           import subprocess, json, sys, os
           project_id = os.environ.get('PROJECT_ID', '')
           try:
@@ -125,15 +139,23 @@ jobs:
                       sys.exit(0)
           except Exception:
               pass
-          if project_id:
-              print(f"{project_id}.appspot.com")
-          else:
-              print('')
+          print('')
           PY
-          )"
-          if [ -n "$BUCKET" ] && [[ "$BUCKET" != gs://* ]]; then
-            BUCKET="gs://$BUCKET"
+            )"
+            BUCKET="$(normalize_bucket "$BUCKET")"
           fi
+
+          if [ -z "$BUCKET" ]; then
+            CANDIDATE="gs://ucoa-ftl-results-${PROJECT_ID}"
+            echo "No existing results bucket found. Attempting to create $CANDIDATE"
+            if gcloud storage buckets create "$CANDIDATE" --project="$PROJECT_ID" --location=us-central1 --uniform-bucket-level-access; then
+              BUCKET="$CANDIDATE"
+            else
+              echo "::error title=Physical acceptance blocked::No accessible Firebase Test Lab results bucket exists, and the workflow could not create $CANDIDATE. Provide FIREBASE_TEST_RESULTS_BUCKET/RESULTS_BUCKET pointing to an existing billing-enabled GCS bucket with write access, or grant the service account permission to create a bucket."
+              exit 1
+            fi
+          fi
+
           test -n "$BUCKET"
           echo "BUCKET=$BUCKET" >> "$GITHUB_OUTPUT"
           echo "Discovered Cloud Storage Bucket: $BUCKET"
