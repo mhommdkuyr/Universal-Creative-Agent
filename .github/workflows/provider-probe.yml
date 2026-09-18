@@ -1,6 +1,11 @@
 name: Live Provider Probe
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'server/provider_router.py'
+      - 'server/app.py'
+      - '.github/workflows/provider-probe.yml'
   schedule:
     - cron: '13 */6 * * *'
 
