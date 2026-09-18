@@ -33,11 +33,17 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x ./gradlew
-          ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest
+          ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest --stacktrace --info 2>&1 | tee ../gradle-devicefarm.log
           cp app/build/outputs/apk/debug/app-debug.apk ../devicefarm-app.apk
           mkdir -p ../devicefarm-test-package
           cp app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk ../devicefarm-test-package/app-debug-androidTest.apk
           cd ../devicefarm-test-package && zip -q ../devicefarm-test-package.zip app-debug-androidTest.apk
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: aws-devicefarm-gradle-log
+          path: gradle-devicefarm.log
+          if-no-files-found: ignore
       - name: Create or reuse Device Farm project
         id: project
         run: |
@@ -59,7 +65,7 @@ jobs:
         id: test
         run: |
           set -euo pipefail
-          URL=$(aws devicefarm create-upload --project-arn "${{ steps.project.outputs.project_arn }}" --name ucoa-instrumentation.zip --type ANDROID_APP --query upload.url --output text)
+          URL=$(aws devicefarm create-upload --project-arn "${{ steps.project.outputs.project_arn }}" --name ucoa-instrumentation.zip --type INSTRUMENTATION --query upload.url --output text)
           curl --fail --retry 3 --upload-file devicefarm-test-package.zip "${URL}"
           ARN=$(aws devicefarm list-uploads --arn "${{ steps.project.outputs.project_arn }}" --query "uploads[?name=='ucoa-instrumentation.zip'] | sort_by(@,&created)[-1].arn" --output text)
           echo "test_arn=${ARN}" >> "$GITHUB_OUTPUT"
