@@ -69,7 +69,16 @@ jobs:
         id: project
         run: |
           NAME="UCOA-Real-Android"
-          ARN=$(aws devicefarm list-projects --query "projects[?name=='${NAME}'].arn | [0]" --output text)
+          set +e
+          ARN=$(aws devicefarm list-projects --query "projects[?name=='${NAME}'].arn | [0]" --output text 2>&1)
+          LIST_RC=$?
+          set -e
+          echo "list-projects rc=${LIST_RC} response=${ARN}"
+          if [ "${LIST_RC}" -ne 0 ]; then
+            echo "Device Farm list-projects failed; print caller identity and fail with raw AWS error."
+            aws sts get-caller-identity || true
+            exit "${LIST_RC}"
+          fi
           if [ -z "${ARN}" ] || [ "${ARN}" = "None" ]; then
             ARN=$(aws devicefarm create-project --name "${NAME}" --query project.arn --output text)
           fi
