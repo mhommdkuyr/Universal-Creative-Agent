@@ -145,7 +145,7 @@ def research(query: str, limit: int = 6) -> list[dict[str,str]]:
 
 
 def _requested_app(task: str, installed: list[str]) -> str | None:
-    t=task.lower(); aliases={"capcut":"CapCut","كاب كات":"CapCut","youtube":"YouTube","يوتيوب":"YouTube","canva":"Canva","كانفا":"Canva","chrome":"Chrome","كروم":"Chrome","instagram":"Instagram","انستجرام":"Instagram","whatsapp":"WhatsApp","واتساب":"WhatsApp","telegram":"Telegram","تليجرام":"Telegram"}
+    t=task.lower(); aliases={"settings":"settings","setting":"settings","الإعدادات":"settings","اعدادات":"settings","الضبط":"settings","capcut":"CapCut","كاب كات":"CapCut","youtube":"YouTube","يوتيوب":"YouTube","canva":"Canva","كانفا":"Canva","chrome":"Chrome","كروم":"Chrome","instagram":"Instagram","انستجرام":"Instagram","whatsapp":"WhatsApp","واتساب":"WhatsApp","telegram":"Telegram","تليجرام":"Telegram"}
     for key,label in aliases.items():
         if key in t and any(label.lower() in a.lower() for a in installed): return label
     return next((a for a in installed if len(a)>3 and a.lower() in t),None)
@@ -169,8 +169,61 @@ def run_plan(req: Any) -> dict[str, Any]:
     app_v3.remember(sid,"plan",result); app_v3.save_state(sid,{"phase":"planned","task":req.task,"step":0,"plan":result}); return result
 
 
+def _looks_like_target_ui(target: str | None, ui_tree: str) -> bool:
+    if not target or not ui_tree:
+        return False
+    t = ui_tree.lower()
+    if target == "settings":
+        markers = [
+            "settings", "الإعدادات", "الضبط", "connections", "الاتصالات",
+            "wi-fi", "wifi", "الشبكة", "network", "sound", "الصوت",
+            "display", "الشاشة", "apps", "التطبيقات", "notifications", "الإشعارات"
+        ]
+        return sum(1 for m in markers if m in t) >= 3
+    return target.lower() in t
+
+def _explicit_open_task_target(task: str, installed: list[str]) -> str | None:
+    t = task.lower()
+    open_markers = ["open", "launch", "start", "افتح", "فتح", "شغل", "تشغيل"]
+    if not any(m in t for m in open_markers):
+        return None
+    return _requested_app(task, installed)
 def run_step(req: Any) -> dict[str, Any]:
     sid=app_v3.ensure_session(req.session_id)
+    explicit_target = _explicit_open_task_target(req.task, req.installed_apps)
+    if explicit_target:
+        if _looks_like_target_ui(explicit_target, req.ui_tree):
+            return {
+                "action": "done",
+                "params": {},
+                "message": f"تم التحقق من ظهور {explicit_target} عبر Accessibility UI evidence.",
+                "done": True,
+                "wait_after_ms": 300,
+                "confidence": 1.0,
+                "coordinate_space": None,
+                "verification_goal": "إثبات ظهور التطبيق المطلوب على الشاشة",
+                "provider": "deterministic-target-gate",
+                "vision_provider": "Accessibility-tree",
+                "output_mode": "deterministic_target_gate",
+                "target_confirmed": True,
+                "screenshot_evidence_required": True,
+            }
+        if req.step == 0 or any(str(h.get("action", "")) == "click_any_text" and not bool(h.get("ok", False)) for h in req.history[-3:]):
+            query = "settings" if explicit_target == "settings" else explicit_target
+            return {
+                "action": "open_app_by_name",
+                "params": {"app_name": query},
+                "message": f"فتح {query} مباشرة بدل التخمين بالنقر.",
+                "done": False,
+                "wait_after_ms": 900,
+                "confidence": 1.0,
+                "coordinate_space": None,
+                "verification_goal": "ظهور واجهة التطبيق المطلوب",
+                "provider": "deterministic-target-gate",
+                "vision_provider": "Accessibility-tree",
+                "output_mode": "deterministic_target_gate",
+                "target_confirmed": False,
+            }
     visual_changed = app_v3.visual is not _LEGACY_VISUAL
     reasoning_changed = app_v3.reasoning is not _LEGACY_REASONING
     call_vision_changed = app_v3.call_vision is not _LEGACY_CALL_VISION
@@ -212,10 +265,20 @@ def run_step(req: Any) -> dict[str, Any]:
 
 def verify_result(req: Any) -> dict[str, Any]:
     out=app_v3.independent_verify(req.task,req.action,req.before_ui_tree,req.after_ui_tree)
+    target = _explicit_open_task_target(req.task, [])
+    if target and _looks_like_target_ui(target, req.after_ui_tree):
+        out["verified"] = True
+        out["target_confirmed"] = True
+        out["verification_source"] = "Accessibility-tree-target-gate"
+        out["reason"] = f"UI evidence confirms target: {target}"
+    elif req.action.get("action") == "done" and target:
+        out["verified"] = False
+        out["target_confirmed"] = False
+        out.setdefault("reasons", []).append("target_not_confirmed")
+    out["screenshot_evidence_present"] = bool(req.after_screenshot_base64)
     if req.before_screenshot_base64 and req.after_screenshot_base64:
         changed=hashlib.sha256(req.before_screenshot_base64.encode()).digest()!=hashlib.sha256(req.after_screenshot_base64.encode()).digest()
         out["screenshot_changed"]=changed
-        if changed: out["verified"]=True
     return out
 
 app_v3.run_plan=run_plan
