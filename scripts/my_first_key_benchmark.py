@@ -38,7 +38,9 @@ providers=[
 ]
 
 def auth_headers(protocol):
-    return {'x-goog-api-key':KEY} if protocol=='gemini' else {'Authorization':'Bearer '+KEY}
+    if protocol=='gemini': return {'x-goog-api-key':KEY}
+    if protocol=='cheaperinference': return {'x-api-key':KEY}
+    return {'Authorization':'Bearer '+KEY}
 
 def models_from(payload):
     if not isinstance(payload,dict): return []
