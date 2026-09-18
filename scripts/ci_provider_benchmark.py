@@ -5,7 +5,7 @@ from urllib.request import Request, urlopen
 from PIL import Image, ImageDraw
 
 BASE='https://openrouter.ai/api/v1/chat/completions'
-KEY=os.environ['PROVIDER_KEY']
+KEY=os.environ['PROVIDER_KEY'].strip()
 
 VISION_MODELS=['google/gemini-3.8-flash','inclusionai/ling-3.0-flash-vl:free','nex-agi/nex-n2.5-pro:free','qwen/qwen3.8-27b:free']
 DECISION_MODELS=['openai/gpt-6-astra','qwen/qwen3.8-27b:free','nex-agi/nex-n2.5-pro:free','inclusionai/ling-3.0-flash-sante:free']
