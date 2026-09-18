@@ -45,7 +45,11 @@ def _github_oidc_claims(authorization: str | None) -> dict[str, Any]:
     if workflow not in GITHUB_QA_WORKFLOW_ALIASES:
         raise HTTPException(403, "Workflow is not authorized for phone QA")
     workflow_ref = str(claims.get("job_workflow_ref", ""))
-    allowed_refs = ("/.github/workflows/phone-live-e2e.yml@refs/heads/main", "/.github/workflows/render-bridge-smoke.yml@refs/heads/main")
+    allowed_refs = (
+        "/.github/workflows/phone-live-e2e.yml@refs/heads/main",
+        "/.github/workflows/render-bridge-smoke.yml@refs/heads/main",
+        "/.github/workflows/ci.yml@refs/heads/main",
+    )
     if not any(workflow_ref.endswith(ref) for ref in allowed_refs):
         raise HTTPException(403, "Unexpected QA workflow reference")
     return claims
