@@ -5,62 +5,195 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      BASE: https://ucoa-agent-brain.onrender.com
+
     steps:
-      - name: Check health
-        run: |
-          set -e
-          curl --fail --silent --show-error --retry 8 --retry-delay 5 https://ucoa-agent-brain.onrender.com/health | tee health.json
-      - name: Check bridge route is registered
-        run: |
-          set -e
-          code=$(curl -sS -o /tmp/bridge-response.json -w '%{http_code}' https://ucoa-agent-brain.onrender.com/v1/client/commands/next)
-          echo "bridge route HTTP status: $code"
-          cat /tmp/bridge-response.json || true
-          test "$code" = "401"
-      - name: Queue real phone test and wait for completion
-        env:
-          UCOA_AGENT_TOKEN: ${{ secrets.UCOA_AGENT_TOKEN }}
+      - name: Check health and wait for OIDC QA bridge
+        shell: bash
         run: |
           set -euo pipefail
-          test -n "$UCOA_AGENT_TOKEN"
-          base='https://ucoa-agent-brain.onrender.com'
-          devices=$(curl --fail --silent --show-error -H "Authorization: Bearer $UCOA_AGENT_TOKEN" "$base/v1/admin/devices")
-          echo "$devices" > /tmp/devices.json
-          install_id=$(python - <<'PY'
-          import json
-          data=json.load(open('/tmp/devices.json'))
-          devices=data.get('devices') or []
-          if not devices:
-              raise SystemExit('No active Android device session found')
-          print(devices[0])
-          PY
-          )
-          echo "Active test device discovered: ${install_id:0:8}..."
-          payload=$(python - <<'PY'
-          import json
-          print(json.dumps({"kind":"task","task":"افتح تطبيق الإعدادات"}, ensure_ascii=False))
-          PY
-          )
-          response=$(curl --fail --silent --show-error -X POST -H "Authorization: Bearer $UCOA_AGENT_TOKEN" -H 'Content-Type: application/json' -d "$payload" "$base/v1/admin/devices/$install_id/commands")
-          echo "$response" | tee /tmp/command.json
-          command_id=$(python - <<'PY'
-          import json
-          d=json.load(open('/tmp/command.json'))
-          print(d['command_id'])
-          PY
-          )
-          for i in $(seq 1 48); do
+
+          get_oidc_token() {
+            curl --fail --silent --show-error \
+              -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=ucoa-live-phone" |
+              python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])'
+          }
+
+          curl --fail --silent --show-error --retry 8 --retry-delay 5 "${BASE}/health" | tee health.json
+
+          for i in $(seq 1 60); do
+            token="$(get_oidc_token)"
+            code="$(curl -sS -o /tmp/devices.json -w '%{http_code}' \
+              -H "Authorization: Bearer ${token}" \
+              "${BASE}/v1/qa/phone/devices" || true)"
+            echo "OIDC QA attempt=${i} HTTP=${code}"
+            if [ "${code}" = "200" ]; then
+              cat /tmp/devices.json
+              count="$(python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("devices") or []))' < /tmp/devices.json)"
+              if [ "${count}" -gt 0 ]; then
+                cp /tmp/devices.json devices-before.json
+                echo "Connected phone found through cloud bridge."
+                exit 0
+              fi
+            fi
             sleep 5
-            status_json=$(curl --fail --silent --show-error -H "Authorization: Bearer $UCOA_AGENT_TOKEN" "$base/v1/admin/devices/$install_id/commands/$command_id")
-            echo "$status_json"
-            status=$(python -c 'import json,sys; print(json.load(sys.stdin)["command"]["status"])' <<< "$status_json")
-            case "$status" in
-              completed) exit 0 ;;
-              failed|cancelled) echo "Bridge test ended with status=$status"; exit 1 ;;
-            esac
           done
-          echo 'Bridge command did not complete within 240 seconds'
+
+          echo "No connected phone session was visible through the OIDC QA bridge."
           exit 1
+
+      - name: Check bridge route authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS -o /tmp/bridge-response.json -w '%{http_code}' "${BASE}/v1/client/commands/next")"
+          echo "bridge route HTTP status: ${code}"
+          cat /tmp/bridge-response.json || true
+          test "${code}" = "401"
+
+      - name: Run live phone suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p phone-results
+
+          get_oidc_token() {
+            curl --fail --silent --show-error \
+              -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=ucoa-live-phone" |
+              python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])'
+          }
+
+          run_task() {
+            local name="$1"
+            local task="$2"
+            echo "===== TASK: ${name} ====="
+            echo "${task}"
+
+            local body
+            body="$(python3 - "${task}" <<'PY'
+import json,sys
+task=sys.argv[1]
+print(json.dumps({
+  "kind":"task",
+  "task":task,
+  "attachments":[],
+  "metadata":{"qa_suite":"live-phone-e2e","case":task[:80]}
+},ensure_ascii=False))
+PY
+)"
+
+            local token
+            token="$(get_oidc_token)"
+
+            local queued
+            queued="$(curl --fail --silent --show-error \
+              -H "Authorization: Bearer ${token}" \
+              -H "Content-Type: application/json" \
+              -d "${body}" \
+              "${BASE}/v1/qa/phone/commands")"
+
+            echo "${queued}" | tee "phone-results/${name}-queued.json"
+
+            local command_id
+            command_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["command_id"])' <<<"${queued}")"
+            test -n "${command_id}"
+
+            for i in $(seq 1 120); do
+              token="$(get_oidc_token)"
+              local state
+              state="$(curl --fail --silent --show-error \
+                -H "Authorization: Bearer ${token}" \
+                "${BASE}/v1/qa/phone/commands/${command_id}")"
+              echo "${state}" > "phone-results/${name}-latest.json"
+
+              local status
+              status="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["command"]["status"])' <<<"${state}")"
+              echo "poll=${i} status=${status}"
+
+              if [ "${status}" = "completed" ] || [ "${status}" = "failed" ] || [ "${status}" = "cancelled" ]; then
+                break
+              fi
+              sleep 2
+            done
+
+            local final_status
+            final_status="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["command"]["status"])' "phone-results/${name}-latest.json")"
+            cat "phone-results/${name}-latest.json"
+
+            if [ "${final_status}" != "completed" ]; then
+              echo "::error title=Live phone command failed::${name} ended with status=${final_status}"
+              return 1
+            fi
+
+            python3 - "${name}" <<'PY'
+import json,sys
+name=sys.argv[1]
+d=json.load(open(f"phone-results/{name}-latest.json"))
+r=d["command"].get("result") or {}
+steps=int(r.get("steps",0) or 0)
+fg=r.get("final_foreground","")
+err=r.get("error","")
+print(f"RESULT {name}: steps={steps} foreground={fg} error={err}")
+if steps <= 0:
+    raise SystemExit("No execution steps were recorded")
+if err:
+    raise SystemExit(f"Command reported error: {err}")
+PY
+          }
+
+          run_task "01-settings-observe" "افتح إعدادات Android فقط، ثم تأكد أن شاشة الإعدادات ظهرت فعليًا، ولا تغيّر أي إعداد."
+          run_task "02-settings-search" "افتح إعدادات Android، استخدم البحث إن كان ظاهرًا، اكتب Display أو الشاشة، افتح نتيجة مناسبة لخيارات العرض، ثم ارجع دون تغيير أي إعداد."
+          run_task "03-chrome-url" "افتح Chrome وافتح https://example.com ثم تحقق من ظهور الصفحة، وبعدها ارجع إلى الشاشة السابقة دون تسجيل دخول أو إرسال أي بيانات."
+          run_task "04-chrome-scroll" "افتح Chrome على https://example.com، مرر الصفحة إلى الأسفل ثم إلى الأعلى، ثم استخدم زر الرجوع للعودة، مع التحقق من كل خطوة."
+          run_task "05-home-return" "افتح إعدادات Android، انتقل إلى شاشة فرعية آمنة مثل حول الهاتف إن كانت ظاهرة، ارجع، ثم انتقل إلى الشاشة الرئيسية، وبعدها افتح الإعدادات مرة أخرى وتحقق من عودتها للعمل."
+          run_task "06-app-discovery" "افحص التطبيقات المثبتة. إن كان CapCut موجودًا فافتحه فقط وتأكد من ظهور شاشته الرئيسية دون إنشاء أو تعديل أو نشر أي محتوى؛ وإن لم يكن موجودًا فافتح Chrome بدلًا منه. لا تغيّر أي بيانات."
+          run_task "07-multistep" "نفّذ مهمة متعددة الخطوات على الهاتف: افتح الإعدادات، استخدم البحث أو التنقل للوصول إلى قسم العرض/الشاشة، مرر داخل الصفحة، افتح عنصرًا فرعيًا آمنًا، ثم ارجع حتى الصفحة الرئيسية للإعدادات. تحقق بعد كل خطوة ولا تغيّر أي إعداد."
+          run_task "08-recovery" "نفّذ مهمة آمنة تتطلب تصحيح المسار: افتح Chrome، اذهب إلى https://example.com، حاول الوصول إلى رابط ظاهر بطريقة صحيحة، ثم إن لم يكن الرابط قابلًا للتنفيذ عد إلى الشاشة السابقة وأعد الملاحظة، وفي النهاية ارجع دون إرسال نموذج أو تسجيل دخول."
+          run_task "09-complex" "نفّذ سيناريو مركبًا بالكامل على الهاتف: افتح الإعدادات وتحقق منها، انتقل إلى قسم آمن دون تعديل، ارجع، افتح Chrome إلى https://example.com، نفّذ تمريرًا للأسفل ثم للأعلى، ارجع، انتقل إلى الشاشة الرئيسية، ثم افتح الإعدادات مرة أخرى وتحقق من النتيجة النهائية."
+          run_task "10-final-verification" "أثبت أن الوكيل السحابي يستطيع الملاحظة واتخاذ القرار والتنفيذ والتحقق والإصلاح: افتح الإعدادات، انتقل إلى قسم عرض آمن، عد خطوة، افتح Chrome على https://example.com، ثم عُد إلى الإعدادات. لا تغيّر أي إعداد ولا ترسل أي بيانات."
+
+      - name: Verify final connected phone
+        shell: bash
+        run: |
+          set -euo pipefail
+          get_oidc_token() {
+            curl --fail --silent --show-error \
+              -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=ucoa-live-phone" |
+              python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])'
+          }
+          token="$(get_oidc_token)"
+          curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${token}" \
+            "${BASE}/v1/qa/phone/devices" | tee devices-after.json
+          python3 - <<'PY'
+import json
+d=json.load(open("devices-after.json"))
+if not (d.get("devices") or []):
+    raise SystemExit("Connected phone disappeared before final verification")
+print(json.dumps(d,ensure_ascii=False,indent=2))
+PY
+
+      - name: Upload live phone evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ucoa-live-phone-e2e-${{ github.sha }}
+          path: |
+            health.json
+            devices-before.json
+            devices-after.json
+            phone-results/
+          if-no-files-found: ignore
+          retention-days: 14
