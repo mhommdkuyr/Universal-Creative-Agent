@@ -195,6 +195,16 @@ def run_step(req: Any) -> dict[str, Any]:
     sid=app_v3.ensure_session(req.session_id)
     explicit_target = _explicit_open_task_target(req.task, req.installed_apps)
     if explicit_target:
+        if explicit_target == "settings" and req.foreground_package == "com.android.settings" and req.ui_tree and req.ui_tree != "[]":
+            return {
+                "action": "done", "params": {},
+                "message": "تأكيد Settings من حزمة التطبيق وشجرة Accessibility.",
+                "done": True, "wait_after_ms": 300, "confidence": 1.0,
+                "coordinate_space": None, "verification_goal": "إثبات واجهة Android Settings على الجهاز",
+                "provider": "deterministic-foreground-gate", "vision_provider": "Accessibility-tree",
+                "output_mode": "deterministic-foreground-gate", "target_confirmed": True,
+                "screenshot_evidence_required": True,
+            }
         if _looks_like_target_ui(explicit_target, req.ui_tree):
             return {
                 "action": "done",
@@ -268,20 +278,16 @@ def run_step(req: Any) -> dict[str, Any]:
 def verify_result(req: Any) -> dict[str, Any]:
     out=app_v3.independent_verify(req.task,req.action,req.before_ui_tree,req.after_ui_tree)
     target = _explicit_open_task_target(req.task, [])
-    if target and _looks_like_target_ui(target, req.after_ui_tree):
+    if target == "settings" and req.foreground_package == "com.android.settings" and req.after_ui_tree and req.after_ui_tree != "[]" and req.after_screenshot_base64:
+        out["verified"] = True
+        out["target_confirmed"] = True
+        out["verification_source"] = "foreground-package+Accessibility-tree+screen-capture"
+        out["reason"] = "Device reports com.android.settings with non-empty Accessibility UI and screenshot evidence."
+    elif target and _looks_like_target_ui(target, req.after_ui_tree):
         out["verified"] = True
         out["target_confirmed"] = True
         out["verification_source"] = "Accessibility-tree-target-gate"
         out["reason"] = f"UI evidence confirms target: {target}"
-    elif target == "settings" and req.after_ui_tree and req.after_ui_tree != "[]":
-        # The deterministic gate has already attempted the Settings package.
-        # Require non-empty Accessibility evidence plus screenshot evidence;
-        # do not accept a mere external-app launch as success.
-        if req.after_screenshot_base64:
-            out["verified"] = True
-            out["target_confirmed"] = True
-            out["verification_source"] = "UCOA-accessibility-plus-screenshot"
-            out["reason"] = "Non-empty UCOA Accessibility tree and screenshot were captured after opening Settings."
     elif req.action.get("action") == "done" and target:
         out["verified"] = False
         out["target_confirmed"] = False
