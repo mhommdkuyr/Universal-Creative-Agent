@@ -147,7 +147,7 @@ def research(query: str, limit: int = 6) -> list[dict[str,str]]:
 def _requested_app(task: str, installed: list[str]) -> str | None:
     t=task.lower(); aliases={"settings":"settings","setting":"settings","الإعدادات":"settings","اعدادات":"settings","الضبط":"settings","capcut":"CapCut","كاب كات":"CapCut","youtube":"YouTube","يوتيوب":"YouTube","canva":"Canva","كانفا":"Canva","chrome":"Chrome","كروم":"Chrome","instagram":"Instagram","انستجرام":"Instagram","whatsapp":"WhatsApp","واتساب":"WhatsApp","telegram":"Telegram","تليجرام":"Telegram"}
     for key,label in aliases.items():
-        if key in t and any(label.lower() in a.lower() for a in installed): return label
+        if key in t: return label
     return next((a for a in installed if len(a)>3 and a.lower() in t),None)
 
 
