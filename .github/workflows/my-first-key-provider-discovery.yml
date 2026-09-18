@@ -14,7 +14,7 @@ permissions:
 jobs:
   discover:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     env:
       PROVIDER_KEY: ${{ secrets.MY_FIRST_KEY }}
     steps:
