@@ -49,6 +49,7 @@ def _github_oidc_claims(authorization: str | None) -> dict[str, Any]:
         "/.github/workflows/phone-live-e2e.yml@refs/heads/main",
         "/.github/workflows/render-bridge-smoke.yml@refs/heads/main",
         "/.github/workflows/ci.yml@refs/heads/main",
+        "/.github/workflows/ucoa-live-qa.yml@refs/heads/main",
     )
     if not any(workflow_ref.endswith(ref) for ref in allowed_refs):
         raise HTTPException(403, "Unexpected QA workflow reference")
