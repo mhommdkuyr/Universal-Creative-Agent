@@ -29,3 +29,5 @@ dependencies {
 // AWS Device Farm real-device acceptance build path
 
 // trigger AWS Device Farm acceptance after SDK setup fix
+
+// trigger AWS Device Farm after SDK preparation fix
