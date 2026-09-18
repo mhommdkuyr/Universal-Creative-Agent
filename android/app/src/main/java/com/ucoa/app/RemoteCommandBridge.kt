@@ -45,6 +45,7 @@ class RemoteCommandBridge(private val context: Context, private val service: Uco
             executeCommandInternal(command)
         } catch (e: Exception) {
             UcoaDiagnostics.log("REMOTE_BRIDGE", "استثناء أثناء تنفيذ المهمة", "id=$id error=${e.javaClass.simpleName}: ${e.message}")
+            service.liveExecutionOverlay()?.finish(false, "خطأ في UCOA: ${e.message ?: e.javaClass.simpleName}")
             report(id, "failed", JSONObject().put("stage", "executor").put("error", e.message ?: e.javaClass.simpleName))
         }
     }
@@ -56,36 +57,61 @@ class RemoteCommandBridge(private val context: Context, private val service: Uco
         if (kind != "task") { report(id, "failed", JSONObject().put("error", "Unsupported command kind: $kind")); return }
         val task = payload.optString("task").trim(); val attachments = list(payload.optJSONArray("attachments"))
         if (task.isBlank()) { report(id, "failed", JSONObject().put("error", "Empty task")); return }
+        service.liveExecutionOverlay()?.start(id, task)
         UcoaDiagnostics.log("REMOTE_BRIDGE", "استلام مهمة سحابية", "id=$id task=${task.take(180)}")
         brain.telemetry("remote_task_received", JSONObject().put("command_id", id))
         val plan = awaitPlan(task, attachments)
-        if (!plan.first) { report(id, "failed", JSONObject().put("stage", "plan").put("error", plan.third ?: "plan failed")); return }
+        if (!plan.first) {
+            service.liveExecutionOverlay()?.finish(false, "فشل بناء الخطة السحابية: ${plan.third ?: "plan failed"}")
+            report(id, "failed", JSONObject().put("stage", "plan").put("error", plan.third ?: "plan failed"))
+            return
+        }
+        service.liveExecutionOverlay()?.update(0, 60, "الخطة السحابية", "إرسال القرار إلى UCOA", null, service.foregroundPackageName(), "تم استلام الخطة؛ لن يُعد أي فتح لتطبيق خارجي نجاحًا قبل التحقق.")
 
-        val history = JSONArray(); var completed = false; var lastError = ""
+        val history = JSONArray(); var completed = false; var lastError = ""; var verifiedSteps = 0
         for (step in 0 until 60) {
             if (!running) return
             brain.telemetry("remote_step_prepare", JSONObject().put("command_id", id).put("step", step))
+            service.liveExecutionOverlay()?.update(step + 1, 60, "ملاحظة الشاشة", "التقاط الحالة قبل التنفيذ", null, service.foregroundPackageName(), "UCOA يلتقط UI + screenshot قبل القرار.")
             val beforeUi = safeObserveUi()
             val beforeShot = awaitScreenshot()
             brain.telemetry("remote_step_evidence_ready", JSONObject().put("command_id", id).put("step", step).put("ui_chars", beforeUi.length).put("has_screenshot", !beforeShot.isNullOrBlank()))
             val result = awaitStep(task, step, history, beforeUi, beforeShot, attachments)
             if (!result.first || result.second == null) { lastError = result.third ?: "step failed"; break }
             val action = result.second!!; history.put(action)
-            val name = action.optString("action"); val actionOk = executeAction(action, attachments)
+            val name = action.optString("action")
+            service.liveExecutionOverlay()?.update(step + 1, 60, "قرار Cloud AI", "الأمر المقترح: $name", null, service.foregroundPackageName(), "استدعاء الأمر لا يساوي نجاحًا؛ ستتبع ذلك مراقبة وتحقق.")
+            val actionOk = executeAction(action, attachments)
+            service.liveExecutionOverlay()?.update(step + 1, 60, "التنفيذ", name, null, service.foregroundPackageName(), if (actionOk) "تم استدعاء الأمر؛ التحقق الآن." else "فشل الاستدعاء قبل التحقق.")
             Thread.sleep(action.optLong("wait_after_ms", 700L).coerceIn(100L, 8000L))
             val afterUi = safeObserveUi()
             val afterShot = awaitScreenshot()
             val verification = awaitVerification(task, action, beforeUi, afterUi, beforeShot, afterShot)
-            if (!verification.first && name != "observe") lastError = verification.third ?: "verification failed"
-            UcoaDiagnostics.log("REMOTE_BRIDGE", "تنفيذ أمر سحابي", "id=$id step=$step action=$name ok=$actionOk verified=${verification.first}")
+            val verificationRequired = name != "observe"
+            val verified = !verificationRequired || verification.first
+            if (verificationRequired && verification.first) verifiedSteps += 1
+            service.liveExecutionOverlay()?.update(step + 1, 60, "التحقق", name, verified, service.foregroundPackageName(), verification.third ?: "اعتماد حالة الشاشة قبل/بعد التنفيذ.")
+            if (!verified && verificationRequired) lastError = verification.third ?: "verification failed"
+            UcoaDiagnostics.log("REMOTE_BRIDGE", "تنفيذ أمر سحابي", "id=$id step=$step action=$name ok=$actionOk verified=$verified")
             brain.telemetry("remote_step_done", JSONObject().put("command_id", id).put("step", step).put("action", name).put("action_ok", actionOk).put("verified", verification.first))
-            if (name == "done" || action.optBoolean("done", false)) { completed = actionOk || action.optBoolean("done", false); break }
+            if (name == "done" || action.optBoolean("done", false)) {
+                completed = actionOk && verified
+                if (!completed && lastError.isBlank()) lastError = verification.third ?: "لم يثبت UCOA اكتمال المهمة"
+                break
+            }
             if (!actionOk && !action.optBoolean("optional", false)) lastError = action.optString("error", "action failed")
         }
-        report(id, if (completed) "completed" else "failed", JSONObject().apply {
-            put("task", task.take(2000)); put("steps", history.length()); put("final_foreground", service.foregroundPackageName() ?: "")
+        val result = JSONObject().apply {
+            put("task", task.take(2000))
+            put("steps", history.length())
+            put("verified_steps", verifiedSteps)
+            put("completion_verified_by_ucoa", completed)
+            put("final_foreground", service.foregroundPackageName() ?: "")
+            put("evidence_source", "UCOA Accessibility UI tree + screenshot before/after")
             if (lastError.isNotBlank()) put("error", lastError.take(2000))
-        })
+        }
+        service.liveExecutionOverlay()?.finish(completed, if (completed) "اكتمل بعد تحقق UCOA من الحالة النهائية." else (lastError.ifBlank { "لم يثبت اكتمال المهمة." }))
+        report(id, if (completed) "completed" else "failed", result)
     }
 
     private fun safeObserveUi(timeoutMs: Long = 3000L): String {
