@@ -7,6 +7,7 @@ on:
       - '.github/workflows/phone-live-e2e.yml'
       - 'server/device_bridge.py'
       - 'server/remote_ops.py'
+      - 'server/requirements.txt'
       - 'android/app/src/main/java/com/ucoa/app/RemoteCommandBridge.kt'
       - 'android/app/src/main/java/com/ucoa/app/UcoaAccessibilityService.kt'
 
@@ -20,58 +21,44 @@ jobs:
     timeout-minutes: 45
     env:
       UCOA_BRAIN_URL: https://ucoa-agent-brain.onrender.com
+
     steps:
-      - name: Verify cloud health and wait for QA route
+      - name: Wait for deployed OIDC QA bridge and connected phone
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error --retry 8 --retry-delay 5 "${UCOA_BRAIN_URL}/health" | tee health.json
 
           get_oidc_token() {
             curl --fail --silent --show-error \
               -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=ucoa-live-phone" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])'
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=ucoa-live-phone" |
+              python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])'
           }
+
+          curl --fail --silent --show-error --retry 8 --retry-delay 5 "${UCOA_BRAIN_URL}/health" | tee health.json
 
           for i in $(seq 1 60); do
             TOKEN="$(get_oidc_token)"
             code="$(curl -sS -o /tmp/qa-devices.json -w '%{http_code}' \
               -H "Authorization: Bearer ${TOKEN}" \
-              "${UCOA_BRAIN_URL}/v1/qa/phone/devices")"
-            echo "qa route attempt=$i http=$code"
+              "${UCOA_BRAIN_URL}/v1/qa/phone/devices" || true)"
+            echo "QA bridge attempt=$i http=$code"
             if [ "$code" = "200" ]; then
               cat /tmp/qa-devices.json
               count="$(python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("devices") or []))' < /tmp/qa-devices.json)"
               if [ "$count" -gt 0 ]; then
                 cp /tmp/qa-devices.json qa-devices-before.json
-                echo "Connected phone is visible to the OIDC-protected QA bridge."
+                echo "Connected phone is visible through the cloud QA bridge."
                 exit 0
               fi
             fi
             sleep 5
           done
-          echo "::error title=Live phone bridge unavailable::The deployed cloud did not expose an active connected phone through the OIDC QA bridge."
+
+          echo "::error title=Phone not available::Cloud QA bridge did not expose an active connected phone session."
           exit 1
 
-      - name: Wait for a connected phone
-        shell: bash
-        run: |
-          set -euo pipefail
-          for i in $(seq 1 90); do
-            DEVICES="$(curl --fail --silent --show-error               -H "Authorization: Bearer ${UCOA_AGENT_TOKEN}"               "${UCOA_BRAIN_URL}/v1/admin/devices")"
-            echo "$DEVICES" | tee "devices-${i}.json"
-            INSTALL_ID="$(python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("devices") or [""])[-1])' <<<"$DEVICES")"
-            if [ -n "$INSTALL_ID" ]; then
-              echo "INSTALL_ID=$INSTALL_ID" >> "$GITHUB_ENV"
-              echo "Connected phone found."
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "::error title=Phone not connected::No active UCOA phone session was visible in the cloud."
-          exit 1
-
-      - name: Run safe live command suite
+      - name: Run live phone command suite
         shell: bash
         run: |
           set -euo pipefail
@@ -80,7 +67,8 @@ jobs:
           get_oidc_token() {
             curl --fail --silent --show-error \
               -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=ucoa-live-phone" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])'
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=ucoa-live-phone" |
+              python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])'
           }
 
           run_task() {
@@ -97,25 +85,41 @@ print(json.dumps({
   "kind":"task",
   "task":task,
   "attachments":[],
-  "metadata":{"qa_suite":"live-phone-e2e","case":sys.argv[1][:80]}
+  "metadata":{"qa_suite":"live-phone-e2e","case":task[:80]}
 },ensure_ascii=False))
 PY
 )"
+
+            local oidc
+            oidc="$(get_oidc_token)"
+
             local queued
-            queued="$(curl --fail --silent --show-error               -H "Authorization: Bearer ${UCOA_AGENT_TOKEN}"               -H "Content-Type: application/json"               -d "$body"               "${UCOA_BRAIN_URL}/v1/admin/devices/${INSTALL_ID}/commands")"
-            echo "$queued" | tee "phone-results/${name}-queued.json"
+            queued="$(curl --fail --silent --show-error \
+              -H "Authorization: Bearer ${oidc}" \
+              -H "Content-Type: application/json" \
+              -d "${body}" \
+              "${UCOA_BRAIN_URL}/v1/qa/phone/commands")"
+
+            echo "${queued}" | tee "phone-results/${name}-queued.json"
+
             local command_id
-            command_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["command_id"])' <<<"$queued")"
-            test -n "$command_id"
+            command_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["command_id"])' <<<"${queued}")"
+            test -n "${command_id}"
 
             for i in $(seq 1 120); do
+              oidc="$(get_oidc_token)"
               local state
-              state="$(curl --fail --silent --show-error                 -H "Authorization: Bearer ${UCOA_AGENT_TOKEN}"                 "${UCOA_BRAIN_URL}/v1/admin/devices/${INSTALL_ID}/commands/${command_id}")"
-              echo "$state" > "phone-results/${name}-latest.json"
+              state="$(curl --fail --silent --show-error \
+                -H "Authorization: Bearer ${oidc}" \
+                "${UCOA_BRAIN_URL}/v1/qa/phone/commands/${command_id}")"
+
+              echo "${state}" > "phone-results/${name}-latest.json"
+
               local status
-              status="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["command"]["status"])' <<<"$state")"
-              echo "poll=$i status=$status"
-              if [ "$status" = "completed" ] || [ "$status" = "failed" ] || [ "$status" = "cancelled" ]; then
+              status="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["command"]["status"])' <<<"${state}")"
+              echo "poll=${i} status=${status}"
+
+              if [ "${status}" = "completed" ] || [ "${status}" = "failed" ] || [ "${status}" = "cancelled" ]; then
                 break
               fi
               sleep 2
@@ -125,16 +129,15 @@ PY
             final_status="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["command"]["status"])' "phone-results/${name}-latest.json")"
             cat "phone-results/${name}-latest.json"
 
-            if [ "$final_status" != "completed" ]; then
-              echo "::error title=Live phone command failed::${name} ended with status=$final_status"
+            if [ "${final_status}" != "completed" ]; then
+              echo "::error title=Live phone command failed::${name} ended with status=${final_status}"
               return 1
             fi
 
             python3 - "${name}" <<'PY'
 import json,sys
 name=sys.argv[1]
-p=f"phone-results/{name}-latest.json"
-d=json.load(open(p))
+d=json.load(open(f"phone-results/{name}-latest.json"))
 r=d["command"].get("result") or {}
 steps=int(r.get("steps",0) or 0)
 fg=r.get("final_foreground","")
@@ -143,7 +146,7 @@ print(f"RESULT {name}: steps={steps} foreground={fg} error={err}")
 if steps <= 0:
     raise SystemExit("No execution steps were recorded")
 if err:
-    raise SystemExit(f"Command completed but reported error: {err}")
+    raise SystemExit(f"Command reported error: {err}")
 PY
           }
 
@@ -158,20 +161,29 @@ PY
           run_task "09-complex" "نفّذ سيناريو مركبًا بالكامل على الهاتف: افتح الإعدادات وتحقق منها، انتقل إلى قسم آمن دون تعديل، ارجع، افتح Chrome إلى https://example.com، نفّذ تمريرًا للأسفل ثم للأعلى، ارجع، انتقل إلى الشاشة الرئيسية، ثم افتح الإعدادات مرة أخرى وتحقق من النتيجة النهائية."
           run_task "10-final-verification" "أثبت أن الوكيل السحابي يستطيع الملاحظة واتخاذ القرار والتنفيذ والتحقق والإصلاح: افتح الإعدادات، انتقل إلى قسم عرض آمن، عد خطوة، افتح Chrome على https://example.com، ثم عُد إلى الإعدادات. لا تغيّر أي إعداد ولا ترسل أي بيانات."
 
-      - name: Verify cloud-side evidence after suite
+      - name: Verify final cloud connection
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error             -H "Authorization: Bearer ${UCOA_AGENT_TOKEN}"             "${UCOA_BRAIN_URL}/v1/admin/diagnostics" | tee admin-diagnostics-after.json
-          cp qa-devices-before.json qa-devices-after.json
+
+          get_oidc_token() {
+            curl --fail --silent --show-error \
+              -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=ucoa-live-phone" |
+              python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])'
+          }
+
+          TOKEN="$(get_oidc_token)"
+          curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${TOKEN}" \
+            "${UCOA_BRAIN_URL}/v1/qa/phone/devices" | tee qa-devices-after.json
+
           python3 - <<'PY'
 import json
-before=json.load(open('qa-devices-before.json'))
-after=json.load(open('qa-devices-after.json'))
-print('before', json.dumps(before, ensure_ascii=False, indent=2))
-print('after', json.dumps(after, ensure_ascii=False, indent=2))
-if not (after.get('devices') or []):
-    raise SystemExit('Connected phone session disappeared before final verification')
+d=json.load(open("qa-devices-after.json"))
+print(json.dumps(d,ensure_ascii=False,indent=2))
+if not (d.get("devices") or []):
+    raise SystemExit("Connected phone session disappeared before final verification")
 PY
 
       - name: Upload live phone evidence
@@ -183,7 +195,6 @@ PY
             health.json
             qa-devices-before.json
             qa-devices-after.json
-            devices-*.json
             phone-results/
           if-no-files-found: ignore
           retention-days: 14
