@@ -113,6 +113,7 @@ class ClientReportRequest(BaseModel):
     metrics: dict[str, Any] = Field(default_factory=dict)
 
 class ClientCommandRequest(BaseModel):
+    install_id: str
     kind: str = "task"
     task: str
     attachments: list[str] = Field(default_factory=list)
