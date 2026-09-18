@@ -28,6 +28,7 @@ CACHE_TTL = max(0.0, float(os.getenv("UCOA_VISION_CACHE_TTL", "3")))
 CB_FAILURES = max(1, int(os.getenv("UCOA_PROVIDER_CB_FAILURES", "3")))
 CB_COOLDOWN = max(1.0, float(os.getenv("UCOA_PROVIDER_CB_COOLDOWN", "30")))
 VISION_SPACE = os.getenv("UCOA_VISION_SPACE_URL", "https://akhaliq-qwen3-vl-2b-instruct.hf.space").rstrip("/")
+ALLOW_LEGACY_VISION_SPACE = os.getenv("UCOA_ALLOW_LEGACY_VISION_SPACE", "false").lower() == "true"
 
 PROVIDERS = [
     {"name":"gemini","key_envs":["UCOA_GEMINI_API_KEY","GEMINI_API_KEY"],"base_env":"UCOA_GEMINI_BASE_URL","model_env":"UCOA_GEMINI_MODEL","default_base":"https://generativelanguage.googleapis.com/v1beta","default_model":"gemini-3.8-flash","vision":True,"native_gemini":True},
@@ -178,7 +179,9 @@ def _ordered(image):
     for p in PROVIDERS:
         try: _cfg(p); configured.append(p["name"])
         except Exception: pass
-    preferred = ["gemini","gemini-2","huggingface-vision","huggingface-space","omniroute","huggingface-text","deepseek"] if image else ["gemini","gemini-2","huggingface-text","huggingface-space","cerebras","groq","deepseek","omniroute"]
+    preferred = ["gemini","gemini-2","huggingface-vision","omniroute","deepseek"] if image else ["gemini","gemini-2","huggingface-text","cerebras","groq","deepseek","omniroute"]
+    if ALLOW_LEGACY_VISION_SPACE:
+        preferred.insert(3 if image else 2, "huggingface-space")
     return [name for name in preferred if name in configured and not _is_open(name)]
 
 
