@@ -1,0 +1,122 @@
+name: Live Phone Cloud E2E
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/ucoa-live-single.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  live-phone:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BASE: https://ucoa-agent-brain.onrender.com
+    steps:
+      - name: Wait for stable Render bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 90); do
+            code="$(curl -sS -o /tmp/health.json -w '%{http_code}' "$BASE/health" || true)"
+            echo "health attempt=$i http=$code"
+            if [ "$code" = "200" ]; then
+              cat /tmp/health.json
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 1
+
+      - name: Discover connected phone
+        shell: bash
+        run: |
+          set -euo pipefail
+          get_oidc_token() {
+            curl --fail --silent --show-error               -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}"               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=ucoa-live-phone" |
+              python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])'
+          }
+          for i in $(seq 1 60); do
+            token="$(get_oidc_token)"
+            code="$(curl -sS -o /tmp/devices.json -w '%{http_code}'               -H "Authorization: Bearer ${token}"               "$BASE/v1/qa/phone/devices" || true)"
+            echo "devices attempt=$i http=$code"
+            if [ "$code" = "200" ]; then
+              cat /tmp/devices.json
+              count="$(python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("devices") or []))' < /tmp/devices.json)"
+              if [ "$count" -gt 0 ]; then
+                exit 0
+              fi
+            fi
+            sleep 5
+          done
+          exit 1
+
+      - name: Run one real-device Settings acceptance test
+        shell: bash
+        run: |
+          set -euo pipefail
+          get_oidc_token() {
+            curl --fail --silent --show-error               -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}"               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=ucoa-live-phone" |
+              python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])'
+          }
+
+          task='اختبار قبول حي حقيقي: افتح تطبيق الإعدادات فقط. لا تغيّر أي إعداد. يجب أن يثبت UCOA من الجهاز نفسه أن شاشة الإعدادات ظاهرة عبر Accessibility UI tree ولقطة الشاشة. لا تعتبر بقاء ChatGPT أو فتح متصفح نجاحًا.'
+
+          body="$(python3 - "$task" <<'PY'
+import json,sys
+task=sys.argv[1]
+print(json.dumps({
+  "kind":"task",
+  "task":task,
+  "attachments":[],
+  "metadata":{
+    "qa_suite":"live-phone-single-acceptance",
+    "test_suite":"real_device_live_ui_v5",
+    "evidence_required":True,
+    "no_external_success":True
+  }
+},ensure_ascii=False))
+PY
+)"
+
+          token="$(get_oidc_token)"
+          queued="$(curl --fail --silent --show-error             -H "Authorization: Bearer ${token}"             -H "Content-Type: application/json"             -d "$body"             "$BASE/v1/qa/phone/commands")"
+          echo "$queued"
+
+          command_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["command_id"])' <<<"$queued")"
+          test -n "$command_id"
+
+          for i in $(seq 1 120); do
+            token="$(get_oidc_token)"
+            state="$(curl --fail --silent --show-error               -H "Authorization: Bearer ${token}"               "$BASE/v1/qa/phone/commands/$command_id")"
+            echo "$state" > /tmp/state.json
+            status="$(python3 -c 'import json; print(json.load(open("/tmp/state.json"))["command"]["status"])')"
+            echo "poll=$i status=$status"
+            if [ "$status" = "completed" ] || [ "$status" = "failed" ] || [ "$status" = "cancelled" ]; then
+              break
+            fi
+            sleep 2
+          done
+
+          cat /tmp/state.json
+          python3 - <<'PY'
+import json
+d=json.load(open("/tmp/state.json"))["command"]
+if d["status"] != "completed":
+    raise SystemExit(f"Live phone test did not complete: {d['status']}")
+r=d.get("result") or {}
+if r.get("error"):
+    raise SystemExit(f"Command reported error: {r['error']}")
+if not r.get("completion_verified_by_ucoa"):
+    raise SystemExit("UCOA did not provide final execution verification")
+if not str(r.get("final_foreground","")).endswith("com.android.settings"):
+    raise SystemExit(f"Final foreground is not Android Settings: {r.get('final_foreground')}")
+if int(r.get("steps",0) or 0) <= 0:
+    raise SystemExit("No device execution steps were recorded")
+print("REAL_DEVICE_ACCEPTANCE_PASS")
+PY
