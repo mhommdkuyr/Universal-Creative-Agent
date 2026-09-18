@@ -143,12 +143,17 @@ import device_bridge  # noqa: E402,F401
 # Ensure the device polling/result routes are attached to the final FastAPI app.
 # Some production import paths can replace route collections before device_bridge
 # is imported; explicit registration here makes the phone bridge contract deterministic.
-if not any(getattr(r, "path", "") == "/v1/client/commands/next" for r in app_v3.app.routes):
+# Put the exact /next route before the generic /{command_id} route.
+_next_routes = [r for r in app_v3.app.routes if getattr(r, "path", "") == "/v1/client/commands/next"]
+app_v3.app.routes[:] = _next_routes + [r for r in app_v3.app.routes if getattr(r, "path", "") != "/v1/client/commands/next"]
+if not _next_routes:
     app_v3.app.add_api_route(
         "/v1/client/commands/next",
         device_bridge.next_device_command,
         methods=["GET"],
     )
+    _next_routes = [r for r in app_v3.app.routes if getattr(r, "path", "") == "/v1/client/commands/next"]
+    app_v3.app.routes[:] = _next_routes + [r for r in app_v3.app.routes if getattr(r, "path", "") != "/v1/client/commands/next"]
 if not any(getattr(r, "path", "") == "/v1/client/commands/{command_id}/result" for r in app_v3.app.routes):
     app_v3.app.add_api_route(
         "/v1/client/commands/{command_id}/result",
