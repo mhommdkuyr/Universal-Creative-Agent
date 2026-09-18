@@ -119,15 +119,39 @@ class RemoteCommandBridge(private val context: Context, private val service: Uco
             if (verificationRequired && verification.first) verifiedSteps += 1
             service.liveExecutionOverlay()?.update(step + 1, 60, "التحقق", name, verified, service.foregroundPackageName(), verification.third ?: "اعتماد حالة الشاشة قبل/بعد التنفيذ.")
             if (!verified && verificationRequired) lastError = verification.third ?: "verification failed"
-            UcoaDiagnostics.log("REMOTE_BRIDGE", "تنفيذ أمر سحابي", "id=$id step=$step action=$name ok=$actionOk verified=$verified")
+
+            // A verified target state is authoritative evidence even when the
+            // low-level action invocation reports false. This is important for
+            // Android Settings where an Accessibility window may already expose
+            // the target screen while the launcher intent itself returns false.
+            val targetConfirmedByUcoa =
+                verificationRequired &&
+                verification.first &&
+                taskRequestsSettings(task) &&
+                afterUi.isNotBlank() &&
+                afterUi != "[]" &&
+                !afterShot.isNullOrBlank()
+
+            if (targetConfirmedByUcoa) {
+                completed = true
+                verifiedSteps = maxOf(verifiedSteps, step + 1)
+                lastError = ""
+                service.liveExecutionOverlay()?.update(
+                    step + 1, 60, "نجاح مؤكد من UCOA", "Android Settings",
+                    true, service.foregroundPackageName(),
+                    "تم إثبات شاشة الإعدادات من Accessibility UI tree + screenshot؛ لا يعتمد النجاح على نتيجة استدعاء launcher."
+                )
+            }
+
+            UcoaDiagnostics.log("REMOTE_BRIDGE", "تنفيذ أمر سحابي", "id=$id step=$step action=$name ok=$actionOk verified=$verified targetConfirmed=$targetConfirmedByUcoa")
             brain.telemetry("remote_step_done", JSONObject().put("command_id", id).put("step", step).put("action", name).put("action_ok", actionOk).put("verified", verification.first))
             history.put(JSONObject(action.toString()).apply {
                 put("ucoa_action_ok", actionOk)
                 put("ucoa_verified", verification.first)
                 put("ucoa_foreground_package", service.foregroundPackageName().orEmpty())
             })
-            if (name == "done" || action.optBoolean("done", false)) {
-                completed = actionOk && verified
+            if (completed || name == "done" || action.optBoolean("done", false)) {
+                completed = completed || (actionOk && verified)
                 if (!completed && lastError.isBlank()) lastError = verification.third ?: "لم يثبت UCOA اكتمال المهمة"
                 break
             }
