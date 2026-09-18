@@ -1,0 +1,33 @@
+name: MY_FIRST_KEY Provider Discovery
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "scripts/my_first_key_benchmark.py"
+      - ".github/workflows/my-first-key-provider-discovery.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PROVIDER_KEY: ${{ secrets.MY_FIRST_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Discover provider and available models
+        run: |
+          set -euo pipefail
+          test -n "${PROVIDER_KEY}"
+          python scripts/my_first_key_benchmark.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: my-first-key-provider-discovery
+          path: provider-discovery.json
+          retention-days: 14
