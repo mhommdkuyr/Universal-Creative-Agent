@@ -170,7 +170,7 @@ def _space_call(system, user, image, timeout):
         result = client.predict({"text": system + "\n" + user, "files": []}, [], api_name="/qwen_chat_fn")
     text = str(result).strip()
     if not text: raise RuntimeError("public Qwen space returned empty response")
-    return text
+    return text, {}
 
 
 def _ordered(image):
