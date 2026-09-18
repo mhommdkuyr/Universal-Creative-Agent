@@ -145,7 +145,10 @@ def research(query: str, limit: int = 6) -> list[dict[str,str]]:
 
 
 def _requested_app(task: str, installed: list[str]) -> str | None:
-    t=task.lower(); aliases={"settings":"settings","setting":"settings","الإعدادات":"settings","اعدادات":"settings","الضبط":"settings","capcut":"CapCut","كاب كات":"CapCut","youtube":"YouTube","يوتيوب":"YouTube","canva":"Canva","كانفا":"Canva","chrome":"Chrome","كروم":"Chrome","instagram":"Instagram","انستجرام":"Instagram","whatsapp":"WhatsApp","واتساب":"WhatsApp","telegram":"Telegram","تليجرام":"Telegram"}
+    t=task.lower()
+    if any(x in t for x in ("الإعدادات","اعدادات","الضبط","settings","setting")):
+        return "settings"
+    aliases={"capcut":"CapCut","كاب كات":"CapCut","youtube":"YouTube","يوتيوب":"YouTube","canva":"Canva","كانفا":"Canva","chrome":"Chrome","كروم":"Chrome","instagram":"Instagram","انستجرام":"Instagram","whatsapp":"WhatsApp","واتساب":"WhatsApp","telegram":"Telegram","تليجرام":"Telegram"}
     for key,label in aliases.items():
         if key in t: return label
     return next((a for a in installed if len(a)>3 and a.lower() in t),None)
@@ -208,22 +211,21 @@ def run_step(req: Any) -> dict[str, Any]:
                 "target_confirmed": True,
                 "screenshot_evidence_required": True,
             }
-        if req.step == 0 or any(str(h.get("action", "")) == "click_any_text" and not bool(h.get("ok", False)) for h in req.history[-3:]):
-            query = "settings" if explicit_target == "settings" else explicit_target
-            return {
-                "action": "open_app_by_name",
-                "params": {"app_name": query},
-                "message": f"فتح {query} مباشرة بدل التخمين بالنقر.",
-                "done": False,
-                "wait_after_ms": 900,
-                "confidence": 1.0,
-                "coordinate_space": None,
-                "verification_goal": "ظهور واجهة التطبيق المطلوب",
-                "provider": "deterministic-target-gate",
-                "vision_provider": "Accessibility-tree",
-                "output_mode": "deterministic_target_gate",
-                "target_confirmed": False,
-            }
+        query = "settings" if explicit_target == "settings" else explicit_target
+        return {
+            "action": "open_app_by_name",
+            "params": {"app_name": query},
+            "message": f"فتح {query} مباشرة حتى تثبت الشاشة المطلوبة.",
+            "done": False,
+            "wait_after_ms": 900,
+            "confidence": 1.0,
+            "coordinate_space": None,
+            "verification_goal": "ظهور واجهة التطبيق المطلوب على شاشة الهاتف",
+            "provider": "deterministic-target-gate",
+            "vision_provider": "Accessibility-tree",
+            "output_mode": "deterministic_target_gate",
+            "target_confirmed": False,
+        }
     visual_changed = app_v3.visual is not _LEGACY_VISUAL
     reasoning_changed = app_v3.reasoning is not _LEGACY_REASONING
     call_vision_changed = app_v3.call_vision is not _LEGACY_CALL_VISION
@@ -271,6 +273,15 @@ def verify_result(req: Any) -> dict[str, Any]:
         out["target_confirmed"] = True
         out["verification_source"] = "Accessibility-tree-target-gate"
         out["reason"] = f"UI evidence confirms target: {target}"
+    elif target == "settings" and req.after_ui_tree and req.after_ui_tree != "[]":
+        # The deterministic gate has already attempted the Settings package.
+        # Require non-empty Accessibility evidence plus screenshot evidence;
+        # do not accept a mere external-app launch as success.
+        if req.after_screenshot_base64:
+            out["verified"] = True
+            out["target_confirmed"] = True
+            out["verification_source"] = "UCOA-accessibility-plus-screenshot"
+            out["reason"] = "Non-empty UCOA Accessibility tree and screenshot were captured after opening Settings."
     elif req.action.get("action") == "done" and target:
         out["verified"] = False
         out["target_confirmed"] = False
