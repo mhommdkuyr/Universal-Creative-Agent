@@ -1,4 +1,4 @@
-name: Render Bridge Smoke Check
+name: UCOA Live Phone QA
 
 on:
   push:
@@ -16,7 +16,7 @@ permissions:
 jobs:
   live-phone-qa:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Wait for Render bridge
         shell: bash
