@@ -145,26 +145,31 @@ jobs:
             BUCKET="$(normalize_bucket "$BUCKET")"
           fi
 
-          if [ -z "$BUCKET" ]; then
-            CANDIDATE="gs://ucoa-ftl-results-${PROJECT_ID}"
-            echo "No existing results bucket found. Attempting to create $CANDIDATE"
-            if gcloud storage buckets create "$CANDIDATE" --project="$PROJECT_ID" --location=us-central1 --uniform-bucket-level-access; then
-              BUCKET="$CANDIDATE"
-            else
-              echo "::error title=Physical acceptance blocked::No accessible Firebase Test Lab results bucket exists, and the workflow could not create $CANDIDATE. Provide FIREBASE_TEST_RESULTS_BUCKET/RESULTS_BUCKET pointing to an existing billing-enabled GCS bucket with write access, or grant the service account permission to create a bucket."
-              exit 1
-            fi
-          fi
-
-          test -n "$BUCKET"
+          # Custom bucket is optional. Without it, Firebase Test Lab uses the project's default results bucket.
           echo "BUCKET=$BUCKET" >> "$GITHUB_OUTPUT"
-          echo "Discovered Cloud Storage Bucket: $BUCKET"
+          if [ -n "$BUCKET" ]; then
+            echo "Using configured/discovered custom results bucket: $BUCKET"
+          else
+            echo "No custom bucket; Firebase Test Lab will use its default results bucket."
+          fi
 
       - name: Verify results bucket access
         env:
           RESULTS_BUCKET: ${{ steps.bucket.outputs.BUCKET }}
         run: |
           set -euo pipefail
+          if [ -z "$RESULTS_BUCKET" ]; then
+            echo "No custom bucket configured; skipping custom-bucket access probe."
+            exit 0
+          fi
+          echo "Checking Firebase Test Lab results bucket: $RESULTS_BUCKET"
+          gcloud storage ls "$RESULTS_BUCKET"
+          PROBE="/tmp/ucoa-results-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
+          printf "ucoa-results-probe\n" > "$PROBE"
+          PROBE_OBJECT="${RESULTS_BUCKET%/}/ucoa-ci-probes/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
+          gcloud storage cp "$PROBE" "$PROBE_OBJECT"
+          gcloud storage rm "$PROBE_OBJECT"
+          echo "RESULTS_BUCKET_WRITE_OK=$RESULTS_BUCKET" >> "$GITHUB_ENV"          set -euo pipefail
           test -n "$RESULTS_BUCKET"
           echo "Checking Firebase Test Lab results bucket: $RESULTS_BUCKET"
           gcloud storage ls "$RESULTS_BUCKET"
@@ -195,9 +200,11 @@ jobs:
           echo "Firebase project: $PROJECT_ID"
           echo "Firebase physical device: $MODEL / Android $VERSION"
 
-          test -n "$RESULTS_BUCKET"
-          EXTRA_ARGS=("--results-bucket=$RESULTS_BUCKET")
-          EXTRA_ARGS+=("--results-dir=ucoa/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}")
+          EXTRA_ARGS=()
+          if [ -n "$RESULTS_BUCKET" ]; then
+            EXTRA_ARGS=("--results-bucket=$RESULTS_BUCKET")
+            EXTRA_ARGS+=("--results-dir=ucoa/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}")
+          fi
 
           set +e
           gcloud firebase test android run \
