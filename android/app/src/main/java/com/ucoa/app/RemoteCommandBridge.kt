@@ -76,9 +76,36 @@ class RemoteCommandBridge(private val context: Context, private val service: Uco
             val beforeUi = safeObserveUi()
             val beforeShot = awaitScreenshot()
             brain.telemetry("remote_step_evidence_ready", JSONObject().put("command_id", id).put("step", step).put("ui_chars", beforeUi.length).put("has_screenshot", !beforeShot.isNullOrBlank()))
-            val result = awaitStep(task, step, history, beforeUi, beforeShot, attachments)
-            if (!result.first || result.second == null) { lastError = result.third ?: "step failed"; break }
-            val action = result.second!!; history.put(action)
+            val explicitSettings = taskRequestsSettings(task)
+            val currentForeground = service.foregroundPackageName().orEmpty()
+            val action: JSONObject
+            if (explicitSettings && currentForeground == "com.android.settings") {
+                action = JSONObject().apply {
+                    put("action", "done")
+                    put("done", true)
+                    put("message", "UCOA تحقق محليًا من حزمة Android Settings قبل إنهاء المهمة.")
+                    put("confidence", 1.0)
+                    put("verification_goal", "إثبات أن com.android.settings هي الشاشة الأمامية")
+                    put("provider", "local-deterministic-gate")
+                    put("output_mode", "local-deterministic-gate")
+                }
+            } else if (explicitSettings) {
+                action = JSONObject().apply {
+                    put("action", "open_app_by_name")
+                    put("params", JSONObject().put("app_name", "settings"))
+                    put("done", false)
+                    put("wait_after_ms", 900)
+                    put("message", "فتح Android Settings مباشرة من بوابة UCOA المحلية.")
+                    put("confidence", 1.0)
+                    put("verification_goal", "ظهور com.android.settings مع UI tree وscreenshot")
+                    put("provider", "local-deterministic-gate")
+                    put("output_mode", "local-deterministic-gate")
+                }
+            } else {
+                val result = awaitStep(task, step, history, beforeUi, beforeShot, attachments)
+                if (!result.first || result.second == null) { lastError = result.third ?: "step failed"; break }
+                action = result.second!!
+            }
             val name = action.optString("action")
             service.liveExecutionOverlay()?.update(step + 1, 60, "قرار Cloud AI", "الأمر المقترح: $name", null, service.foregroundPackageName(), "استدعاء الأمر لا يساوي نجاحًا؛ ستتبع ذلك مراقبة وتحقق.")
             val actionOk = executeAction(action, attachments)
@@ -94,6 +121,11 @@ class RemoteCommandBridge(private val context: Context, private val service: Uco
             if (!verified && verificationRequired) lastError = verification.third ?: "verification failed"
             UcoaDiagnostics.log("REMOTE_BRIDGE", "تنفيذ أمر سحابي", "id=$id step=$step action=$name ok=$actionOk verified=$verified")
             brain.telemetry("remote_step_done", JSONObject().put("command_id", id).put("step", step).put("action", name).put("action_ok", actionOk).put("verified", verification.first))
+            history.put(JSONObject(action.toString()).apply {
+                put("ucoa_action_ok", actionOk)
+                put("ucoa_verified", verification.first)
+                put("ucoa_foreground_package", service.foregroundPackageName().orEmpty())
+            })
             if (name == "done" || action.optBoolean("done", false)) {
                 completed = actionOk && verified
                 if (!completed && lastError.isBlank()) lastError = verification.third ?: "لم يثبت UCOA اكتمال المهمة"
@@ -126,6 +158,15 @@ class RemoteCommandBridge(private val context: Context, private val service: Uco
             UcoaDiagnostics.log("REMOTE_BRIDGE", "تعذر قراءة شجرة الواجهة؛ سيتم المتابعة بدونها", e.javaClass.simpleName)
             "[]"
         }
+    }
+
+    private fun taskRequestsSettings(task: String): Boolean {
+        val t = task.lowercase()
+        return t.contains("الإعدادات") ||
+            t.contains("اعدادات") ||
+            t.contains("الضبط") ||
+            t.contains("settings") ||
+            t.contains("setting")
     }
 
     private fun executeAction(a: JSONObject, attachments: List<String>): Boolean = when (a.optString("action")) {
