@@ -11,6 +11,7 @@ import durable_state
 from observability import init_sentry
 init_sentry()
 OPENAI_PRIMARY=os.getenv("UCOA_OPENAI_PRIMARY","false").lower()=="true"
+ALLOW_LEGACY_VISION_SPACE=os.getenv("UCOA_ALLOW_LEGACY_VISION_SPACE","false").lower()=="true"
 _VALID_GEMINI_MODELS={"gemini-3.8-flash","gemini-3.7-flash","gemini-3.6-flash","gemini-3.5-flash","gemini-3.5-flash-lite","gemini-3.1-flash-lite","gemini-2.5-flash","gemini-2.5-flash-lite","gemini-2.0-flash","gemini-2.0-flash-lite"}
 _DEFAULT_GEMINI_MODEL="gemini-3.8-flash"
 def _gemini_configured(): return any(os.getenv(k,"").strip() for k in ("UCOA_GEMINI_API_KEY","GEMINI_API_KEY"))
@@ -38,10 +39,14 @@ def _provider_reasoning(system,user):
     if OPENAI_PRIMARY and openai_provider.configured():
         try:return openai_provider.reasoning(system,user),"openai"
         except Exception:pass
-    try:return _qwen_native(system,user),"huggingface-qwen3-vl-235b"
-    except Exception:pass
     try:return provider_router.reasoning(system,user)
-    except Exception:return app_v3._legacy_reasoning(system,user) if hasattr(app_v3,"_legacy_reasoning") else ('{"action":"observe"}',"repair")
+    except Exception:pass
+    if ALLOW_LEGACY_VISION_SPACE:
+        try:return _qwen_native(system,user),"huggingface-qwen3-vl-235b"
+        except Exception:pass
+    return app_v3._legacy_reasoning(system,user) if hasattr(app_v3,"_legacy_reasoning") else ('{"action":"observe"}',"repair")
+
+
 def _provider_visual(task,ui_tree,image):
     system="You are UCOA visual perception. Inspect only the Android screenshot and UI tree. Return JSON with screen_summary, elements, visible_goal_state, confidence. Never invent unseen elements."
     user=json.dumps({"task":task,"ui_tree":ui_tree[:18000]},ensure_ascii=False)
@@ -51,14 +56,18 @@ def _provider_visual(task,ui_tree,image):
     if OPENAI_PRIMARY and openai_provider.configured():
         try:return app_v3.extract_json(openai_provider.visual(system,user,image)),"openai"
         except Exception:pass
-    if image:
-        try:
-            raw=_qwen_native(system,user,image)
-            try:return app_v3.extract_json(raw),"huggingface-qwen3-vl-235b"
-            except Exception:return {"screen_summary":re.sub(r"\s+"," ",str(raw)).strip()[:2000],"elements":[],"visible_goal_state":"unknown","confidence":0.5},"huggingface-qwen3-vl-235b"
-        except Exception:pass
-    try:return provider_router.visual(task,ui_tree,image)
-    except Exception:return app_v3._legacy_visual(task,ui_tree,image) if hasattr(app_v3,"_legacy_visual") else ({"screen_summary":"unavailable"},"repair")
+    try:
+        return provider_router.visual(task,ui_tree,image)
+    except Exception:
+        if ALLOW_LEGACY_VISION_SPACE and image:
+            try:
+                raw=_qwen_native(system,user,image)
+                try:return app_v3.extract_json(raw),"huggingface-qwen3-vl-235b"
+                except Exception:return {"screen_summary":re.sub(r"\s+"," ",str(raw)).strip()[:2000],"elements":[],"visible_goal_state":"unknown","confidence":0.5},"huggingface-qwen3-vl-235b"
+            except Exception:pass
+        return app_v3._legacy_visual(task,ui_tree,image) if hasattr(app_v3,"_legacy_visual") else ({"screen_summary":"unavailable"},"repair")
+
+
 if not hasattr(app_v3,"_legacy_reasoning"): app_v3._legacy_reasoning=app_v3.reasoning
 if not hasattr(app_v3,"_legacy_visual"): app_v3._legacy_visual=app_v3.visual
 app_v3.reasoning=_provider_reasoning; app_v3.visual=_provider_visual; app_v3.call_vision=_provider_visual
@@ -89,20 +98,35 @@ def providers_probe():
 def providers_probe_vision():
     try:
         from PIL import Image,ImageDraw
-        image=Image.new("RGB",(240,120),"white"); ImageDraw.Draw(image).rectangle((70,40,170,80),outline="black",fill="#dddddd")
-        buf=io.BytesIO(); image.save(buf,format="JPEG",quality=80); encoded=base64.b64encode(buf.getvalue()).decode("ascii")
-        raw=_qwen_native("Return exactly one token: CONTINUE or NO.","Look at the image. If a button labeled CONTINUE is visible, reply exactly CONTINUE. Otherwise reply exactly NO.",encoded); detected="CONTINUE" if "CONTINUE" in str(raw).upper() else None
-        return {"ok":detected=="CONTINUE","configured":True,"provider":"huggingface-qwen3-vl-235b","detected_target":detected,"confidence":1.0 if detected else 0.0,"raw":str(raw)[:200]}
-    except Exception as exc:return {"ok":False,"configured":True,"provider":None,"detected_target":None,"confidence":0,"error":type(exc).__name__}
+        image=Image.new("RGB",(240,120),"white")
+        ImageDraw.Draw(image).rectangle((70,40,170,80),outline="black",fill="#dddddd")
+        buf=io.BytesIO(); image.save(buf,format="JPEG",quality=80)
+        encoded=base64.b64encode(buf.getvalue()).decode("ascii")
+        result,provider=provider_router.visual(
+            "Detect the visible CONTINUE button.",
+            "[]",
+            encoded
+        )
+        detected="CONTINUE" if "CONTINUE" in json.dumps(result,ensure_ascii=False).upper() else None
+        return {"ok":detected=="CONTINUE","configured":True,"provider":provider,"detected_target":detected,"confidence":float(result.get("confidence",0)) if isinstance(result,dict) else 0.0}
+    except Exception as exc:
+        return {"ok":False,"configured":True,"provider":None,"detected_target":None,"confidence":0,"error":type(exc).__name__}
+
+
 @app_v3.app.get("/v1/providers/models")
 def providers_models():
     data=[]
     for p in provider_router.PROVIDERS:
-        try: base,key,model,vision,key_name=provider_router._cfg(p)
-        except Exception: continue
+        try:
+            base,key,model,vision,key_name=provider_router._cfg(p)
+        except Exception:
+            continue
+        if p.get("public") and not ALLOW_LEGACY_VISION_SPACE:
+            continue
         data.append({"id":f"{p['name']}:{model}","provider":p["name"],"model":model,"vision":vision,"configured":True,"base_url":base})
-    data.append({"id":"huggingface-qwen3-vl-235b:Qwen/Qwen3-VL-235B-A22B-Instruct","provider":"huggingface-qwen3-vl-235b","model":"Qwen/Qwen3-VL-235B-A22B-Instruct","vision":True,"configured":True,"base_url":"huggingface-space"})
     return {"object":"list","data":data}
+
+
 def _run_sync(kind,runner,req):
     try:return {"status":"completed","kind":kind,"result":runner(req)}
     except Exception as exc:return {"status":"failed","kind":kind,"error":str(exc)}
