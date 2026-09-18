@@ -34,6 +34,7 @@ providers=[
   {'name':'fireworks','models':'https://api.fireworks.ai/inference/v1/models','chat':'https://api.fireworks.ai/inference/v1/chat/completions','protocol':'openai'},
   {'name':'sambanova','models':'https://api.sambanova.ai/v1/models','chat':'https://api.sambanova.ai/v1/chat/completions','protocol':'openai'},
   {'name':'gemini','models':'https://generativelanguage.googleapis.com/v1beta/models','chat':'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent','protocol':'gemini'},
+  {'name':'cheaperinference','models':'https://api.cheaperinference.com/v1/models','chat':'https://api.cheaperinference.com/v1/chat/completions','protocol':'openai'},
 ]
 
 def auth_headers(protocol):
