@@ -1,0 +1,119 @@
+name: AWS Device Farm Android Real Acceptance
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "android/**"
+      - "scripts/ci_execution_smoke.sh"
+      - ".github/workflows/aws-devicefarm-android-real.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  real-device:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY || secrets.AWS_SECRET_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || 'us-west-2' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify AWS credentials
+        run: |
+          set -euo pipefail
+          test -n "${AWS_ACCESS_KEY_ID}"
+          test -n "${AWS_SECRET_ACCESS_KEY}"
+          aws sts get-caller-identity
+      - name: Build APK and instrumentation test
+        working-directory: android
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest
+          cp app/build/outputs/apk/debug/app-debug.apk ../devicefarm-app.apk
+          mkdir -p ../devicefarm-test-package
+          cp app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk ../devicefarm-test-package/app-debug-androidTest.apk
+          cd ../devicefarm-test-package && zip -q ../devicefarm-test-package.zip app-debug-androidTest.apk
+      - name: Create or reuse Device Farm project
+        id: project
+        run: |
+          NAME="UCOA-Real-Android"
+          ARN=$(aws devicefarm list-projects --query "projects[?name=='${NAME}'].arn | [0]" --output text)
+          if [ -z "${ARN}" ] || [ "${ARN}" = "None" ]; then
+            ARN=$(aws devicefarm create-project --name "${NAME}" --query project.arn --output text)
+          fi
+          echo "project_arn=${ARN}" >> "$GITHUB_OUTPUT"
+      - name: Upload APK
+        id: app
+        run: |
+          set -euo pipefail
+          URL=$(aws devicefarm create-upload --project-arn "${{ steps.project.outputs.project_arn }}" --name ucoa-debug.apk --type ANDROID_APP --query upload.url --output text)
+          curl --fail --retry 3 --upload-file devicefarm-app.apk "${URL}"
+          ARN=$(aws devicefarm list-uploads --arn "${{ steps.project.outputs.project_arn }}" --query "uploads[?name=='ucoa-debug.apk'] | sort_by(@,&created)[-1].arn" --output text)
+          echo "app_arn=${ARN}" >> "$GITHUB_OUTPUT"
+      - name: Upload test package
+        id: test
+        run: |
+          set -euo pipefail
+          URL=$(aws devicefarm create-upload --project-arn "${{ steps.project.outputs.project_arn }}" --name ucoa-instrumentation.zip --type ANDROID_APP --query upload.url --output text)
+          curl --fail --retry 3 --upload-file devicefarm-test-package.zip "${URL}"
+          ARN=$(aws devicefarm list-uploads --arn "${{ steps.project.outputs.project_arn }}" --query "uploads[?name=='ucoa-instrumentation.zip'] | sort_by(@,&created)[-1].arn" --output text)
+          echo "test_arn=${ARN}" >> "$GITHUB_OUTPUT"
+      - name: Wait for uploads
+        run: |
+          set -euo pipefail
+          for arn in "${{ steps.app.outputs.app_arn }}" "${{ steps.test.outputs.test_arn }}"; do
+            for i in {1..30}; do
+              s=$(aws devicefarm get-upload --arn "${arn}" --query upload.status --output text)
+              echo "${s}"
+              [ "${s}" = "SUCCEEDED" ] && break
+              [ "${s}" = "FAILED" ] && exit 1
+              sleep 5
+            done
+          done
+      - name: Select real Android device pool
+        id: devices
+        run: |
+          set -euo pipefail
+          POOL=$(aws devicefarm list-device-pools --arn "${{ steps.project.outputs.project_arn }}" --query "devicePools[?name=='Top Devices'] | [0].arn" --output text)
+          if [ -z "${POOL}" ] || [ "${POOL}" = "None" ]; then
+            POOL=$(aws devicefarm list-device-pools --arn "${{ steps.project.outputs.project_arn }}" --query "devicePools[0].arn" --output text)
+          fi
+          test -n "${POOL}" && test "${POOL}" != "None"
+          echo "pool_arn=${POOL}" >> "$GITHUB_OUTPUT"
+          aws devicefarm list-devices --arn "${POOL}" --query "devices[0:20].[model,os,name,availability]" --output table
+      - name: Schedule real-device instrumentation
+        id: run
+        run: |
+          set -euo pipefail
+          ARN=$(aws devicefarm schedule-run             --project-arn "${{ steps.project.outputs.project_arn }}"             --device-pool-arn "${{ steps.devices.outputs.pool_arn }}"             --app-arn "${{ steps.app.outputs.app_arn }}"             --name "UCOA real execution ${GITHUB_SHA}"             --test "type=INSTRUMENTATION,testPackageArn=${{ steps.test.outputs.test_arn }}"             --execution-configuration "jobTimeoutMinutes=15"             --query run.arn --output text)
+          echo "run_arn=${ARN}" >> "$GITHUB_OUTPUT"
+      - name: Require PASS on physical device
+        run: |
+          set -euo pipefail
+          ARN="${{ steps.run.outputs.run_arn }}"
+          for i in {1..40}; do
+            STATUS=$(aws devicefarm get-run --arn "${ARN}" --query run.status --output text)
+            RESULT=$(aws devicefarm get-run --arn "${ARN}" --query run.result --output text)
+            echo "status=${STATUS} result=${RESULT}"
+            if [ "${STATUS}" = "COMPLETED" ]; then
+              [ "${RESULT}" = "PASSED" ] || { aws devicefarm get-run --arn "${ARN}" --output json; exit 1; }
+              exit 0
+            fi
+            case "${STATUS}" in ERRORED|FAILED|STOPPING|STOPPED) aws devicefarm get-run --arn "${ARN}" --output json; exit 1;; esac
+            sleep 15
+          done
+          exit 1
+      - name: Save AWS Device Farm proof
+        if: always()
+        run: aws devicefarm get-run --arn "${{ steps.run.outputs.run_arn }}" --output json > aws-devicefarm-run.json || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ucoa-aws-devicefarm-real-proof
+          path: aws-devicefarm-run.json
+          retention-days: 14
