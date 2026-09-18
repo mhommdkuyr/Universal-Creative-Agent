@@ -24,7 +24,8 @@ CLAIM_TTL = max(30, int(os.getenv("UCOA_COMMAND_CLAIM_TTL_SECONDS", "120")))
 GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 GITHUB_OIDC_AUDIENCE = "ucoa-live-phone"
 GITHUB_QA_REPOSITORY = "mhommdkuyr/Universal-Creative-Agent"
-GITHUB_QA_WORKFLOW = "Live Phone Cloud E2E"
+GITHUB_QA_WORKFLOW = os.getenv("UCOA_GITHUB_QA_WORKFLOW", "Render Bridge Smoke Check")
+GITHUB_QA_WORKFLOW_ALIASES = {"Live Phone Cloud E2E", "Render Bridge Smoke Check", ".github/workflows/render-bridge-smoke.yml"}
 _GITHUB_JWK_CLIENT = PyJWKClient(f"{GITHUB_OIDC_ISSUER}/.well-known/jwks")
 
 def _github_oidc_claims(authorization: str | None) -> dict[str, Any]:
@@ -40,9 +41,12 @@ def _github_oidc_claims(authorization: str | None) -> dict[str, Any]:
         raise HTTPException(403, "Repository is not authorized for phone QA")
     if claims.get("ref") != "refs/heads/main":
         raise HTTPException(403, "Only main branch may run phone QA")
-    if claims.get("workflow") != GITHUB_QA_WORKFLOW:
+    workflow = str(claims.get("workflow", ""))
+    if workflow not in GITHUB_QA_WORKFLOW_ALIASES:
         raise HTTPException(403, "Workflow is not authorized for phone QA")
-    if not str(claims.get("job_workflow_ref", "")).endswith("/.github/workflows/phone-live-e2e.yml@refs/heads/main"):
+    workflow_ref = str(claims.get("job_workflow_ref", ""))
+    allowed_refs = ("/.github/workflows/phone-live-e2e.yml@refs/heads/main", "/.github/workflows/render-bridge-smoke.yml@refs/heads/main")
+    if not any(workflow_ref.endswith(ref) for ref in allowed_refs):
         raise HTTPException(403, "Unexpected QA workflow reference")
     return claims
 
