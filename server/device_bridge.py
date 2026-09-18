@@ -8,6 +8,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import jwt
+from jwt import PyJWKClient
 from fastapi import Header, HTTPException
 from pydantic import BaseModel, Field
 
@@ -18,6 +20,79 @@ DB_PATH = Path(os.getenv("UCOA_REMOTE_OPS_DB", "/opt/render/project/src/.ucoa-lo
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 COMMAND_TTL = max(60, int(os.getenv("UCOA_COMMAND_TTL_SECONDS", "900")))
 CLAIM_TTL = max(30, int(os.getenv("UCOA_COMMAND_CLAIM_TTL_SECONDS", "120")))
+
+GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+GITHUB_OIDC_AUDIENCE = "ucoa-live-phone"
+GITHUB_QA_REPOSITORY = "mhommdkuyr/Universal-Creative-Agent"
+GITHUB_QA_WORKFLOW = "Live Phone Cloud E2E"
+_GITHUB_JWK_CLIENT = PyJWKClient(f"{GITHUB_OIDC_ISSUER}/.well-known/jwks")
+
+def _github_oidc_claims(authorization: str | None) -> dict[str, Any]:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "GitHub OIDC token required")
+    token = authorization[7:].strip()
+    try:
+        signing_key = _GITHUB_JWK_CLIENT.get_signing_key_from_jwt(token).key
+        claims = jwt.decode(token, signing_key, algorithms=["RS256"], audience=GITHUB_OIDC_AUDIENCE, issuer=GITHUB_OIDC_ISSUER)
+    except Exception as exc:
+        raise HTTPException(401, f"Invalid GitHub OIDC token: {type(exc).__name__}")
+    if claims.get("repository") != GITHUB_QA_REPOSITORY:
+        raise HTTPException(403, "Repository is not authorized for phone QA")
+    if claims.get("ref") != "refs/heads/main":
+        raise HTTPException(403, "Only main branch may run phone QA")
+    if claims.get("workflow") != GITHUB_QA_WORKFLOW:
+        raise HTTPException(403, "Workflow is not authorized for phone QA")
+    if not str(claims.get("job_workflow_ref", "")).endswith("/.github/workflows/phone-live-e2e.yml@refs/heads/main"):
+        raise HTTPException(403, "Unexpected QA workflow reference")
+    return claims
+
+def _active_device_ids() -> list[str]:
+    _ensure_schema()
+    conn = _pg_conn()
+    if conn is not None:
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT DISTINCT install_id FROM ucoa_client_sessions WHERE expires_at > now() ORDER BY install_id")
+                    devices = [r[0] for r in cur.fetchall()]
+            conn.close()
+            return devices
+        except Exception:
+            try: conn.close()
+            except Exception: pass
+    conn = sqlite3.connect(DB_PATH, timeout=15)
+    try:
+        return [r[0] for r in conn.execute("SELECT DISTINCT install_id FROM client_sessions WHERE expires_at > ? ORDER BY install_id", (time.time(),)).fetchall()]
+    finally:
+        conn.close()
+
+def _insert_command(install_id: str, req: DeviceCommandRequest) -> dict[str, Any]:
+    install_id = install_id.strip()[:128]
+    if not install_id or len(req.task.strip()) < 1:
+        raise HTTPException(400, "install_id and task are required")
+    if req.kind != "task":
+        raise HTTPException(400, "Unsupported command kind")
+    command_id = uuid.uuid4().hex
+    payload = {"task": req.task[:12000], "attachments": req.attachments[:20], "metadata": req.metadata}
+    conn = _pg_conn()
+    if conn is not None:
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("INSERT INTO ucoa_device_commands(id,install_id,kind,payload,created_at,result) VALUES(%s,%s,%s,%s,now(),'{}')", (command_id, install_id, req.kind, json.dumps(payload, ensure_ascii=False)))
+            conn.close()
+            return {"ok": True, "install_id": install_id, "command_id": command_id, "status": "queued", "expires_in": COMMAND_TTL}
+        except Exception as exc:
+            try: conn.close()
+            except Exception: pass
+            raise HTTPException(503, f"command storage unavailable: {type(exc).__name__}")
+    conn = sqlite3.connect(DB_PATH, timeout=15)
+    try:
+        conn.execute("INSERT INTO device_commands(id,install_id,kind,payload,status,created_at,claimed_at,completed_at,result) VALUES(?,?,?,?,?,?,?,?,?)", (command_id, install_id, req.kind, json.dumps(payload, ensure_ascii=False), "queued", time.time(), None, None, "{}"))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "install_id": install_id, "command_id": command_id, "status": "queued", "expires_in": COMMAND_TTL}
 
 
 def _ensure_schema() -> None:
@@ -73,28 +148,58 @@ class DeviceCommandResult(BaseModel):
 
 @app_v3.app.post("/v1/admin/devices/{install_id}/commands")
 def queue_device_command(install_id: str, req: DeviceCommandRequest, authorization: str | None = Header(default=None)):
-    if not _master_ok(authorization): raise HTTPException(401, "Admin token required")
-    _ensure_schema(); install_id = install_id.strip()[:128]
-    if not install_id or len(req.task.strip()) < 1: raise HTTPException(400, "install_id and task are required")
-    if req.kind != "task": raise HTTPException(400, "Unsupported command kind")
-    command_id = uuid.uuid4().hex
-    payload = {"task": req.task[:12000], "attachments": req.attachments[:20], "metadata": req.metadata}
+    if not _master_ok(authorization):
+        raise HTTPException(401, "Admin token required")
+    return _insert_command(install_id, req)
+
+@app_v3.app.get("/v1/qa/phone/devices")
+def qa_phone_devices(authorization: str | None = Header(default=None)):
+    _github_oidc_claims(authorization)
+    return {"ok": True, "devices": _active_device_ids()}
+
+@app_v3.app.post("/v1/qa/phone/commands")
+def qa_queue_phone_command(req: DeviceCommandRequest, authorization: str | None = Header(default=None)):
+    _github_oidc_claims(authorization)
+    devices = _active_device_ids()
+    if not devices:
+        raise HTTPException(409, "No active Android device session found")
+    return _insert_command(devices[-1], req)
+
+@app_v3.app.get("/v1/qa/phone/commands/{command_id}")
+def qa_inspect_phone_command(command_id: str, authorization: str | None = Header(default=None)):
+    _github_oidc_claims(authorization)
+    _ensure_schema()
     conn = _pg_conn()
     if conn is not None:
         try:
             with conn:
-                with conn.cursor() as cur: cur.execute("INSERT INTO ucoa_device_commands(id,install_id,kind,payload,created_at,result) VALUES(%s,%s,%s,%s,now(),'{}')", (command_id, install_id, req.kind, json.dumps(payload, ensure_ascii=False)))
-            conn.close(); return {"ok": True, "command_id": command_id, "status": "queued", "expires_in": COMMAND_TTL}
-        except Exception as exc:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id,install_id,kind,payload,status,created_at,claimed_at,completed_at,result FROM ucoa_device_commands WHERE id=%s", (command_id,))
+                    row = cur.fetchone()
+            conn.close()
+            if not row:
+                raise HTTPException(404, "Command not found")
+            return {"ok": True, "command": {
+                "id": row[0], "install_id": row[1], "kind": row[2], "payload": row[3], "status": row[4],
+                "created_at": row[5].isoformat(), "claimed_at": row[6].isoformat() if row[6] else None,
+                "completed_at": row[7].isoformat() if row[7] else None, "result": row[8]
+            }}
+        except HTTPException:
+            raise
+        except Exception:
             try: conn.close()
             except Exception: pass
-            raise HTTPException(503, f"command storage unavailable: {type(exc).__name__}")
     conn = sqlite3.connect(DB_PATH, timeout=15)
     try:
-        conn.execute("INSERT INTO device_commands(id,install_id,kind,payload,status,created_at,claimed_at,completed_at,result) VALUES(?,?,?,?,?,?,?,?,?)", (command_id, install_id, req.kind, json.dumps(payload, ensure_ascii=False), "queued", time.time(), None, None, "{}")); conn.commit()
-    finally: conn.close()
-    return {"ok": True, "command_id": command_id, "status": "queued", "expires_in": COMMAND_TTL}
-
+        row = conn.execute("SELECT id,install_id,kind,payload,status,created_at,claimed_at,completed_at,result FROM device_commands WHERE id=?", (command_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Command not found")
+        return {"ok": True, "command": {
+            "id": row[0], "install_id": row[1], "kind": row[2], "payload": json.loads(row[3]), "status": row[4],
+            "created_at": row[5], "claimed_at": row[6], "completed_at": row[7], "result": json.loads(row[8])
+        }}
+    finally:
+        conn.close()
 
 @app_v3.app.get("/v1/client/commands/next")
 def next_device_command(authorization: str | None = Header(default=None)):
