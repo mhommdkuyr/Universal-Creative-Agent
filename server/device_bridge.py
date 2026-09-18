@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 import app_v3
 from remote_ops import _master_ok, _pg_conn, _require_client
 
+# Live-phone QA trigger: keep the stable Render Brain Smoke workflow exercising the deployed bridge.
+
 DB_PATH = Path(os.getenv("UCOA_REMOTE_OPS_DB", "/opt/render/project/src/.ucoa-local/remote_ops.db"))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 COMMAND_TTL = max(60, int(os.getenv("UCOA_COMMAND_TTL_SECONDS", "900")))
