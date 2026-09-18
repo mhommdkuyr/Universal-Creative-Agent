@@ -112,6 +112,12 @@ class ClientReportRequest(BaseModel):
     outcome: str
     metrics: dict[str, Any] = Field(default_factory=dict)
 
+class ClientCommandRequest(BaseModel):
+    kind: str = "task"
+    task: str
+    attachments: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
 @app_v3.app.post("/v1/client/session")
 def create_client_session(req: ClientSessionRequest):
     _ensure_schema(); install_id = req.install_id.strip()[:128]
@@ -179,6 +185,97 @@ def client_report(req: ClientReportRequest, authorization: str | None = Header(d
         try: conn.execute("INSERT INTO client_reports(install_id,session_id,task_id,outcome,metrics,created_at) VALUES(?,?,?,?,?,?)", (req.install_id[:128], req.session_id, req.task_id, req.outcome[:64], json.dumps(req.metrics, ensure_ascii=False), now)); conn.commit()
         finally: conn.close()
     return {"ok": True}
+
+@app_v3.app.post("/v1/client/commands")
+def client_queue_command(req: ClientCommandRequest, authorization: str | None = Header(default=None)):
+    install_id, master = _require_client(authorization)
+    if not master and install_id != req.install_id:
+        raise HTTPException(403, "install_id mismatch")
+    if not install_id and master:
+        install_id = req.install_id
+    if not install_id:
+        raise HTTPException(401, "Client session required")
+    # Reuse the same durable device-command queue as the authenticated admin/QA routes.
+    from device_bridge import DeviceCommandRequest, _insert_command
+    payload = DeviceCommandRequest(
+        kind=req.kind,
+        task=req.task,
+        attachments=req.attachments,
+        metadata=req.metadata,
+    )
+    return _insert_command(install_id, payload)
+
+@app_v3.app.get("/v1/client/commands/{command_id}")
+def client_inspect_command(command_id: str, authorization: str | None = Header(default=None)):
+    install_id, master = _require_client(authorization)
+    if not install_id and not master:
+        raise HTTPException(401, "Client session required")
+    from device_bridge import _ensure_schema, _pg_conn, DB_PATH, sqlite3, json as _json
+    import time as _time
+    _ensure_schema()
+    conn = _pg_conn()
+    if conn is not None:
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    if master:
+                        cur.execute(
+                            "SELECT id,install_id,kind,payload,status,created_at,claimed_at,completed_at,result FROM ucoa_device_commands WHERE id=%s",
+                            (command_id,),
+                        )
+                    else:
+                        cur.execute(
+                            "SELECT id,install_id,kind,payload,status,created_at,claimed_at,completed_at,result FROM ucoa_device_commands WHERE id=%s AND install_id=%s",
+                            (command_id, install_id),
+                        )
+                    row = cur.fetchone()
+            conn.close()
+            if not row:
+                raise HTTPException(404, "Command not found")
+            return {"ok": True, "command": {
+                "id": row[0],
+                "install_id": row[1],
+                "kind": row[2],
+                "payload": row[3],
+                "status": row[4],
+                "created_at": row[5].isoformat(),
+                "claimed_at": row[6].isoformat() if row[6] else None,
+                "completed_at": row[7].isoformat() if row[7] else None,
+                "result": row[8],
+            }}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            try: conn.close()
+            except Exception: pass
+            raise HTTPException(503, f"command inspection unavailable: {type(exc).__name__}")
+    conn = sqlite3.connect(DB_PATH, timeout=15)
+    try:
+        if master:
+            row = conn.execute(
+                "SELECT id,install_id,kind,payload,status,created_at,claimed_at,completed_at,result FROM device_commands WHERE id=?",
+                (command_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id,install_id,kind,payload,status,created_at,claimed_at,completed_at,result FROM device_commands WHERE id=? AND install_id=?",
+                (command_id, install_id),
+            ).fetchone()
+        if not row:
+            raise HTTPException(404, "Command not found")
+        return {"ok": True, "command": {
+            "id": row[0],
+            "install_id": row[1],
+            "kind": row[2],
+            "payload": json.loads(row[3]),
+            "status": row[4],
+            "created_at": row[5],
+            "claimed_at": row[6],
+            "completed_at": row[7],
+            "result": json.loads(row[8]),
+        }}
+    finally:
+        conn.close()
 
 @app_v3.app.get("/v1/admin/diagnostics")
 def admin_diagnostics(authorization: str | None = Header(default=None)):
