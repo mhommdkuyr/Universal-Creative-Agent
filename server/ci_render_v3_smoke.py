@@ -39,6 +39,7 @@ def live_phone_acceptance():
           "يجب أن يثبت UCOA من الجهاز نفسه أن شاشة الإعدادات ظهرت عبر Accessibility UI tree "
           "ولقطة الشاشة. فتح متصفح أو بقاء ChatGPT لا يعتبر نجاحًا.")
     payload={
+        "install_id":install_id,
         "kind":"task",
         "task":task,
         "attachments":[],
