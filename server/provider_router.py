@@ -13,6 +13,7 @@ import os
 import re
 import tempfile
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -20,9 +21,9 @@ from urllib.request import Request, urlopen
 from observability import set_measurement, span
 
 CONNECT_TIMEOUT = float(os.getenv("UCOA_PROVIDER_CONNECT_TIMEOUT", "8"))
-TEXT_TIMEOUT = float(os.getenv("UCOA_PROVIDER_TEXT_TIMEOUT", "45"))
-VISION_TIMEOUT = float(os.getenv("UCOA_PROVIDER_VISION_TIMEOUT", "60"))
-MAX_TOKENS = int(os.getenv("UCOA_PROVIDER_MAX_TOKENS", "512"))
+TEXT_TIMEOUT = float(os.getenv("UCOA_PROVIDER_TEXT_TIMEOUT", "20"))
+VISION_TIMEOUT = float(os.getenv("UCOA_PROVIDER_VISION_TIMEOUT", "25"))
+MAX_TOKENS = int(os.getenv("UCOA_PROVIDER_MAX_TOKENS", "384"))
 CACHE_TTL = max(0.0, float(os.getenv("UCOA_VISION_CACHE_TTL", "3")))
 CB_FAILURES = max(1, int(os.getenv("UCOA_PROVIDER_CB_FAILURES", "3")))
 CB_COOLDOWN = max(1.0, float(os.getenv("UCOA_PROVIDER_CB_COOLDOWN", "30")))
@@ -47,6 +48,7 @@ class CircuitState:
 
 _BREAKERS = {p["name"]: CircuitState() for p in PROVIDERS}
 _VISION_CACHE: dict[str, tuple[float, dict, str]] = {}
+_CALL_META: ContextVar[dict] = ContextVar("ucoa_provider_call_meta", default={})
 
 
 def _first_env(names):
@@ -96,7 +98,7 @@ def _failure(name):
         state.opened_at = time.monotonic()
 
 
-def _extract_openai_text(body: dict) -> str:
+def _extract_openai_text(body: dict) -> tuple[str, dict]:
     choices = body.get("choices") or []
     if not choices:
         raise RuntimeError("no choices")
@@ -106,10 +108,10 @@ def _extract_openai_text(body: dict) -> str:
     text = str(content).strip()
     if not text:
         raise RuntimeError("empty response")
-    return text
+    return text, (body.get("usage") or {})
 
 
-def _extract_gemini_text(body: dict) -> str:
+def _extract_gemini_text(body: dict) -> tuple[str, dict]:
     candidates = body.get("candidates") or []
     if not candidates:
         error = body.get("error") or {}
@@ -121,7 +123,7 @@ def _extract_gemini_text(body: dict) -> str:
     text = "".join(pieces).strip()
     if not text:
         raise RuntimeError("Gemini returned empty content")
-    return text
+    return text, (body.get("usageMetadata") or {})
 
 
 def _gemini_generate(base: str, key: str, model: str, system: str, user: str, image: str | None, timeout: float) -> str:
@@ -180,24 +182,77 @@ def _ordered(image):
     return [name for name in preferred if name in configured and not _is_open(name)]
 
 
-def call(system, user, image=None):
-    errors=[]; timeout=VISION_TIMEOUT if image else TEXT_TIMEOUT
-    for name in _ordered(bool(image)):
-        started=time.perf_counter()
-        try:
-            p=_provider(name); base,key,model,supports_vision,key_name=_cfg(p)
-            if image and not supports_vision: raise RuntimeError("provider does not support vision")
-            with span("ai.provider", f"{name} inference", provider=name, model=model, multimodal=bool(image), credential=key_name):
-                raw = _gemini_generate(base,key,model,system,user,image,timeout) if p.get("native_gemini") else (_space_call(system,user,image,timeout) if p.get("public") else _chat(base,key,model,system,user,image,timeout))
-            _success(name); set_measurement(f"provider.{name}.latency_ms",(time.perf_counter()-started)*1000); return raw,name
-        except HTTPError as exc:
-            _failure(name); errors.append(f"{name}:HTTP_{exc.code}")
-        except (URLError,TimeoutError) as exc:
-            _failure(name); errors.append(f"{name}:{type(exc).__name__}")
-        except Exception as exc:
-            _failure(name); errors.append(f"{name}:{str(exc)[:160]}")
-    raise RuntimeError("all providers failed; "+",".join(errors) if errors else "no provider configured")
 
+def _usage_totals(usage: dict):
+    if not isinstance(usage, dict):
+        return None, None, None
+    inp = usage.get("prompt_tokens", usage.get("promptTokenCount", usage.get("input_tokens", usage.get("inputTokenCount"))))
+    out = usage.get("completion_tokens", usage.get("candidatesTokenCount", usage.get("output_tokens", usage.get("outputTokenCount"))))
+    total = usage.get("total_tokens", usage.get("totalTokenCount"))
+    try: inp = int(inp) if inp is not None else None
+    except Exception: inp = None
+    try: out = int(out) if out is not None else None
+    except Exception: out = None
+    if total is None and inp is not None and out is not None:
+        total = inp + out
+    try: total = int(total) if total is not None else None
+    except Exception: total = None
+    return inp, out, total
+
+
+def get_last_call_metadata() -> dict:
+    return dict(_CALL_META.get() or {})
+
+
+def _set_call_meta(**meta):
+    _CALL_META.set(meta)
+
+
+def call(system, user, image=None):
+    errors = []
+    timeout = VISION_TIMEOUT if image else TEXT_TIMEOUT
+    for name in _ordered(bool(image)):
+        started = time.perf_counter()
+        try:
+            p = _provider(name)
+            base, key, model, supports_vision, key_name = _cfg(p)
+            if image and not supports_vision:
+                raise RuntimeError("provider does not support vision")
+            with span("ai.provider", f"{name} inference", provider=name, model=model, multimodal=bool(image), credential=key_name):
+                if p.get("native_gemini"):
+                    raw, usage = _gemini_generate(base, key, model, system, user, image, timeout)
+                elif p.get("public"):
+                    raw, usage = _space_call(system, user, image, timeout)
+                else:
+                    raw, usage = _chat(base, key, model, system, user, image, timeout)
+            latency_ms = round((time.perf_counter() - started) * 1000, 2)
+            inp, out, total = _usage_totals(usage)
+            _set_call_meta(
+                provider=name,
+                model=model,
+                credential_env=key_name,
+                multimodal=bool(image),
+                latency_ms=latency_ms,
+                input_tokens=inp,
+                output_tokens=out,
+                total_tokens=total,
+                cost_usd=(usage.get("cost") if isinstance(usage, dict) else None),
+                cache_hit=False,
+            )
+            _success(name)
+            set_measurement(f"provider.{name}.latency_ms", latency_ms)
+            return raw, name
+        except HTTPError as exc:
+            _failure(name)
+            errors.append(f"{name}:HTTP_{exc.code}")
+        except (URLError, TimeoutError) as exc:
+            _failure(name)
+            errors.append(f"{name}:{type(exc).__name__}")
+        except Exception as exc:
+            _failure(name)
+            errors.append(f"{name}:{str(exc)[:160]}")
+    _set_call_meta(provider=None, model=None, multimodal=bool(image), latency_ms=None, error="all providers failed")
+    raise RuntimeError("all providers failed; " + ",".join(errors) if errors else "no provider configured")
 
 def _extract_json(raw):
     text=re.sub(r"^```(?:json)?\s*|\s*```$","",raw.strip())
