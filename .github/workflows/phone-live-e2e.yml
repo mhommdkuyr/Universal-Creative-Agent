@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   phone-live-e2e:
@@ -19,18 +20,38 @@ jobs:
     timeout-minutes: 45
     env:
       UCOA_BRAIN_URL: https://ucoa-agent-brain.onrender.com
-      UCOA_AGENT_TOKEN: ${{ secrets.UCOA_AGENT_TOKEN }}
     steps:
-      - name: Verify cloud health and authorization
+      - name: Verify cloud health and wait for QA route
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${UCOA_AGENT_TOKEN}" || {
-            echo "::error title=Live phone test blocked::GitHub secret UCOA_AGENT_TOKEN is not configured."
-            exit 1
+          curl --fail --silent --show-error --retry 8 --retry-delay 5 "${UCOA_BRAIN_URL}/health" | tee health.json
+
+          get_oidc_token() {
+            curl --fail --silent --show-error \
+              -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=ucoa-live-phone" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])'
           }
-          curl --fail --silent --show-error --retry 3 "${UCOA_BRAIN_URL}/health" | tee health.json
-          curl --fail --silent --show-error --retry 3             -H "Authorization: Bearer ${UCOA_AGENT_TOKEN}"             "${UCOA_BRAIN_URL}/v1/admin/diagnostics" | tee admin-diagnostics-before.json
+
+          for i in $(seq 1 60); do
+            TOKEN="$(get_oidc_token)"
+            code="$(curl -sS -o /tmp/qa-devices.json -w '%{http_code}' \
+              -H "Authorization: Bearer ${TOKEN}" \
+              "${UCOA_BRAIN_URL}/v1/qa/phone/devices")"
+            echo "qa route attempt=$i http=$code"
+            if [ "$code" = "200" ]; then
+              cat /tmp/qa-devices.json
+              count="$(python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("devices") or []))' < /tmp/qa-devices.json)"
+              if [ "$count" -gt 0 ]; then
+                cp /tmp/qa-devices.json qa-devices-before.json
+                echo "Connected phone is visible to the OIDC-protected QA bridge."
+                exit 0
+              fi
+            fi
+            sleep 5
+          done
+          echo "::error title=Live phone bridge unavailable::The deployed cloud did not expose an active connected phone through the OIDC QA bridge."
+          exit 1
 
       - name: Wait for a connected phone
         shell: bash
@@ -55,6 +76,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p phone-results
+
+          get_oidc_token() {
+            curl --fail --silent --show-error \
+              -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=ucoa-live-phone" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])'
+          }
 
           run_task() {
             local name="$1"
@@ -136,12 +163,15 @@ PY
         run: |
           set -euo pipefail
           curl --fail --silent --show-error             -H "Authorization: Bearer ${UCOA_AGENT_TOKEN}"             "${UCOA_BRAIN_URL}/v1/admin/diagnostics" | tee admin-diagnostics-after.json
+          cp qa-devices-before.json qa-devices-after.json
           python3 - <<'PY'
 import json
-d=json.load(open("admin-diagnostics-after.json"))
-print(json.dumps(d,ensure_ascii=False,indent=2))
-if int(d.get("active_sessions",0)) < 1:
-    raise SystemExit("Connected phone session disappeared before final verification")
+before=json.load(open('qa-devices-before.json'))
+after=json.load(open('qa-devices-after.json'))
+print('before', json.dumps(before, ensure_ascii=False, indent=2))
+print('after', json.dumps(after, ensure_ascii=False, indent=2))
+if not (after.get('devices') or []):
+    raise SystemExit('Connected phone session disappeared before final verification')
 PY
 
       - name: Upload live phone evidence
@@ -151,8 +181,8 @@ PY
           name: ucoa-live-phone-e2e-${{ github.sha }}
           path: |
             health.json
-            admin-diagnostics-before.json
-            admin-diagnostics-after.json
+            qa-devices-before.json
+            qa-devices-after.json
             devices-*.json
             phone-results/
           if-no-files-found: ignore
