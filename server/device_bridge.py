@@ -70,6 +70,36 @@ def _active_device_ids() -> list[str]:
     finally:
         conn.close()
 
+def _preferred_active_device_id() -> str | None:
+    """
+    Prefer the newest physical Samsung/SM-* Android session for live-phone QA.
+    Emulator-like sessions are fallback only.
+    """
+    conn = _pg_conn()
+    if conn is not None:
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT install_id, device, created_at "
+                        "FROM ucoa_client_sessions WHERE expires_at > now() "
+                        "ORDER BY created_at DESC"
+                    )
+                    rows = cur.fetchall()
+            conn.close()
+            fallback = rows[0][0] if rows else None
+            for install_id, device, _created_at in rows:
+                meta = device if isinstance(device, dict) else {}
+                manufacturer = str(meta.get("manufacturer", "")).lower()
+                model = str(meta.get("model", "")).lower()
+                if manufacturer == "samsung" or model.startswith("sm-"):
+                    return install_id
+            return fallback
+        except Exception:
+            try: conn.close()
+            except Exception: pass
+    return None
+
 def _insert_command(install_id: str, req: DeviceCommandRequest) -> dict[str, Any]:
     install_id = install_id.strip()[:128]
     if not install_id or len(req.task.strip()) < 1:
@@ -167,7 +197,8 @@ def qa_queue_phone_command(req: DeviceCommandRequest, authorization: str | None 
     devices = _active_device_ids()
     if not devices:
         raise HTTPException(409, "No active Android device session found")
-    return _insert_command(devices[-1], req)
+    install_id = _preferred_active_device_id() or devices[-1]
+    return _insert_command(install_id, req)
 
 @app_v3.app.get("/v1/qa/phone/commands/{command_id}")
 def qa_inspect_phone_command(command_id: str, authorization: str | None = Header(default=None)):
