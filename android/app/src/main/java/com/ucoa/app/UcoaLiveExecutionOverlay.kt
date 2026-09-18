@@ -38,7 +38,7 @@ class UcoaLiveExecutionOverlay(private val context: Context) {
                 orientation = LinearLayout.VERTICAL
                 layoutDirection = View.LAYOUT_DIRECTION_RTL
                 setPadding(20, 16, 20, 16)
-                background = background(Color.argb(242, 16, 18, 25))
+                background = panelBackground(Color.argb(242, 16, 18, 25))
                 elevation = 12f
             }
 
@@ -102,7 +102,7 @@ class UcoaLiveExecutionOverlay(private val context: Context) {
             }
             foreground.text = "التطبيق الأمامي: ${foregroundPackage ?: "جاري الرصد"}"
             if (!note.isNullOrBlank()) detail.text = note.take(220)
-            root?.background = background(
+            root?.background = panelBackground(
                 when (verified) {
                     true -> Color.argb(242, 10, 35, 24)
                     false -> Color.argb(242, 48, 18, 20)
@@ -123,7 +123,7 @@ class UcoaLiveExecutionOverlay(private val context: Context) {
             }
             detail.text = message.take(220)
             foreground.text = "التطبيق الأمامي عند النهاية: ${UcoaAccessibilityService.instance?.foregroundPackageName() ?: "—"}"
-            root?.background = background(if (success) Color.argb(245, 10, 43, 28) else Color.argb(245, 55, 20, 24))
+            root?.background = panelBackground(if (success) Color.argb(245, 10, 43, 28) else Color.argb(245, 55, 20, 24))
             handler.postDelayed({ removeInternal() }, 5500L)
         }
     }
@@ -156,7 +156,7 @@ class UcoaLiveExecutionOverlay(private val context: Context) {
             setMargins(0, top, 0, bottom)
         }
 
-    private fun background(color: Int) = GradientDrawable().apply {
+    private fun panelBackground(color: Int) = GradientDrawable().apply {
         setColor(color)
         cornerRadius = 22f
         setStroke(1, Color.argb(100, 255, 255, 255))
