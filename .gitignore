@@ -1,0 +1,14 @@
+.gradle/
+.idea/
+build/
+**/build/
+*.apk
+*.aar
+*.keystore
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+dist/
+ucoa_apk_sha256.txt
+ftl-result.json
