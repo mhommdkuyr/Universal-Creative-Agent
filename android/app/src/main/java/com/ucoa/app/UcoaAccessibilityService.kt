@@ -20,18 +20,22 @@ class UcoaAccessibilityService : AccessibilityService() {
     companion object { @Volatile var instance: UcoaAccessibilityService? = null }
     @Volatile private var lastForegroundPackage: String? = null
     private var remoteBridge: RemoteCommandBridge? = null
+    private var liveOverlay: UcoaLiveExecutionOverlay? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         UcoaDiagnostics.init(this)
         UcoaDiagnostics.log("ACCESSIBILITY", "خدمة الوصول اتصلت فعليًا", "package=$packageName")
+        liveOverlay = UcoaLiveExecutionOverlay(this)
         remoteBridge = RemoteCommandBridge(this, this).also { it.start() }
     }
 
     override fun onDestroy() {
         remoteBridge?.stop()
         remoteBridge = null
+        liveOverlay?.remove()
+        liveOverlay = null
         UcoaDiagnostics.log("ACCESSIBILITY", "خدمة الوصول انقطعت")
         instance = null
         super.onDestroy()
@@ -48,6 +52,7 @@ class UcoaAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() { UcoaDiagnostics.log("ACCESSIBILITY", "أرسل النظام interrupt للخدمة") }
 
+    fun liveExecutionOverlay(): UcoaLiveExecutionOverlay? = liveOverlay
     fun foregroundPackageName(): String? = lastForegroundPackage ?: windows.asSequence().mapNotNull { it.root?.packageName?.toString() }.firstOrNull()
     fun findText(text: String): AccessibilityNodeInfo? = windows.mapNotNull { it.root }.asSequence().flatMap { it.findAccessibilityNodeInfosByText(text).asSequence() }.firstOrNull()
     fun clickText(text: String): Boolean = findText(text)?.let(::clickNode) == true
