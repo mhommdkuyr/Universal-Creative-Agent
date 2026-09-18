@@ -51,5 +51,38 @@ class AgentBrainClient(private val context: Context) {
     private fun ensureClientSession(): JSONObject { if (token().isNotBlank()) return JSONObject().put("reused", true); val payload = JSONObject().apply { put("install_id", installId()); put("app_version", appVersion); put("platform", "android"); put("device", JSONObject().apply { put("manufacturer", Build.MANUFACTURER); put("model", Build.MODEL); put("android", Build.VERSION.SDK_INT) }) }; val body = requestJson("POST", endpoint() + "/v1/client/session", payload, 15000); val sessionToken = body.optString("session_token"); if (sessionToken.isBlank()) throw IllegalStateException("Cloud did not issue a client session"); prefs.edit().putString("token", sessionToken).apply(); return body }
     private fun refreshRemoteConfig(): JSONObject { val body = requestJson("GET", endpoint() + "/v1/client/config?platform=android&app_version=$appVersion", null, 15000); prefs.edit().putString("remote_config", body.toString()).putLong("remote_config_at", System.currentTimeMillis()).apply(); return body }
     private fun remoteInt(key: String, defaultValue: Int): Int = try { prefs.getString("remote_config", null)?.let { JSONObject(it).optInt(key, defaultValue) } ?: defaultValue } catch (_: Exception) { defaultValue }
-    private fun requestJson(method: String, url: String, payload: JSONObject?, timeout: Int): JSONObject { var conn: HttpURLConnection? = null; try { conn = (URL(url).openConnection() as HttpURLConnection).apply { requestMethod = method; connectTimeout = timeout; readTimeout = timeout; doInput = true; if (payload != null) { doOutput = true; setRequestProperty("Content-Type", "application/json") }; token().takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") } }; if (payload != null) conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }; val code = conn.responseCode; val stream = if (code in 200..299) conn.inputStream else conn.errorStream; val text = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }; if (code !in 200..299) throw IllegalStateException("HTTP $code: ${text.take(1200)}"); return JSONObject(text) } finally { conn?.disconnect() } }
+    private fun requestJson(method: String, url: String, payload: JSONObject?, timeout: Int): JSONObject {
+        var attempts = 0
+        while (true) {
+            attempts++
+            var conn: HttpURLConnection? = null
+            try {
+                conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                    requestMethod = method
+                    connectTimeout = timeout
+                    readTimeout = timeout
+                    doInput = true
+                    if (payload != null) {
+                        doOutput = true
+                        setRequestProperty("Content-Type", "application/json")
+                    }
+                    token().takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") }
+                }
+                if (payload != null) conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+                val code = conn.responseCode
+                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                val text = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
+                if (code !in 200..299) throw IllegalStateException("HTTP $code: ${text.take(1200)}")
+                return JSONObject(text)
+            } catch (e: java.net.UnknownHostException) {
+                if (attempts >= 4) throw e
+                Thread.sleep(1500L * attempts)
+            } catch (e: java.io.IOException) {
+                if (attempts >= 4) throw e
+                Thread.sleep(1000L * attempts)
+            } finally {
+                conn?.disconnect()
+            }
+        }
+    }
 }
