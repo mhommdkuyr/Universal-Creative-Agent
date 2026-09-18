@@ -58,3 +58,5 @@ if best:
 with open(os.environ.get("OUT","provider-discovery.json"),"w",encoding="utf-8") as f:
     json.dump(out,f,ensure_ascii=False,indent=2)
 print(json.dumps({"selected":out["selected"],"model_count":len(out["models"])},ensure_ascii=False))
+
+# trigger provider discovery on next push
