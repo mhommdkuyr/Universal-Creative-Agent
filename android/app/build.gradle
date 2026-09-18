@@ -33,3 +33,5 @@ dependencies {
 // trigger AWS Device Farm after SDK preparation fix
 
 // trigger AWS Device Farm after Gradle layout fix
+
+// trigger AWS Device Farm APK path fix
