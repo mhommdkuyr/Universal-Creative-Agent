@@ -125,14 +125,30 @@ jobs:
                       sys.exit(0)
           except Exception:
               pass
-          if project_id:
-              print(f"{project_id}.appspot.com")
-          else:
-              print('')
+          print('')
           PY
           )"
+          if [ -n "$BUCKET" ] && [[ "$BUCKET" != gs://* ]]; then
+            BUCKET="gs://$BUCKET"
+          fi
+          test -n "$BUCKET"
           echo "BUCKET=$BUCKET" >> "$GITHUB_OUTPUT"
           echo "Discovered Cloud Storage Bucket: $BUCKET"
+
+      - name: Verify results bucket access
+        env:
+          RESULTS_BUCKET: ${{ steps.bucket.outputs.BUCKET }}
+        run: |
+          set -euo pipefail
+          test -n "$RESULTS_BUCKET"
+          echo "Checking Firebase Test Lab results bucket: $RESULTS_BUCKET"
+          gcloud storage ls "$RESULTS_BUCKET"
+          PROBE="/tmp/ucoa-results-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
+          printf 'ucoa-results-probe\n' > "$PROBE"
+          PROBE_OBJECT="${RESULTS_BUCKET%/}/ucoa-ci-probes/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
+          gcloud storage cp "$PROBE" "$PROBE_OBJECT"
+          gcloud storage rm "$PROBE_OBJECT"
+          echo "RESULTS_BUCKET_WRITE_OK=$RESULTS_BUCKET" >> "$GITHUB_ENV"
 
       - name: Run real execution on Firebase Test Lab physical device
         id: ftl
@@ -154,10 +170,9 @@ jobs:
           echo "Firebase project: $PROJECT_ID"
           echo "Firebase physical device: $MODEL / Android $VERSION"
 
-          EXTRA_ARGS=()
-          if [ -n "$RESULTS_BUCKET" ]; then
-              EXTRA_ARGS+=("--results-bucket=$RESULTS_BUCKET")
-          fi
+          test -n "$RESULTS_BUCKET"
+          EXTRA_ARGS=("--results-bucket=$RESULTS_BUCKET")
+          EXTRA_ARGS+=("--results-dir=ucoa/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}")
 
           set +e
           gcloud firebase test android run \
