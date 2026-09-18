@@ -86,7 +86,10 @@ def main(out_file,catalog_file):
             except Exception as e:
                 observations[vm]={'error':str(e)}
         for vm,vo in observations.items():
-            if 'error' in vo: continue
+            if 'error' in vo:
+                for dm in decision:
+                    results.append({'task':task['name'],'vision_model':vm,'decision_model':dm,'vision_ok':False,'decision_ok':False,'pair_ok':False,'error':'VISION:'+vo['error']})
+                continue
             for dm in decision:
                 payload={'task':task['instruction'],'visual_observation':vo['obj'],'target':task['target']}
                 msgs=[
