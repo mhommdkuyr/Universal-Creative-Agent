@@ -28,13 +28,20 @@ jobs:
           test -n "${AWS_ACCESS_KEY_ID}"
           test -n "${AWS_SECRET_ACCESS_KEY}"
           aws sts get-caller-identity
-      - name: Build APK and instrumentation test
+      - name: Recover last CI-proven APK
+        uses: actions/download-artifact@v4
+        with:
+          name: ucoa-debug-apk-execution-smoke
+          path: recovered-apk
+          github-token: ${{ github.token }}
+          run-id: 35388892169
+      - name: Build instrumentation test package
         working-directory: android
         run: |
           set -euo pipefail
           chmod +x ./gradlew
-          ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest --stacktrace --info 2>&1 | tee ../gradle-devicefarm.log
-          cp app/build/outputs/apk/debug/app-debug.apk ../devicefarm-app.apk
+          ./gradlew --no-daemon :app:assembleDebugAndroidTest --stacktrace 2>&1 | tee ../gradle-devicefarm.log
+          cp ../recovered-apk/app-debug.apk ../devicefarm-app.apk
           mkdir -p ../devicefarm-test-package
           cp app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk ../devicefarm-test-package/app-debug-androidTest.apk
           cd ../devicefarm-test-package && zip -q ../devicefarm-test-package.zip app-debug-androidTest.apk
