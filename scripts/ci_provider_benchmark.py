@@ -27,6 +27,8 @@ IMAGES={t['name']:make_image('continue' if t['name']=='continue_button' else 'wi
 
 def call(protocol,chat_url,model,messages,image=None):
  headers={'Authorization':'Bearer '+KEY,'Content-Type':'application/json','Accept':'application/json'}
+ if protocol=='cheaperinference':
+  headers.pop('Authorization',None); headers['x-api-key']=KEY
  started=time.perf_counter()
  if protocol=='gemini':
   parts=[{'text':messages[-1].get('content','') if isinstance(messages[-1].get('content',''),str) else json.dumps(messages[-1].get('content'))}]
@@ -38,6 +40,7 @@ def call(protocol,chat_url,model,messages,image=None):
   content=messages[-1].get('content','')
   if image: content=[{'type':'text','text':content},{'type':'image_url','image_url':{'url':'data:image/jpeg;base64,'+image}}]
   body={'model':model,'messages':[{'role':'system','content':messages[0].get('content','')},{'role':'user','content':content}],'temperature':0,'max_tokens':256}
+  if protocol=='cheaperinference': body['ranking']='speed'
   url=chat_url
  req=Request(url,data=json.dumps(body,ensure_ascii=False).encode(),headers=headers,method='POST')
  try:
