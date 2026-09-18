@@ -39,3 +39,5 @@ jobs:
             provider-discovery.json
             provider-benchmark.json
           retention-days: 14
+
+# benchmark trigger refresh
