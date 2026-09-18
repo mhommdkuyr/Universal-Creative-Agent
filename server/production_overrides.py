@@ -44,7 +44,8 @@ def run_plan(req: Any) -> dict[str, Any]:
     try:
         raw, provider = provider_router.reasoning(app_v4_runtime.PLANNER, payload)
         steps, summary = _extract_plan(raw)
-        return _save_plan(sid, req, {"summary": summary, "steps": steps, "output_mode": "primary_provider_router", "provider": provider, "session_id": sid})
+        meta = provider_router.get_last_call_metadata()
+        return _save_plan(sid, req, {"summary": summary, "steps": steps, "output_mode": "primary_provider_router", "provider": provider, "session_id": sid, "provider_metrics": meta})
     except Exception as exc:
         task = req.task.lower()
         aliases = {"يوتيوب":"YouTube","youtube":"YouTube","واتساب":"WhatsApp","whatsapp":"WhatsApp","كاب كات":"CapCut","capcut":"CapCut","كانفا":"Canva","canva":"Canva","كروم":"Chrome","chrome":"Chrome","انستجرام":"Instagram","instagram":"Instagram","تليجرام":"Telegram","telegram":"Telegram"}
@@ -96,6 +97,7 @@ def run_step(req: Any) -> dict[str, Any]:
         }, ensure_ascii=False)
         raw, provider = provider_router.reasoning(app_v4_runtime.CONTROLLER, controller_payload)
         result = app_v4_runtime._normalize_action(app_v3.extract_json(raw), req.screenshot_base64)
+        result["provider_metrics"] = provider_router.get_last_call_metadata()
         result.update({
             "provider": provider,
             "reasoning_provider": provider,
