@@ -106,10 +106,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          BUCKET="$(python3 - <<'PY'
-          import subprocess, json, sys
+          PROJECT_ID="$(python3 - <<'PY'
+          import json, os
+          path=os.environ['GOOGLE_GHA_CREDS_PATH']
+          print(json.load(open(path))['project_id'])
+          PY
+          )"
+          BUCKET="$(PROJECT_ID="$PROJECT_ID" python3 - <<'PY'
+          import subprocess, json, sys, os
+          project_id = os.environ.get('PROJECT_ID', '')
           try:
-              res = subprocess.run(['gcloud', 'storage', 'buckets', 'list', '--format=json'], capture_output=True, text=True)
+              res = subprocess.run(['gcloud', 'storage', 'buckets', 'list', f'--project={project_id}', '--format=json'], capture_output=True, text=True)
               if res.returncode == 0 and res.stdout.strip():
                   data = json.loads(res.stdout)
                   names = [b.get('name') for b in data if isinstance(b, dict) and b.get('name')]
@@ -118,7 +125,10 @@ jobs:
                       sys.exit(0)
           except Exception:
               pass
-          print('')
+          if project_id:
+              print(f"{project_id}.appspot.com")
+          else:
+              print('')
           PY
           )"
           echo "BUCKET=$BUCKET" >> "$GITHUB_OUTPUT"
