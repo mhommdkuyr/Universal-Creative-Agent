@@ -53,8 +53,12 @@ class UcoaAccessibilityService : AccessibilityService() {
     override fun onInterrupt() { UcoaDiagnostics.log("ACCESSIBILITY", "أرسل النظام interrupt للخدمة") }
 
     fun liveExecutionOverlay(): UcoaLiveExecutionOverlay? = liveOverlay
-    fun foregroundPackageName(): String? = lastForegroundPackage ?: windows.asSequence().mapNotNull { it.root?.packageName?.toString() }.firstOrNull()
-    fun findText(text: String): AccessibilityNodeInfo? = windows.mapNotNull { it.root }.asSequence().flatMap { it.findAccessibilityNodeInfosByText(text).asSequence() }.firstOrNull()
+    fun foregroundPackageName(): String? =
+        lastForegroundPackage
+            ?: rootInActiveWindow?.packageName?.toString()
+            ?: windows.asSequence().mapNotNull { it.root?.packageName?.toString() }.firstOrNull()
+    fun findText(text: String): AccessibilityNodeInfo? =
+        allNodes().firstOrNull { nodeText(it).contains(text, ignoreCase = true) }
     fun clickText(text: String): Boolean = findText(text)?.let(::clickNode) == true
     fun clickAnyText(texts: List<String>): Boolean {
         val wanted = texts.map(::normalize).filter { it.isNotBlank() }
@@ -64,7 +68,10 @@ class UcoaAccessibilityService : AccessibilityService() {
         nodes.firstOrNull { n -> val v = normalize(nodeText(n)); v.isNotBlank() && wanted.any { v.contains(it) } }?.let { n -> val b = android.graphics.Rect(); n.getBoundsInScreen(b); if (b.width() > 2 && b.height() > 2) return tap(b.centerX().toFloat(), b.centerY().toFloat()) }
         return false
     }
-    fun typeText(text: String): Boolean { val node = allNodes().firstOrNull { it.isEditable && it.isFocused } ?: allNodes().firstOrNull { it.isEditable } ?: windows.mapNotNull { it.root }.asSequence().mapNotNull { it.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) }.firstOrNull() ?: return false; return setNodeText(node, text) }
+    fun typeText(text: String): Boolean { val node = allNodes().firstOrNull { it.isEditable && it.isFocused }
+            ?: allNodes().firstOrNull { it.isEditable }
+            ?: rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            ?: return false; return setNodeText(node, text) }
     fun typeIntoAny(hints: List<String>, text: String): Boolean { val wanted = hints.map(::normalize).filter { it.isNotBlank() }; val candidates = allNodes().filter { it.isEditable || it.className?.toString()?.contains("EditText", true) == true }; val hinted = candidates.firstOrNull { n -> val v = normalize(nodeText(n)) + " " + normalize(n.hintText?.toString() ?: "") + " " + normalize(n.contentDescription?.toString() ?: ""); v.isNotBlank() && wanted.any { v.contains(it) } }; return setNodeText(hinted ?: candidates.firstOrNull() ?: return false, text) }
     fun back() = performGlobalAction(GLOBAL_ACTION_BACK)
     fun home() = performGlobalAction(GLOBAL_ACTION_HOME)
@@ -127,7 +134,26 @@ class UcoaAccessibilityService : AccessibilityService() {
     fun shareAttachment(uriString: String, packageNameTarget: String? = null): Boolean = try { val uri = Uri.parse(uriString); val intent = Intent(Intent.ACTION_SEND).apply { type = contentResolver.getType(uri) ?: "*/*"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION); packageNameTarget?.takeIf { it.isNotBlank() }?.let(::setPackage) }; startActivity(intent); UcoaDiagnostics.log("EXECUTOR", "مشاركة مرفق", "target=$packageNameTarget"); true } catch (e: Exception) { UcoaDiagnostics.log("EXECUTOR", "فشل مشاركة مرفق", e.message ?: e.javaClass.simpleName); false }
     fun observeUi(maxNodes: Int = 160): String { val result = JSONArray(); allNodes(maxNodes).forEach { node -> val b = android.graphics.Rect(); node.getBoundsInScreen(b); result.put(JSONObject().apply { put("class", node.className ?: ""); put("text", node.text ?: ""); put("hint", node.hintText ?: ""); put("description", node.contentDescription ?: ""); put("clickable", node.isClickable); put("editable", node.isEditable); put("enabled", node.isEnabled); put("focused", node.isFocused); put("bounds", JSONObject().apply { put("left", b.left); put("top", b.top); put("right", b.right); put("bottom", b.bottom) }) }) }; return result.toString() }
     fun captureScreenshotBase64(callback: (String?) -> Unit) { if (Build.VERSION.SDK_INT < 30) { callback(null); return }; try { takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback { override fun onSuccess(result: ScreenshotResult) { try { val hw = result.hardwareBuffer; val bitmap = Bitmap.wrapHardwareBuffer(hw, result.colorSpace)?.copy(Bitmap.Config.ARGB_8888, false); hw.close(); if (bitmap == null) { callback(null); return }; val out = ByteArrayOutputStream(); bitmap.compress(Bitmap.CompressFormat.JPEG, 72, out); bitmap.recycle(); callback(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)) } catch (_: Exception) { runCatching { result.hardwareBuffer.close() }; callback(null) } }; override fun onFailure(errorCode: Int) { callback(null) } }) } catch (_: Exception) { callback(null) } }
-    private fun allNodes(max: Int = 400): List<AccessibilityNodeInfo> { val result = mutableListOf<AccessibilityNodeInfo>(); fun walk(n: AccessibilityNodeInfo?) { if (n == null || result.size >= max) return; result += n; for (i in 0 until n.childCount) walk(n.getChild(i)) }; windows.mapNotNull { it.root }.forEach(::walk); return result }
+    private fun accessibilityRoots(): List<AccessibilityNodeInfo> {
+        val roots = mutableListOf<AccessibilityNodeInfo>()
+        val active = rootInActiveWindow
+        if (active != null) roots += active
+        windows.asSequence().mapNotNull { it.root }.forEach { root ->
+            if (roots.none { it.windowId == root.windowId }) roots += root
+        }
+        return roots
+    }
+
+    private fun allNodes(max: Int = 400): List<AccessibilityNodeInfo> {
+        val result = mutableListOf<AccessibilityNodeInfo>()
+        fun walk(n: AccessibilityNodeInfo?) {
+            if (n == null || result.size >= max) return
+            result += n
+            for (i in 0 until n.childCount) walk(n.getChild(i))
+        }
+        accessibilityRoots().forEach(::walk)
+        return result
+    }
     private fun nodeText(n: AccessibilityNodeInfo): String = listOfNotNull(n.text?.toString(), n.hintText?.toString(), n.contentDescription?.toString()).joinToString(" ")
     private fun normalize(v: String): String = v.trim().lowercase().replace("ـ", "").replace(Regex("\\s+"), " ")
     private fun clickNode(n: AccessibilityNodeInfo): Boolean { if (n.isClickable && n.isEnabled) return n.performAction(AccessibilityNodeInfo.ACTION_CLICK); var p = n.parent; while (p != null) { if (p.isClickable && p.isEnabled) return p.performAction(AccessibilityNodeInfo.ACTION_CLICK); p = p.parent }; return false }
