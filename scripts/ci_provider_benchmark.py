@@ -38,7 +38,7 @@ def call(model,messages):
     req=Request(BASE,data=json.dumps(body,ensure_ascii=False).encode(),headers={'Authorization':'Bearer '+KEY,'Content-Type':'application/json','HTTP-Referer':'https://github.com/mhommdkuyr/Universal-Creative-Agent','X-Title':'UCOA provider benchmark'},method='POST')
     started=time.perf_counter()
     try:
-        with urlopen(req,timeout=45) as r: data=json.loads(r.read().decode())
+        with urlopen(req,timeout=20) as r: data=json.loads(r.read().decode())
     except Exception as e:
         raise RuntimeError(str(e)[:300])
     elapsed=round((time.perf_counter()-started)*1000,2)
