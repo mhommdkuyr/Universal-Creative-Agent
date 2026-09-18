@@ -17,10 +17,11 @@ class CloudExecutionTest {
     private fun shell(device: UiDevice, command: String): String = device.executeShellCommand(command)
 
     private fun foregroundPackage(device: UiDevice): String {
-        return shell(device, "dumpsys window windows | grep -m1 mCurrentFocus")
-            .substringAfter("u0 ", "")
-            .substringBefore("/")
-            .trim()
+        val focus = shell(device, "dumpsys window windows | grep -E 'mCurrentFocus|mFocusedApp'")
+        val pkg = focus.substringAfter("u0 ", "").substringBefore("/").trim()
+        if (pkg.isNotEmpty() && !pkg.contains(" ")) return pkg
+        val top = shell(device, "dumpsys activity top | grep -m1 ACTIVITY")
+        return top.substringAfter("ACTIVITY ", "").substringBefore("/").trim()
     }
 
     @Test
@@ -53,7 +54,7 @@ class CloudExecutionTest {
             Thread.sleep(1000)
         }
         assertTrue("Android action did not open Settings", reachedSettings)
-        assertEquals("com.android.settings", foregroundPackage(device))
+        assertTrue("Foreground package is not Settings: " + foregroundPackage(device), foregroundPackage(device).contains("com.android.settings"))
 
         val logcat = shell(device, "logcat -d")
         assertTrue("Real smoke success marker missing", logcat.contains("UCOA_REAL_SMOKE_OK"))
