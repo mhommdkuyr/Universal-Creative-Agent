@@ -53,7 +53,9 @@ jobs:
         run: |
           set -euo pipefail
           gradle -p android :app:assembleDebugAndroidTest --stacktrace 2>&1 | tee gradle-devicefarm.log
-          cp ../recovered-apk/app-debug.apk ../devicefarm-app.apk
+          APK=$(find recovered-apk -type f -name app-debug.apk | head -n 1)
+          test -n "$APK" && test -s "$APK"
+          cp "$APK" devicefarm-app.apk
           mkdir -p devicefarm-test-package
           cp android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk devicefarm-test-package/app-debug-androidTest.apk
           cd devicefarm-test-package && zip -q ../devicefarm-test-package.zip app-debug-androidTest.apk
