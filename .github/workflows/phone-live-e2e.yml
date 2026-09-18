@@ -1,0 +1,159 @@
+name: Live Phone Cloud E2E
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/phone-live-e2e.yml'
+      - 'server/device_bridge.py'
+      - 'server/remote_ops.py'
+      - 'android/app/src/main/java/com/ucoa/app/RemoteCommandBridge.kt'
+      - 'android/app/src/main/java/com/ucoa/app/UcoaAccessibilityService.kt'
+
+permissions:
+  contents: read
+
+jobs:
+  phone-live-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      UCOA_BRAIN_URL: https://ucoa-agent-brain.onrender.com
+      UCOA_AGENT_TOKEN: ${{ secrets.UCOA_AGENT_TOKEN }}
+    steps:
+      - name: Verify cloud health and authorization
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${UCOA_AGENT_TOKEN}" || {
+            echo "::error title=Live phone test blocked::GitHub secret UCOA_AGENT_TOKEN is not configured."
+            exit 1
+          }
+          curl --fail --silent --show-error --retry 3 "${UCOA_BRAIN_URL}/health" | tee health.json
+          curl --fail --silent --show-error --retry 3             -H "Authorization: Bearer ${UCOA_AGENT_TOKEN}"             "${UCOA_BRAIN_URL}/v1/admin/diagnostics" | tee admin-diagnostics-before.json
+
+      - name: Wait for a connected phone
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 90); do
+            DEVICES="$(curl --fail --silent --show-error               -H "Authorization: Bearer ${UCOA_AGENT_TOKEN}"               "${UCOA_BRAIN_URL}/v1/admin/devices")"
+            echo "$DEVICES" | tee "devices-${i}.json"
+            INSTALL_ID="$(python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("devices") or [""])[-1])' <<<"$DEVICES")"
+            if [ -n "$INSTALL_ID" ]; then
+              echo "INSTALL_ID=$INSTALL_ID" >> "$GITHUB_ENV"
+              echo "Connected phone found."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error title=Phone not connected::No active UCOA phone session was visible in the cloud."
+          exit 1
+
+      - name: Run safe live command suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p phone-results
+
+          run_task() {
+            local name="$1"
+            local task="$2"
+            echo "===== TASK: $name ====="
+            echo "$task"
+
+            local body
+            body="$(python3 - "$task" <<'PY'
+import json,sys
+task=sys.argv[1]
+print(json.dumps({
+  "kind":"task",
+  "task":task,
+  "attachments":[],
+  "metadata":{"qa_suite":"live-phone-e2e","case":sys.argv[1][:80]}
+},ensure_ascii=False))
+PY
+)"
+            local queued
+            queued="$(curl --fail --silent --show-error               -H "Authorization: Bearer ${UCOA_AGENT_TOKEN}"               -H "Content-Type: application/json"               -d "$body"               "${UCOA_BRAIN_URL}/v1/admin/devices/${INSTALL_ID}/commands")"
+            echo "$queued" | tee "phone-results/${name}-queued.json"
+            local command_id
+            command_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["command_id"])' <<<"$queued")"
+            test -n "$command_id"
+
+            for i in $(seq 1 120); do
+              local state
+              state="$(curl --fail --silent --show-error                 -H "Authorization: Bearer ${UCOA_AGENT_TOKEN}"                 "${UCOA_BRAIN_URL}/v1/admin/devices/${INSTALL_ID}/commands/${command_id}")"
+              echo "$state" > "phone-results/${name}-latest.json"
+              local status
+              status="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["command"]["status"])' <<<"$state")"
+              echo "poll=$i status=$status"
+              if [ "$status" = "completed" ] || [ "$status" = "failed" ] || [ "$status" = "cancelled" ]; then
+                break
+              fi
+              sleep 2
+            done
+
+            local final_status
+            final_status="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["command"]["status"])' "phone-results/${name}-latest.json")"
+            cat "phone-results/${name}-latest.json"
+
+            if [ "$final_status" != "completed" ]; then
+              echo "::error title=Live phone command failed::${name} ended with status=$final_status"
+              return 1
+            fi
+
+            python3 - "${name}" <<'PY'
+import json,sys
+name=sys.argv[1]
+p=f"phone-results/{name}-latest.json"
+d=json.load(open(p))
+r=d["command"].get("result") or {}
+steps=int(r.get("steps",0) or 0)
+fg=r.get("final_foreground","")
+err=r.get("error","")
+print(f"RESULT {name}: steps={steps} foreground={fg} error={err}")
+if steps <= 0:
+    raise SystemExit("No execution steps were recorded")
+if err:
+    raise SystemExit(f"Command completed but reported error: {err}")
+PY
+          }
+
+          run_task "01-settings-observe" "افتح إعدادات Android فقط، ثم تأكد أن شاشة الإعدادات ظهرت فعليًا، ولا تغيّر أي إعداد."
+          run_task "02-settings-search" "افتح إعدادات Android، استخدم البحث إن كان ظاهرًا، اكتب Display أو الشاشة، افتح نتيجة مناسبة لخيارات العرض، ثم ارجع دون تغيير أي إعداد."
+          run_task "03-chrome-url" "افتح Chrome وافتح https://example.com ثم تحقق من ظهور الصفحة، وبعدها ارجع إلى الشاشة السابقة دون تسجيل دخول أو إرسال أي بيانات."
+          run_task "04-chrome-scroll" "افتح Chrome على https://example.com، مرر الصفحة إلى الأسفل ثم إلى الأعلى، ثم استخدم زر الرجوع للعودة، مع التحقق من كل خطوة."
+          run_task "05-home-return" "افتح إعدادات Android، انتقل إلى شاشة فرعية آمنة مثل حول الهاتف إن كانت ظاهرة، ارجع، ثم انتقل إلى الشاشة الرئيسية، وبعدها افتح الإعدادات مرة أخرى وتحقق من عودتها للعمل."
+          run_task "06-app-discovery" "افحص التطبيقات المثبتة. إن كان CapCut موجودًا فافتحه فقط وتأكد من ظهور شاشته الرئيسية دون إنشاء أو تعديل أو نشر أي محتوى؛ وإن لم يكن موجودًا فافتح Chrome بدلًا منه. لا تغيّر أي بيانات."
+          run_task "07-multistep" "نفّذ مهمة متعددة الخطوات على الهاتف: افتح الإعدادات، استخدم البحث أو التنقل للوصول إلى قسم العرض/الشاشة، مرر داخل الصفحة، افتح عنصرًا فرعيًا آمنًا، ثم ارجع حتى الصفحة الرئيسية للإعدادات. تحقق بعد كل خطوة ولا تغيّر أي إعداد."
+          run_task "08-recovery" "نفّذ مهمة آمنة تتطلب تصحيح المسار: افتح Chrome، اذهب إلى https://example.com، حاول الوصول إلى رابط ظاهر بطريقة صحيحة، ثم إن لم يكن الرابط قابلًا للتنفيذ عد إلى الشاشة السابقة وأعد الملاحظة، وفي النهاية ارجع دون إرسال نموذج أو تسجيل دخول."
+          run_task "09-complex" "نفّذ سيناريو مركبًا بالكامل على الهاتف: افتح الإعدادات وتحقق منها، انتقل إلى قسم آمن دون تعديل، ارجع، افتح Chrome إلى https://example.com، نفّذ تمريرًا للأسفل ثم للأعلى، ارجع، انتقل إلى الشاشة الرئيسية، ثم افتح الإعدادات مرة أخرى وتحقق من النتيجة النهائية."
+          run_task "10-final-verification" "أثبت أن الوكيل السحابي يستطيع الملاحظة واتخاذ القرار والتنفيذ والتحقق والإصلاح: افتح الإعدادات، انتقل إلى قسم عرض آمن، عد خطوة، افتح Chrome على https://example.com، ثم عُد إلى الإعدادات. لا تغيّر أي إعداد ولا ترسل أي بيانات."
+
+      - name: Verify cloud-side evidence after suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error             -H "Authorization: Bearer ${UCOA_AGENT_TOKEN}"             "${UCOA_BRAIN_URL}/v1/admin/diagnostics" | tee admin-diagnostics-after.json
+          python3 - <<'PY'
+import json
+d=json.load(open("admin-diagnostics-after.json"))
+print(json.dumps(d,ensure_ascii=False,indent=2))
+if int(d.get("active_sessions",0)) < 1:
+    raise SystemExit("Connected phone session disappeared before final verification")
+PY
+
+      - name: Upload live phone evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ucoa-live-phone-e2e-${{ github.sha }}
+          path: |
+            health.json
+            admin-diagnostics-before.json
+            admin-diagnostics-after.json
+            devices-*.json
+            phone-results/
+          if-no-files-found: ignore
+          retention-days: 14
