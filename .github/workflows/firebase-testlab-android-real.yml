@@ -125,7 +125,10 @@ jobs:
                       sys.exit(0)
           except Exception:
               pass
-          print('')
+          if project_id:
+              print(f"{project_id}.appspot.com")
+          else:
+              print('')
           PY
           )"
           if [ -n "$BUCKET" ] && [[ "$BUCKET" != gs://* ]]; then
