@@ -298,8 +298,7 @@ jobs:
           )"
           gcloud storage buckets add-iam-policy-binding "$BUCKET" --member="serviceAccount:$CLIENT_EMAIL" --role="roles/storage.objectCreator" --quiet
           PROBE="/tmp/ucoa-${GITHUB_RUN_ID}-probe.txt"
-          printf "ucoa
-" > "$PROBE"
+          printf "ucoa\n" > "$PROBE"
           gcloud storage cp "$PROBE" "${BUCKET%/}/probes/${GITHUB_RUN_ID}.txt"
           gcloud storage rm "${BUCKET%/}/probes/${GITHUB_RUN_ID}.txt"
           echo "BUCKET=$BUCKET" >> "$GITHUB_OUTPUT"
