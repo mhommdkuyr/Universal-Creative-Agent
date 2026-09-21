@@ -28,7 +28,7 @@ GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 GITHUB_OIDC_AUDIENCE = "ucoa-live-phone"
 GITHUB_QA_REPOSITORY = "mhommdkuyr/Universal-Creative-Agent"
 GITHUB_QA_WORKFLOW = os.getenv("UCOA_GITHUB_QA_WORKFLOW", "CI")
-GITHUB_QA_WORKFLOW_ALIASES = {"CI", "Live Phone Cloud E2E", "Render Bridge Smoke Check", "Render Bridge Manual Diagnostic", "UCOA Live Phone QA", "Render Brain Smoke", ".github/workflows/render-bridge-smoke.yml"}
+GITHUB_QA_WORKFLOW_ALIASES = {"CI", "Final Release Gate", "Live Phone Cloud E2E", "Render Bridge Smoke Check", "Render Bridge Manual Diagnostic", "UCOA Live Phone QA", "Render Brain Smoke", ".github/workflows/render-bridge-smoke.yml"}
 _GITHUB_JWK_CLIENT = PyJWKClient(f"{GITHUB_OIDC_ISSUER}/.well-known/jwks")
 
 def _github_oidc_claims(authorization: str | None) -> dict[str, Any]:
@@ -49,6 +49,7 @@ def _github_oidc_claims(authorization: str | None) -> dict[str, Any]:
         raise HTTPException(403, "Workflow is not authorized for phone QA")
     workflow_ref = str(claims.get("job_workflow_ref", ""))
     allowed_refs = (
+        "/.github/workflows/final-release-gate.yml@refs/heads/main",
         "/.github/workflows/phone-live-e2e.yml@refs/heads/main",
         "/.github/workflows/render-bridge-smoke.yml@refs/heads/main",
         "/.github/workflows/ci.yml@refs/heads/main",
