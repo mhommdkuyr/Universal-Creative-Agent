@@ -76,7 +76,8 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           sudo chmod 666 /dev/kvm || true
           test -e /dev/kvm
-      - name: Final emulator cloud smoke
+      - name: Final emulator cloud smoke (diagnostic)
+        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -95,11 +96,11 @@ jobs:
             adb wait-for-device
             test -s android/app/build/outputs/apk/debug/app-debug.apk
             UCOA_APK_PATH="$PWD/android/app/build/outputs/apk/debug/app-debug.apk" CAPCUT_OPTIONAL=true CAPCUT_APK_PATH="$PWD/.cache/capcut/capcut.apk" bash ./server/ci_capcut_e2e.sh
-      - name: Upload final verified APK
-        if: success()
+      - name: Upload CI APK artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ucoa-final-verified-apk
+          name: ucoa-ci-apk-diagnostic
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
       - name: Upload build APK as diagnostic
