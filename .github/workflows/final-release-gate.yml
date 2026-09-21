@@ -80,7 +80,7 @@ jobs:
           import zipfile
           badging=open('/tmp/badging.txt', encoding='utf-8').read()
           assert "targetSdkVersion:'36'" in badging, badging
-          assert "versionName:'1.0.2'" in badging, badging
+          assert "versionName='1.0.2'" in badging, badging
           with zipfile.ZipFile("android/app/build/outputs/apk/debug/app-debug.apk") as z:
               names=z.namelist()
               forbidden=[n for n in names if "ucoa_local_model" in n or n.endswith(".litertlm")]
