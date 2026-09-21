@@ -42,14 +42,20 @@ jobs:
           test -n "${AWS_ACCESS_KEY_ID}"
           test -n "${AWS_SECRET_ACCESS_KEY}"
           aws sts get-caller-identity
-      - name: Recover last CI-proven APK
-        uses: actions/download-artifact@v4
-        with:
-          name: ucoa-debug-apk-execution-smoke
-          path: recovered-apk
-          github-token: ${{ github.token }}
-          run-id: 35388892169
-      - name: Build instrumentation test package
+      - name: Build exact release APK and instrumentation test package
+        run: |
+          set -euo pipefail
+          gradle -p android assembleDebug assembleDebugAndroidTest --stacktrace 2>&1 | tee gradle-devicefarm.log
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          TEST_APK=android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          test -s "$APK" && test -s "$TEST_APK"
+          sha256sum "$APK" | tee ucoa_apk_sha256.txt
+          echo "COMMIT_SHA=$GITHUB_SHA" | tee -a ucoa_apk_sha256.txt
+          mkdir -p devicefarm-test-package
+          cp "$APK" devicefarm-app.apk
+          cp "$TEST_APK" devicefarm-test-package/app-debug-androidTest.apk
+          (cd devicefarm-test-package && zip -q ../devicefarm-test-package.zip app-debug-androidTest.apk)
+      - name: Upload build evidence
         run: |
           set -euo pipefail
           gradle -p android :app:assembleDebugAndroidTest --stacktrace 2>&1 | tee gradle-devicefarm.log
@@ -64,6 +70,14 @@ jobs:
         with:
           name: aws-devicefarm-gradle-log
           path: gradle-devicefarm.log
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ucoa-aws-devicefarm-build-proof
+          path: |
+            ucoa_apk_sha256.txt
+            devicefarm-app.apk
           if-no-files-found: ignore
       - name: Create or reuse Device Farm project
         id: project
