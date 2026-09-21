@@ -20,7 +20,7 @@ jobs:
           python-version: '3.12'
       - name: Install server test dependencies
         run: |
-          python -m pip install --disable-pip-version-check -q pillow numpy opencv-python-headless
+          python -m pip install --disable-pip-version-check -q pytest pillow numpy opencv-python-headless
           python -m pip install --disable-pip-version-check -q -r server/requirements.txt
       - name: Production health and remote config
         run: |
