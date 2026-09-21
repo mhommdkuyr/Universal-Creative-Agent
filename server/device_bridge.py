@@ -27,8 +27,8 @@ DEVICE_ONLINE_TTL_SECONDS = max(15, int(os.getenv("UCOA_DEVICE_ONLINE_TTL_SECOND
 GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 GITHUB_OIDC_AUDIENCE = "ucoa-live-phone"
 GITHUB_QA_REPOSITORY = "mhommdkuyr/Universal-Creative-Agent"
-GITHUB_QA_WORKFLOW = os.getenv("UCOA_GITHUB_QA_WORKFLOW", "Render Bridge Smoke Check")
-GITHUB_QA_WORKFLOW_ALIASES = {"Live Phone Cloud E2E", "Render Bridge Smoke Check", "UCOA Live Phone QA", "Render Brain Smoke", ".github/workflows/render-bridge-smoke.yml"}
+GITHUB_QA_WORKFLOW = os.getenv("UCOA_GITHUB_QA_WORKFLOW", "CI")
+GITHUB_QA_WORKFLOW_ALIASES = {"CI", "Live Phone Cloud E2E", "Render Bridge Smoke Check", "UCOA Live Phone QA", "Render Brain Smoke", ".github/workflows/render-bridge-smoke.yml"}
 _GITHUB_JWK_CLIENT = PyJWKClient(f"{GITHUB_OIDC_ISSUER}/.well-known/jwks")
 
 def _github_oidc_claims(authorization: str | None) -> dict[str, Any]:
