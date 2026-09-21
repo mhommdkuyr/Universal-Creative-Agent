@@ -22,12 +22,13 @@ DB_PATH = Path(os.getenv("UCOA_REMOTE_OPS_DB", "/opt/render/project/src/.ucoa-lo
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 COMMAND_TTL = max(60, int(os.getenv("UCOA_COMMAND_TTL_SECONDS", "900")))
 CLAIM_TTL = max(30, int(os.getenv("UCOA_COMMAND_CLAIM_TTL_SECONDS", "120")))
+DEVICE_ONLINE_TTL_SECONDS = max(15, int(os.getenv("UCOA_DEVICE_ONLINE_TTL_SECONDS", "45")))
 
 GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 GITHUB_OIDC_AUDIENCE = "ucoa-live-phone"
 GITHUB_QA_REPOSITORY = "mhommdkuyr/Universal-Creative-Agent"
-GITHUB_QA_WORKFLOW = os.getenv("UCOA_GITHUB_QA_WORKFLOW", "Render Bridge Smoke Check")
-GITHUB_QA_WORKFLOW_ALIASES = {"Live Phone Cloud E2E", "Render Bridge Smoke Check", "UCOA Live Phone QA", "Render Brain Smoke", ".github/workflows/render-bridge-smoke.yml"}
+GITHUB_QA_WORKFLOW = os.getenv("UCOA_GITHUB_QA_WORKFLOW", "CI")
+GITHUB_QA_WORKFLOW_ALIASES = {"CI", "Live Phone Cloud E2E", "Render Bridge Smoke Check", "Render Bridge Manual Diagnostic", "UCOA Live Phone QA", "Render Brain Smoke", ".github/workflows/render-bridge-smoke.yml"}
 _GITHUB_JWK_CLIENT = PyJWKClient(f"{GITHUB_OIDC_ISSUER}/.well-known/jwks")
 
 def _github_oidc_claims(authorization: str | None) -> dict[str, Any]:
@@ -65,7 +66,7 @@ def _active_device_ids() -> list[str]:
         try:
             with conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT DISTINCT install_id FROM ucoa_client_sessions WHERE expires_at > now() ORDER BY install_id")
+                    cur.execute("SELECT DISTINCT install_id FROM ucoa_client_sessions WHERE expires_at > now() AND last_seen_at > now() - (%s || ' seconds')::interval ORDER BY last_seen_at DESC", (DEVICE_ONLINE_TTL_SECONDS,))
                     devices = [r[0] for r in cur.fetchall()]
             conn.close()
             return devices
@@ -74,7 +75,7 @@ def _active_device_ids() -> list[str]:
             except Exception: pass
     conn = sqlite3.connect(DB_PATH, timeout=15)
     try:
-        return [r[0] for r in conn.execute("SELECT DISTINCT install_id FROM client_sessions WHERE expires_at > ? ORDER BY install_id", (time.time(),)).fetchall()]
+        return [r[0] for r in conn.execute("SELECT DISTINCT install_id FROM client_sessions WHERE expires_at > ? AND last_seen_at > ? ORDER BY last_seen_at DESC", (time.time(), time.time() - DEVICE_ONLINE_TTL_SECONDS)).fetchall()]
     finally:
         conn.close()
 
@@ -89,14 +90,16 @@ def _preferred_active_device_id() -> str | None:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "SELECT install_id, device, created_at "
+                        "SELECT install_id, device, created_at, last_seen_at "
                         "FROM ucoa_client_sessions WHERE expires_at > now() "
-                        "ORDER BY created_at DESC"
+                        "AND last_seen_at > now() - (%s || ' seconds')::interval "
+                        "ORDER BY last_seen_at DESC",
+                        (DEVICE_ONLINE_TTL_SECONDS,)
                     )
                     rows = cur.fetchall()
             conn.close()
             fallback = rows[0][0] if rows else None
-            for install_id, device, _created_at in rows:
+            for install_id, device, _created_at, _last_seen_at in rows:
                 meta = device if isinstance(device, dict) else {}
                 manufacturer = str(meta.get("manufacturer", "")).lower()
                 model = str(meta.get("model", "")).lower()
@@ -106,7 +109,26 @@ def _preferred_active_device_id() -> str | None:
         except Exception:
             try: conn.close()
             except Exception: pass
-    return None
+    conn = sqlite3.connect(DB_PATH, timeout=15)
+    try:
+        rows = conn.execute(
+            "SELECT install_id, device, created_at, last_seen_at FROM client_sessions "
+            "WHERE expires_at > ? AND last_seen_at > ? ORDER BY last_seen_at DESC",
+            (time.time(), time.time() - DEVICE_ONLINE_TTL_SECONDS),
+        ).fetchall()
+        fallback = rows[0][0] if rows else None
+        for install_id, device, _created_at, _last_seen_at in rows:
+            try:
+                meta = json.loads(device) if isinstance(device, str) else (device or {})
+            except Exception:
+                meta = {}
+            manufacturer = str(meta.get("manufacturer", "")).lower()
+            model = str(meta.get("model", "")).lower()
+            if manufacturer == "samsung" or model.startswith("sm-"):
+                return install_id
+        return fallback
+    finally:
+        conn.close()
 
 def _insert_command(install_id: str, req: DeviceCommandRequest) -> dict[str, Any]:
     install_id = install_id.strip()[:128]

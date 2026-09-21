@@ -1,113 +1,370 @@
-name: Final APK Release Gate
+name: Final Release Gate
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
+    branches: [main]
 
 concurrency:
-  group: final-apk-release-${{ github.event.workflow_run.head_branch || github.ref }}
+  group: final-release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   cloud-contract:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install smoke dependencies
-        run: python -m pip install --disable-pip-version-check pillow
-      - name: Production health
+      - name: Install server test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -q pillow numpy opencv-python-headless
+          python -m pip install --disable-pip-version-check -q -r server/requirements.txt
+      - name: Production health and remote config
         run: |
           set -euo pipefail
-          for i in $(seq 1 18); do
+          for i in $(seq 1 20); do
             code=$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 5 https://ucoa-agent-brain.onrender.com/health || true)
             echo "health HTTP=$code"
-            if [ "$code" = "200" ]; then cat /tmp/health.json; exit 0; fi
+            if [ "$code" = "200" ]; then
+              cat /tmp/health.json
+              break
+            fi
             sleep 2
           done
-          exit 1
-      - name: Remote config contract
-        run: |
-          set -euo pipefail
+          test -s /tmp/health.json
+          grep -q '"ok":true' /tmp/health.json
           curl -fsS --max-time 20 https://ucoa-agent-brain.onrender.com/v1/client/config -o /tmp/client-config.json
           python - <<'PY'
           import json
           d=json.load(open('/tmp/client-config.json'))
           assert d.get('ok') is True, d
           assert d.get('features',{}).get('remote_config') is True, d
-          assert d.get('features',{}).get('server_side_hotfix') is True, d
+          assert d.get('features',{}).get('result_verification') is True, d
           print('remote config revision:', d.get('revision'))
           PY
+      - name: Python regression suite
+        run: PYTHONPATH=. pytest -q
 
-  emulator-release:
+  build-release:
     needs: cloud-contract
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 1
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+      - uses: actions/setup-android@v3
         with:
           packages: platform-tools
       - uses: gradle/actions/setup-gradle@v4
-      - run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
-      - run: gradle -p android assembleDebug --stacktrace
-      - name: Validate thin APK
+      - name: Install Android 16 toolchain
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Build exact release candidate from this commit
         run: |
           set -euo pipefail
+          gradle -p android test assembleDebug assembleDebugAndroidTest --stacktrace
           APK=android/app/build/outputs/apk/debug/app-debug.apk
+          TEST_APK=android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
           test -s "$APK"
-          SIZE=$(stat -c '%s' "$APK")
-          echo "APK_BYTES=$SIZE"
-          test "$SIZE" -lt 41943040
-          ! unzip -l "$APK" | grep -E 'ucoa_local_model|litertlm'
-          unzip -l "$APK" | grep -q 'AndroidManifest.xml'
-      - name: Enable KVM
-        run: |
-          set -euo pipefail
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          sudo chmod 666 /dev/kvm || true
-          test -e /dev/kvm
-      - name: Final emulator + cloud + accessibility + verification smoke
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 34
-          target: default
-          arch: x86_64
-          profile: pixel_2
-          force-avd-creation: true
-          cores: 2
-          ram-size: 2048M
-          disk-size: 4096M
-          emulator-boot-timeout: 600
-          emulator-options: -no-window -noaudio -no-boot-anim -gpu swiftshader_indirect -no-snapshot-save -camera-back none -camera-front none
-          disable-animations: true
-          script: |
-            set -eu
-            test -s android/app/build/outputs/apk/debug/app-debug.apk
-            UCOA_APK_PATH="$PWD/android/app/build/outputs/apk/debug/app-debug.apk" CAPCUT_OPTIONAL=true CAPCUT_APK_PATH="$PWD/.cache/capcut/capcut.apk" bash ./server/ci_capcut_e2e.sh
-      - name: Final APK artifact
-        if: success()
+          test -s "$TEST_APK"
+          AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n1)"
+          "$AAPT" dump badging "$APK" | tee /tmp/badging.txt
+          grep -q "targetSdkVersion:'36'" /tmp/badging.txt
+          grep -q "versionName:'1.0.2'" /tmp/badging.txt
+          ! unzip -l "$APK" | grep -Ei 'ucoa_local_model|\\.litertlm'
+          unzip -t "$APK" >/dev/null
+          sha256sum "$APK" | tee ucoa_apk_sha256.txt
+          echo "COMMIT_SHA=$GITHUB_SHA" | tee -a ucoa_apk_sha256.txt
+      - name: Upload exact release candidate
         uses: actions/upload-artifact@v4
         with:
-          name: ucoa-final-verified-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: ucoa-release-candidate
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            ucoa_apk_sha256.txt
           retention-days: 30
+
+  physical-aws:
+    needs: build-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ucoa-release-candidate
+          path: release-candidate
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Verify AWS access
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY || secrets.AWS_SECRET_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || 'us-west-2' }}
+        run: |
+          set -euo pipefail
+          test -n "${AWS_ACCESS_KEY_ID:-}"
+          test -n "${AWS_SECRET_ACCESS_KEY:-}"
+          aws sts get-caller-identity
+      - name: Prepare Device Farm package
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY || secrets.AWS_SECRET_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || 'us-west-2' }}
+        run: |
+          set -euo pipefail
+          APK="$GITHUB_WORKSPACE/release-candidate/app-debug.apk"
+          TEST_APK="$GITHUB_WORKSPACE/release-candidate/app-debug-androidTest.apk"
+          test -s "$APK"; test -s "$TEST_APK"
+          cp "$APK" devicefarm-app.apk
+          mkdir -p devicefarm-test-package
+          cp "$TEST_APK" devicefarm-test-package/app-debug-androidTest.apk
+          (cd devicefarm-test-package && zip -q ../devicefarm-test-package.zip app-debug-androidTest.apk)
+      - name: Create or reuse Device Farm project
+        id: project
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY || secrets.AWS_SECRET_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || 'us-west-2' }}
+        run: |
+          set -euo pipefail
+          NAME="UCOA-Real-Android"
+          ARN="$(aws devicefarm list-projects --query "projects[?name=='${NAME}'].arn | [0]" --output text)"
+          if [ -z "$ARN" ] || [ "$ARN" = "None" ]; then
+            ARN="$(aws devicefarm create-project --name "$NAME" --query project.arn --output text)"
+          fi
+          echo "project_arn=$ARN" >> "$GITHUB_OUTPUT"
+      - name: Upload current APK and test package
+        id: uploads
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY || secrets.AWS_SECRET_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || 'us-west-2' }}
+        run: |
+          set -euo pipefail
+          APP_URL="$(aws devicefarm create-upload --project-arn "${{ steps.project.outputs.project_arn }}" --name "ucoa-${GITHUB_SHA}.apk" --type ANDROID_APP --query upload.url --output text)"
+          curl --fail --retry 5 --upload-file devicefarm-app.apk "$APP_URL"
+          APP_ARN="$(aws devicefarm list-uploads --arn "${{ steps.project.outputs.project_arn }}" --query "uploads[?name=='ucoa-${GITHUB_SHA}.apk'] | sort_by(@,&created)[-1].arn" --output text)"
+          TEST_URL="$(aws devicefarm create-upload --project-arn "${{ steps.project.outputs.project_arn }}" --name "ucoa-${GITHUB_SHA}-test.zip" --type INSTRUMENTATION --query upload.url --output text)"
+          curl --fail --retry 5 --upload-file devicefarm-test-package.zip "$TEST_URL"
+          TEST_ARN="$(aws devicefarm list-uploads --arn "${{ steps.project.outputs.project_arn }}" --query "uploads[?name=='ucoa-${GITHUB_SHA}-test.zip'] | sort_by(@,&created)[-1].arn" --output text)"
+          echo "app_arn=$APP_ARN" >> "$GITHUB_OUTPUT"
+          echo "test_arn=$TEST_ARN" >> "$GITHUB_OUTPUT"
+      - name: Wait for Device Farm uploads
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY || secrets.AWS_SECRET_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || 'us-west-2' }}
+        run: |
+          set -euo pipefail
+          for arn in "${{ steps.uploads.outputs.app_arn }}" "${{ steps.uploads.outputs.test_arn }}"; do
+            for i in $(seq 1 40); do
+              s="$(aws devicefarm get-upload --arn "$arn" --query upload.status --output text)"
+              echo "upload=$s"
+              case "$s" in SUCCEEDED) break;; FAILED) exit 1;; esac
+              sleep 5
+            done
+          done
+      - name: Select physical device pool
+        id: pool
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY || secrets.AWS_SECRET_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || 'us-west-2' }}
+        run: |
+          set -euo pipefail
+          POOL="$(aws devicefarm list-device-pools --arn "${{ steps.project.outputs.project_arn }}" --query "devicePools[?name=='Top Devices'] | [0].arn" --output text)"
+          if [ -z "$POOL" ] || [ "$POOL" = "None" ]; then
+            POOL="$(aws devicefarm list-device-pools --arn "${{ steps.project.outputs.project_arn }}" --query "devicePools[0].arn" --output text)"
+          fi
+          test -n "$POOL" && test "$POOL" != "None"
+          echo "pool_arn=$POOL" >> "$GITHUB_OUTPUT"
+          aws devicefarm list-devices --arn "$POOL" --query "devices[0:25].[model,os,name,availability]" --output table
+      - name: Run physical acceptance
+        id: run
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY || secrets.AWS_SECRET_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || 'us-west-2' }}
+        run: |
+          set -euo pipefail
+          ARN="$(aws devicefarm schedule-run             --project-arn "${{ steps.project.outputs.project_arn }}"             --device-pool-arn "${{ steps.pool.outputs.pool_arn }}"             --app-arn "${{ steps.uploads.outputs.app_arn }}"             --name "UCOA final physical acceptance ${GITHUB_SHA}"             --test "type=INSTRUMENTATION,testPackageArn=${{ steps.uploads.outputs.test_arn }}"             --execution-configuration "jobTimeoutMinutes=15"             --query run.arn --output text)"
+          echo "run_arn=$ARN" >> "$GITHUB_OUTPUT"
+          for i in $(seq 1 45); do
+            STATUS="$(aws devicefarm get-run --arn "$ARN" --query run.status --output text)"
+            RESULT="$(aws devicefarm get-run --arn "$ARN" --query run.result --output text)"
+            echo "status=$STATUS result=$RESULT"
+            if [ "$STATUS" = "COMPLETED" ]; then
+              [ "$RESULT" = "PASSED" ] || exit 1
+              aws devicefarm get-run --arn "$ARN" --output json > aws-physical-proof.json
+              exit 0
+            fi
+            case "$STATUS" in ERRORED|FAILED|STOPPING|STOPPED) aws devicefarm get-run --arn "$ARN" --output json > aws-physical-proof.json || true; exit 1;; esac
+            sleep 15
+          done
+          exit 1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ucoa-final-aws-proof
+          path: |
+            aws-physical-proof.json
+            release-candidate/ucoa_apk_sha256.txt
+          retention-days: 30
+
+  physical-firebase:
+    needs: build-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ucoa-release-candidate
+          path: release-candidate
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.GCP_SA_KEY || secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}'
+          create_credentials_file: true
+          export_environment_variables: true
+          cleanup_credentials: true
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Discover available physical Android device
+        id: device
+        run: |
+          set -euo pipefail
+          gcloud firebase test android models list --format=json > /tmp/ftl-models.json
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          data=json.load(open('/tmp/ftl-models.json'))
+          models=data.get('models',data) if isinstance(data,dict) else data
+          physical=[]
+          for m in models:
+              if str(m.get('form','')).upper() != 'PHYSICAL':
+                  continue
+              mid=m.get('id') or m.get('modelId')
+              versions=[str(v) for v in (m.get('versionIds') or m.get('supportedVersionIds') or [])]
+              if not mid or not versions:
+                  continue
+              preferred=next((v for v in ('36','35','34','33','32') if v in versions), None)
+              if preferred is None:
+                  numeric=[v for v in versions if v.isdigit()]
+                  preferred=max(numeric,key=int) if numeric else versions[0]
+              physical.append((str(mid),preferred))
+          if not physical:
+              raise SystemExit('No physical Firebase Test Lab Android device available')
+          mid,version=sorted(physical,key=lambda x:(int(x[1]) if x[1].isdigit() else 0,x[0]),reverse=True)[0]
+          print(f'MODEL={mid}')
+          print(f'VERSION={version}')
+          PY
+      - name: Prepare writable Test Lab bucket
+        id: bucket
+        env:
+          CONFIGURED_RESULTS_BUCKET: ${{ secrets.FIREBASE_TEST_RESULTS_BUCKET || secrets.RESULTS_BUCKET || '' }}
+        run: |
+          set -euo pipefail
+          PROJECT_ID="$(python3 - <<'PY'
+          import json,os
+          print(json.load(open(os.environ['GOOGLE_GHA_CREDS_PATH']))['project_id'])
+          PY
+          )"
+          BUCKET="$CONFIGURED_RESULTS_BUCKET"
+          [[ -z "$BUCKET" ]] || [[ "$BUCKET" == gs://* ]] || BUCKET="gs://$BUCKET"
+          if [ -z "$BUCKET" ]; then
+            BUCKET="gs://ucoa-ftl-results-${PROJECT_ID}"
+            gcloud storage buckets describe "$BUCKET" >/dev/null 2>&1 || gcloud storage buckets create "$BUCKET" --project="$PROJECT_ID" --location=us-central1 --uniform-bucket-level-access
+          fi
+          CLIENT_EMAIL="$(python3 - <<'PY'
+          import json,os
+          print(json.load(open(os.environ['GOOGLE_GHA_CREDS_PATH']))['client_email'])
+          PY
+          )"
+          gcloud storage buckets add-iam-policy-binding "$BUCKET" --member="serviceAccount:$CLIENT_EMAIL" --role="roles/storage.objectCreator" --quiet
+          PROBE="/tmp/ucoa-${GITHUB_RUN_ID}-probe.txt"
+          printf "ucoa\n" > "$PROBE"
+          gcloud storage cp "$PROBE" "${BUCKET%/}/probes/${GITHUB_RUN_ID}.txt"
+          gcloud storage rm "${BUCKET%/}/probes/${GITHUB_RUN_ID}.txt"
+          echo "BUCKET=$BUCKET" >> "$GITHUB_OUTPUT"
+      - name: Run physical Firebase acceptance
+        id: ftl
+        env:
+          MODEL: ${{ steps.device.outputs.MODEL }}
+          VERSION: ${{ steps.device.outputs.VERSION }}
+          RESULTS_BUCKET: ${{ steps.bucket.outputs.BUCKET }}
+        run: |
+          set -euo pipefail
+          PROJECT_ID="$(python3 - <<'PY'
+          import json,os
+          print(json.load(open(os.environ['GOOGLE_GHA_CREDS_PATH']))['project_id'])
+          PY
+          )"
+          set +e
+          gcloud firebase test android run             --project="$PROJECT_ID"             --type=instrumentation             --app=release-candidate/app-debug.apk             --test=release-candidate/app-debug-androidTest.apk             --device model="$MODEL",version="$VERSION",locale=en,orientation=portrait             --timeout 15m             --num-flaky-test-attempts 0             --results-bucket="$RESULTS_BUCKET"             --results-dir="ucoa/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"             --environment-variables "UCOA_SMOKE_TASK=افتح الإعدادات"             --format=json > ftl-result.json 2> ftl-stderr.log
+          RC=$?
+          set -e
+          cat ftl-result.json || true
+          cat ftl-stderr.log || true
+          test "$RC" -eq 0
+          python3 - <<'PY'
+          import json
+          d=json.load(open('ftl-result.json'))
+          assert d.get('outcomeSummary') == 'SUCCESS', d
+          print('FIREBASE_PHYSICAL_ACCEPTANCE_PASS')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ucoa-final-firebase-proof
+          path: |
+            ftl-result.json
+            ftl-stderr.log
+            release-candidate/ucoa_apk_sha256.txt
+          retention-days: 30
+
+  final-artifact:
+    needs: [build-release, physical-aws, physical-firebase]
+    if: ${{ always() && (needs.physical-aws.result == 'success' || needs.physical-firebase.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ucoa-release-candidate
+          path: release-candidate
+      - name: Write final release proof
+        run: |
+          set -euo pipefail
+          cat > release-proof.txt <<EOF
+          UCOA FINAL VERIFIED RELEASE
+          COMMIT_SHA=${GITHUB_SHA}
+          PHYSICAL_AWS_RESULT=${{ needs.physical-aws.result }}
+          PHYSICAL_FIREBASE_RESULT=${{ needs.physical-firebase.result }}
+          APK_SHA_FILE=release-candidate/ucoa_apk_sha256.txt
+          Release artifact is emitted only when at least one physical acceptance path passes.
+          EOF
+          cat release-proof.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ucoa-final-verified-apk
+          path: |
+            release-candidate/app-debug.apk
+            release-candidate/app-debug-androidTest.apk
+            release-candidate/ucoa_apk_sha256.txt
+            release-proof.txt
+          retention-days: 90

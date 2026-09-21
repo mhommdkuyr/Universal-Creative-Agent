@@ -2,10 +2,28 @@
 
 Universal AI agent for mobile GUI, browser, video, design, and coding workflows.
 
-Production cloud routing uses Gemini as the primary provider with Hugging Face as secondary where configured. The Android APK embeds the local Qwen3 0.6B INT4 LiteRTLM model for offline/local execution.
+## Current architecture
 
-The backend exposes the FastAPI app through `server/app.py` and the Vercel Python Function entrypoint at `api/index.py`.
+The production release architecture is **cloud-only for AI/model execution**:
 
-## Verification
+- **Android:** chat UI, voice/media input, explicit Accessibility permission flow, observation, UI action execution, screenshots/UI-tree evidence, and result verification.
+- **Cloud:** planning, reasoning, vision, provider routing/failover, durable state, telemetry, and verification.
+- Provider/model secrets remain server-side and are never embedded in the APK.
 
-Run `pytest -q` from the repository root. The Android CI build also validates that the debug APK contains `assets/ucoa_local_model.litertlm`.
+The backend exposes the FastAPI app through `server/app.py` and the Vercel-compatible Python entrypoint at `api/index.py`.
+
+## Release gates
+
+A release is not considered verified until the exact APK built from the release commit passes:
+
+1. Python/server tests.
+2. Android unit/instrumentation build checks.
+3. Cloud contract checks.
+4. A physical Android acceptance run that proves execution through `UcoaAccessibilityService`, device evidence, foreground state, and durable command completion.
+5. APK SHA-256 and evidence artifacts are retained with the release record.
+
+The project does **not** claim invisible universal background manipulation of arbitrary third-party applications. Foreground execution remains constrained by Android Accessibility and target-app behavior.
+
+## Development verification
+
+`pytest -q` from the repository root runs the Python suite.

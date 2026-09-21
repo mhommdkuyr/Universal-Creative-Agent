@@ -16,6 +16,7 @@ import app_v3
 import durable_state
 
 SESSION_TTL_SECONDS = int(os.getenv("UCOA_CLIENT_SESSION_TTL", str(30 * 24 * 3600)))
+DEVICE_ONLINE_TTL_SECONDS = max(15, int(os.getenv("UCOA_DEVICE_ONLINE_TTL_SECONDS", "45")))
 CONFIG_VERSION = os.getenv("UCOA_REMOTE_CONFIG_VERSION", "1")
 CONFIG_REVISION = os.getenv("UCOA_REMOTE_CONFIG_REVISION", "2026-09-11.1")
 REMOTE_SQLITE = Path(os.getenv("UCOA_REMOTE_OPS_DB", "/opt/render/project/src/.ucoa-local/remote_ops.db"))
@@ -34,7 +35,8 @@ def _ensure_schema() -> None:
         try:
             with conn:
                 with conn.cursor() as cur:
-                    cur.execute("CREATE TABLE IF NOT EXISTS ucoa_client_sessions (token_hash TEXT PRIMARY KEY, install_id TEXT NOT NULL, session_id TEXT, app_version TEXT, device JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), expires_at TIMESTAMPTZ NOT NULL)")
+                    cur.execute("CREATE TABLE IF NOT EXISTS ucoa_client_sessions (token_hash TEXT PRIMARY KEY, install_id TEXT NOT NULL, session_id TEXT, app_version TEXT, device JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), expires_at TIMESTAMPTZ NOT NULL, last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now())")
+                    cur.execute("ALTER TABLE ucoa_client_sessions ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()")
                     cur.execute("CREATE TABLE IF NOT EXISTS ucoa_client_events (id BIGSERIAL PRIMARY KEY, token_hash TEXT, install_id TEXT NOT NULL, session_id TEXT, task_id TEXT, kind TEXT NOT NULL, payload JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT now())")
                     cur.execute("CREATE INDEX IF NOT EXISTS idx_ucoa_client_events_created ON ucoa_client_events(created_at DESC)")
                     cur.execute("CREATE TABLE IF NOT EXISTS ucoa_client_reports (id BIGSERIAL PRIMARY KEY, install_id TEXT NOT NULL, session_id TEXT, task_id TEXT, outcome TEXT NOT NULL, metrics JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT now())")
@@ -44,7 +46,11 @@ def _ensure_schema() -> None:
             except Exception: pass
     conn = sqlite3.connect(REMOTE_SQLITE, timeout=15)
     try:
-        conn.execute("CREATE TABLE IF NOT EXISTS client_sessions(token_hash TEXT PRIMARY KEY, install_id TEXT NOT NULL, session_id TEXT, app_version TEXT, device TEXT NOT NULL, created_at REAL NOT NULL, expires_at REAL NOT NULL)")
+        conn.execute("CREATE TABLE IF NOT EXISTS client_sessions(token_hash TEXT PRIMARY KEY, install_id TEXT NOT NULL, session_id TEXT, app_version TEXT, device TEXT NOT NULL, created_at REAL NOT NULL, expires_at REAL NOT NULL, last_seen_at REAL NOT NULL DEFAULT 0)")
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(client_sessions)").fetchall()}
+        if "last_seen_at" not in cols:
+            conn.execute("ALTER TABLE client_sessions ADD COLUMN last_seen_at REAL NOT NULL DEFAULT 0")
+        conn.execute("UPDATE client_sessions SET last_seen_at = CASE WHEN last_seen_at = 0 THEN created_at ELSE last_seen_at END")
         conn.execute("CREATE TABLE IF NOT EXISTS client_events(id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT, install_id TEXT NOT NULL, session_id TEXT, task_id TEXT, kind TEXT NOT NULL, payload TEXT NOT NULL, created_at REAL NOT NULL)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_client_events_created ON client_events(created_at DESC)")
         conn.execute("CREATE TABLE IF NOT EXISTS client_reports(id INTEGER PRIMARY KEY AUTOINCREMENT, install_id TEXT NOT NULL, session_id TEXT, task_id TEXT, outcome TEXT NOT NULL, metrics TEXT NOT NULL, created_at REAL NOT NULL)")
@@ -67,6 +73,8 @@ def _session_ok(authorization: str | None) -> tuple[bool, str | None]:
                 with conn.cursor() as cur:
                     cur.execute("SELECT install_id, expires_at FROM ucoa_client_sessions WHERE token_hash=%s", (token_hash,))
                     row = cur.fetchone()
+                    if row and row[1].timestamp() > time.time():
+                        cur.execute("UPDATE ucoa_client_sessions SET last_seen_at=now() WHERE token_hash=%s", (token_hash,))
             conn.close()
             return bool(row and row[1].timestamp() > time.time()), (row[0] if row else None)
         except Exception:
@@ -75,6 +83,9 @@ def _session_ok(authorization: str | None) -> tuple[bool, str | None]:
     conn = sqlite3.connect(REMOTE_SQLITE, timeout=15)
     try:
         row = conn.execute("SELECT install_id, expires_at FROM client_sessions WHERE token_hash=?", (token_hash,)).fetchone()
+        if row and float(row[1]) > time.time():
+            conn.execute("UPDATE client_sessions SET last_seen_at=? WHERE token_hash=?", (time.time(), token_hash))
+            conn.commit()
         return bool(row and float(row[1]) > time.time()), (row[0] if row else None)
     finally: conn.close()
 
@@ -129,7 +140,7 @@ def create_client_session(req: ClientSessionRequest):
         try:
             with conn:
                 with conn.cursor() as cur:
-                    cur.execute("INSERT INTO ucoa_client_sessions(token_hash,install_id,app_version,device,expires_at) VALUES(%s,%s,%s,%s,now() + (%s || ' seconds')::interval)", (token_hash, install_id, req.app_version[:64], json.dumps(req.device, ensure_ascii=False), SESSION_TTL_SECONDS))
+                    cur.execute("INSERT INTO ucoa_client_sessions(token_hash,install_id,app_version,device,expires_at,last_seen_at) VALUES(%s,%s,%s,%s,now() + (%s || ' seconds')::interval,now())", (token_hash, install_id, req.app_version[:64], json.dumps(req.device, ensure_ascii=False), SESSION_TTL_SECONDS))
             conn.close()
         except Exception as exc:
             try: conn.close()
@@ -138,7 +149,7 @@ def create_client_session(req: ClientSessionRequest):
     else:
         conn = sqlite3.connect(REMOTE_SQLITE, timeout=15)
         try:
-            conn.execute("INSERT OR REPLACE INTO client_sessions(token_hash,install_id,session_id,app_version,device,created_at,expires_at) VALUES(?,?,?,?,?,?,?)", (token_hash, install_id, None, req.app_version[:64], json.dumps(req.device, ensure_ascii=False), time.time(), expires)); conn.commit()
+            conn.execute("INSERT OR REPLACE INTO client_sessions(token_hash,install_id,session_id,app_version,device,created_at,expires_at,last_seen_at) VALUES(?,?,?,?,?,?,?,?)", (token_hash, install_id, None, req.app_version[:64], json.dumps(req.device, ensure_ascii=False), time.time(), expires, time.time())); conn.commit()
         finally: conn.close()
     return {"ok": True, "session_token": token, "expires_at_epoch": int(expires), "config_revision": CONFIG_REVISION}
 
