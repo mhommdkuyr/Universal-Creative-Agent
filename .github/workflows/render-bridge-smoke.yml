@@ -1,11 +1,6 @@
-name: Render Bridge Smoke Check
+name: Render Bridge Manual Diagnostic
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "server/device_bridge.py"
-      - ".github/workflows/render-bridge-smoke.yml"
   workflow_dispatch:
 
 permissions:
