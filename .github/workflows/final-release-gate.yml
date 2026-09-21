@@ -305,7 +305,6 @@ jobs:
       - name: Run physical Firebase acceptance
         id: ftl
         env:
-          PROJECT_ID: ${{ steps.bucket.outputs.PROJECT_ID }}
           MODEL: ${{ steps.device.outputs.MODEL }}
           VERSION: ${{ steps.device.outputs.VERSION }}
           RESULTS_BUCKET: ${{ steps.bucket.outputs.BUCKET }}
