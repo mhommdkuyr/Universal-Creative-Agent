@@ -229,6 +229,124 @@ jobs:
             release-candidate/ucoa_apk_sha256.txt
           retention-days: 30
 
+
+  physical-phone:
+    needs: build-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      BASE: https://ucoa-agent-brain.onrender.com
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for production bridge
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            code=$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 5 "$BASE/health" || true)
+            echo "health HTTP=$code"
+            if [ "$code" = "200" ]; then
+              cat /tmp/health.json
+              break
+            fi
+            sleep 3
+          done
+          grep -q '"ok":true' /tmp/health.json
+      - name: Discover a recently active physical phone
+        id: device
+        run: |
+          set -euo pipefail
+          get_oidc_token() {
+            curl --fail --silent --show-error               -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}"               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=ucoa-live-phone" |
+              python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])'
+          }
+          for i in $(seq 1 40); do
+            token="$(get_oidc_token)"
+            code="$(curl -sS -o /tmp/devices.json -w '%{http_code}'               -H "Authorization: Bearer $token" "$BASE/v1/qa/phone/devices" || true)"
+            echo "devices HTTP=$code attempt=$i"
+            if [ "$code" = "200" ]; then
+              cat /tmp/devices.json
+              python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          d=json.load(open('/tmp/devices.json'))
+          devices=d.get('devices') or []
+          if not devices:
+              raise SystemExit(1)
+          print('INSTALL_ID='+str(devices[0]))
+          PY
+              exit 0
+            fi
+            sleep 3
+          done
+          exit 1
+      - name: Execute Settings task on the real installed phone
+        id: command
+        run: |
+          set -euo pipefail
+          get_oidc_token() {
+            curl --fail --silent --show-error               -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}"               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=ucoa-live-phone" |
+              python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])'
+          }
+          task='اختبار القبول النهائي: افتح تطبيق الإعدادات فقط. لا تغيّر أي إعداد. يجب إثبات النتيجة من UCOA عبر Accessibility UI tree ولقطة الشاشة. بقاء ChatGPT أو فتح متصفح ليس نجاحًا.'
+          body="$(python3 - "$task" <<'PY'
+          import json,sys
+          print(json.dumps({
+            "kind":"task",
+            "task":sys.argv[1],
+            "attachments":[],
+            "metadata":{
+              "qa_suite":"final-release-real-phone",
+              "test_suite":"cloud_to_real_phone_v1",
+              "evidence_required":True,
+              "no_external_success":True
+            }
+          },ensure_ascii=False))
+          PY
+          )"
+          token="$(get_oidc_token)"
+          queued="$(curl --fail --silent --show-error             -H "Authorization: Bearer $token"             -H "Content-Type: application/json"             -d "$body" "$BASE/v1/qa/phone/commands")"
+          echo "$queued"
+          command_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["command_id"])' <<<"$queued")"
+          test -n "$command_id"
+          echo "COMMAND_ID=$command_id" >> "$GITHUB_OUTPUT"
+          for i in $(seq 1 120); do
+            token="$(get_oidc_token)"
+            state="$(curl --fail --silent --show-error               -H "Authorization: Bearer $token" "$BASE/v1/qa/phone/commands/$command_id")"
+            echo "$state" > /tmp/final-phone-state.json
+            status="$(python3 -c 'import json; print(json.load(open("/tmp/final-phone-state.json"))["command"]["status"])')"
+            echo "poll=$i status=$status"
+            if [ "$status" = "completed" ] || [ "$status" = "failed" ] || [ "$status" = "cancelled" ]; then
+              break
+            fi
+            sleep 2
+          done
+          cat /tmp/final-phone-state.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/final-phone-state.json'))['command']
+          assert d['status']=='completed', d
+          r=d.get('result') or {}
+          assert not r.get('error'), r
+          assert r.get('completion_verified_by_ucoa') is True, r
+          assert r.get('final_foreground') == 'com.android.settings', r
+          assert int(r.get('steps',0) or 0) > 0, r
+          print('REAL_PHONE_ACCEPTANCE_PASS')
+          PY
+      - name: Save real phone proof
+        if: always()
+        run: |
+          test ! -f /tmp/final-phone-state.json || cp /tmp/final-phone-state.json real-phone-proof.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ucoa-final-real-phone-proof
+          path: |
+            real-phone-proof.json
+            release-candidate/ucoa_apk_sha256.txt
+          retention-days: 30
+
   physical-firebase:
     needs: build-release
     runs-on: ubuntu-latest
@@ -339,8 +457,8 @@ jobs:
           retention-days: 30
 
   final-artifact:
-    needs: [build-release, physical-aws, physical-firebase]
-    if: ${{ always() && (needs.physical-aws.result == 'success' || needs.physical-firebase.result == 'success') }}
+    needs: [build-release, physical-aws, physical-firebase, physical-phone]
+    if: ${{ always() && (needs.physical-aws.result == 'success' || needs.physical-firebase.result == 'success' || needs.physical-phone.result == 'success') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -355,6 +473,7 @@ jobs:
           COMMIT_SHA=${GITHUB_SHA}
           PHYSICAL_AWS_RESULT=${{ needs.physical-aws.result }}
           PHYSICAL_FIREBASE_RESULT=${{ needs.physical-firebase.result }}
+          PHYSICAL_PHONE_RESULT=${{ needs.physical-phone.result }}
           APK_SHA_FILE=release-candidate/ucoa_apk_sha256.txt
           Release artifact is emitted only when at least one physical acceptance path passes.
           EOF
