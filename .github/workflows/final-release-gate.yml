@@ -76,10 +76,18 @@ jobs:
           test -s "$TEST_APK"
           AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n1)"
           "$AAPT" dump badging "$APK" | tee /tmp/badging.txt
-          grep -q "targetSdkVersion:'36'" /tmp/badging.txt
-          grep -q "versionName:'1.0.2'" /tmp/badging.txt
-          ! unzip -l "$APK" | grep -Ei 'ucoa_local_model|\\.litertlm'
-          unzip -t "$APK" >/dev/null
+          python3 - <<'PY'
+          import zipfile
+          badging=open('/tmp/badging.txt', encoding='utf-8').read()
+          assert "targetSdkVersion:'36'" in badging, badging
+          assert "versionName:'1.0.2'" in badging, badging
+          with zipfile.ZipFile("android/app/build/outputs/apk/debug/app-debug.apk") as z:
+              names=z.namelist()
+              forbidden=[n for n in names if "ucoa_local_model" in n or n.endswith(".litertlm")]
+              assert not forbidden, forbidden
+              assert z.testzip() is None
+          print("APK structural validation passed")
+          PY
           sha256sum "$APK" | tee ucoa_apk_sha256.txt
           echo "COMMIT_SHA=$GITHUB_SHA" | tee -a ucoa_apk_sha256.txt
       - name: Upload exact release candidate
