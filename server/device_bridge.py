@@ -95,6 +95,7 @@ def _preferred_active_device_id() -> str | None:
                         "AND last_seen_at > now() - (%s || ' seconds')::interval "
                         "ORDER BY last_seen_at DESC",
                         (DEVICE_ONLINE_TTL_SECONDS,)
+                    )
                     rows = cur.fetchall()
             conn.close()
             fallback = rows[0][0] if rows else None
