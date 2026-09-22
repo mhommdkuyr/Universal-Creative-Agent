@@ -71,7 +71,7 @@ class MainActivity : Activity() {
         input = EditText(this).apply { hint = "اكتب ما تريد تنفيذه…"; setHintTextColor(0xFF7E858F.toInt()); setTextColor(Color.WHITE); textSize = 16f; background = null; maxLines = 5; minLines = 1; gravity = Gravity.CENTER_VERTICAL; setPadding(12, 6, 12, 6) }
         composer.addView(input, LinearLayout.LayoutParams(0, 56, 1f)); composer.addView(iconButton("↑", "إرسال") { analyzeTask() }, LinearLayout.LayoutParams(50, 52)); main.addView(composer, LinearLayout.LayoutParams(-1, 78)); root.addView(main)
         drawerScrim = View(this).apply { setBackgroundColor(0x99000000.toInt()); visibility = View.GONE; setOnClickListener { toggleDrawer(false) } }; root.addView(drawerScrim, FrameLayout.LayoutParams(-1, -1))
-        drawer = buildDrawer(); root.addView(drawer, FrameLayout.LayoutParams((resources.displayMetrics.widthPixels * 0.74f).toInt(), -1, Gravity.END)); return root
+        drawer = buildDrawer(); root.addView(drawer, FrameLayout.LayoutParams((resources.displayMetrics.widthPixels * 0.74f).toInt(), -1, Gravity.RIGHT)); return root
     }
 
     private fun buildDrawer(): LinearLayout {
