@@ -32,6 +32,7 @@ class MainActivity : Activity() {
     private val selectedMedia = mutableListOf<String>()
     private var latestTaskText = ""
     private var conversationStarted = false
+    private var executionSubmitted = false
     private var currentConversationTitle = "محادثة جديدة"
     private val pickMedia = 401
     private val speech = 402
@@ -65,7 +66,7 @@ class MainActivity : Activity() {
         chat = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; setPadding(16, 12, 16, 22) }; addAssistantBubble("اكتب ما تريد، وسأخطط له سحابيًا ثم أنفذه مرة واحدة مع تحقق حي من النتيجة."); scroll.addView(chat); main.addView(scroll)
         val composer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(12, 8, 12, 12); background = rounded(0xFF17191D.toInt(), 28f) }
         composer.addView(iconButton("＋", "إضافة ملف") { chooseMedia() }, LinearLayout.LayoutParams(44, 52)); composer.addView(iconButton("⌕", "الصوت") { startSpeech() }, LinearLayout.LayoutParams(44, 52))
-        input = EditText(this).apply { hint = "اكتب ما تريد تنفيذه…"; hintTextColor = 0xFF7E858F.toInt(); setTextColor(Color.WHITE); textSize = 16f; background = null; maxLines = 5; minLines = 1; gravity = Gravity.CENTER_VERTICAL; setPadding(12, 6, 12, 6) }
+        input = EditText(this).apply { hint = "اكتب ما تريد تنفيذه…"; setHintTextColor(0xFF7E858F.toInt()); setTextColor(Color.WHITE); textSize = 16f; background = null; maxLines = 5; minLines = 1; gravity = Gravity.CENTER_VERTICAL; setPadding(12, 6, 12, 6) }
         composer.addView(input, LinearLayout.LayoutParams(0, 56, 1f)); composer.addView(iconButton("↑", "إرسال") { analyzeTask() }, LinearLayout.LayoutParams(50, 52)); main.addView(composer, LinearLayout.LayoutParams(-1, 78)); root.addView(main)
         drawerScrim = View(this).apply { setBackgroundColor(0x99000000.toInt()); visibility = View.GONE; setOnClickListener { toggleDrawer(false) } }; root.addView(drawerScrim, FrameLayout.LayoutParams(-1, -1))
         drawer = buildDrawer(); root.addView(drawer, FrameLayout.LayoutParams((resources.displayMetrics.widthPixels * 0.74f).toInt(), -1, Gravity.END)); return root
@@ -82,9 +83,9 @@ class MainActivity : Activity() {
     }
     private fun drawerAction(label: String, click: () -> Unit) = TextView(this).apply { text = label; textSize = 16f; setTextColor(Color.WHITE); gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL; setPadding(16, 15, 16, 15); background = rounded(0xFF202226.toInt(), 18f); setOnClickListener { click() }; layoutParams = LinearLayout.LayoutParams(-1, 54).apply { setMargins(0, 5, 0, 5) } }
 
-    private fun startNewConversation() { conversationStarted = false; currentConversationTitle = "محادثة جديدة"; latestTaskText = ""; selectedMedia.clear(); chat.removeAllViews(); addAssistantBubble("محادثة جديدة. هذه المساحة للمحادثة والتخطيط؛ التنفيذ يبدأ فقط بعد اعتماد المهمة."); menuButton.text = "◌"; menuButton.contentDescription = "محادثة جديدة" }
+    private fun startNewConversation() { conversationStarted = false; executionSubmitted = false; currentConversationTitle = "محادثة جديدة"; latestTaskText = ""; selectedMedia.clear(); chat.removeAllViews(); addAssistantBubble("محادثة جديدة. هذه المساحة للمحادثة والتخطيط؛ التنفيذ يبدأ فقط بعد اعتماد المهمة."); menuButton.text = "◌"; menuButton.contentDescription = "محادثة جديدة" }
     private fun showConversationMenu() = AlertDialog.Builder(this).setTitle("إعدادات المحادثة").setItems(arrayOf("مشاركة", "حذف", "تثبيت", "أرشفة", "البحث في المحادثة")) { _, which -> addAssistantBubble("تم اختيار: ${arrayOf("مشاركة", "حذف", "تثبيت", "أرشفة", "البحث في المحادثة")[which]}.") }.show()
-    private fun showSearchDialog() { val q = EditText(this).apply { hint = "ابحث في محادثاتك"; setTextColor(Color.WHITE); hintTextColor = 0xFF888C93.toInt() }; AlertDialog.Builder(this).setTitle("البحث في المحادثات").setView(q).setPositiveButton("بحث") { _, _ -> addAssistantBubble("نتائج البحث عن: ${q.text}"); toggleDrawer(false) }.setNegativeButton("إلغاء", null).show() }
+    private fun showSearchDialog() { val q = EditText(this).apply { hint = "ابحث في محادثاتك"; setTextColor(Color.WHITE); setHintTextColor(0xFF888C93.toInt()) }; AlertDialog.Builder(this).setTitle("البحث في المحادثات").setView(q).setPositiveButton("بحث") { _, _ -> addAssistantBubble("نتائج البحث عن: ${q.text}"); toggleDrawer(false) }.setNegativeButton("إلغاء", null).show() }
     private fun showConnectedApps() { val apps = UcoaAccessibilityService.instance?.installedAppLabels()?.take(30)?.joinToString("\n") ?: "فعّل خدمة الوصول أولًا لقراءة التطبيقات المثبتة."; AlertDialog.Builder(this).setTitle("التطبيقات المتصلة").setMessage(apps).setPositiveButton("حسنًا", null).show() }
 
     private fun showSettingsPage() {
@@ -103,8 +104,8 @@ class MainActivity : Activity() {
     private fun refreshConnectionState() { val enabled = PermissionCoordinator.isAccessibilityEnabled(this); val live = PermissionCoordinator.isServiceLive(); status.text = when { live -> "● متصل — تنفيذ ومراقبة سحابية"; enabled -> "● الصلاحية مفعلة — الخدمة قيد الاتصال"; else -> "○ فعّل الوصول من الإعدادات لبدء التنفيذ" } }
 
     private fun analyzeTask() {
-        val task = input.text.toString().trim(); if (task.isEmpty()) return
-        latestTaskText = task; conversationStarted = true; menuButton.text = "⋮"; menuButton.contentDescription = "إعدادات المحادثة"; currentConversationTitle = task.take(40)
+        val task = input.text.toString().trim(); if (task.isEmpty() || executionSubmitted) return
+        latestTaskText = task; conversationStarted = true; executionSubmitted = false; menuButton.text = "⋮"; menuButton.contentDescription = "إعدادات المحادثة"; currentConversationTitle = task.take(40)
         addUserBubble(task + if (selectedMedia.isNotEmpty()) "\n📎 ${selectedMedia.size} ملف" else ""); input.setText("")
         brain.readiness { transportOk, ready, detail -> runOnUiThread {
             if (!transportOk || !ready) { addAssistantBubble("تعذر الوصول إلى Cloud Brain: $detail"); return@runOnUiThread }
@@ -126,9 +127,12 @@ class MainActivity : Activity() {
         card.addView(Button(this).apply {
             text = "تنفيذ مرة واحدة"
             setOnClickListener {
+                if (executionSubmitted) return@setOnClickListener
                 if (!PermissionCoordinator.isServiceLive()) { connectPhone(); return@setOnClickListener }
+                executionSubmitted = true
+                (this as? Button)?.isEnabled = false
                 addAssistantBubble("تمت الموافقة. أرسل المهمة إلى جسر الهاتف السحابي؛ التنفيذ سيظهر هنا حيًا.")
-                brain.queueTask(latestTaskText, selectedMedia, JSONObject().put("ui", "conversation_live").put("evidence_required", true)) { r -> runOnUiThread { if (r.ok) { LiveExecutionState.begin(latestTaskText); addAssistantBubble("✓ تم تسليم المهمة للجهاز. لا يوجد تنفيذ ثانٍ من الواجهة.") } else addAssistantBubble("تعذر تسليم المهمة للجسر السحابي: ${r.error ?: "خطأ غير معروف"}") } }
+                brain.queueTask(latestTaskText, selectedMedia, JSONObject().put("ui", "conversation_live").put("evidence_required", true)) { r -> runOnUiThread { if (r.ok) { LiveExecutionState.begin(latestTaskText); addAssistantBubble("✓ تم تسليم المهمة للجهاز. التنفيذ الوحيد لهذه الموافقة جارٍ الآن.") } else { executionSubmitted = false; addAssistantBubble("تعذر تسليم المهمة للجسر السحابي: ${r.error ?: "خطأ غير معروف"}") } } }
             }
         })
         chat.addView(card, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, 12, 0, 14) })
@@ -138,7 +142,7 @@ class MainActivity : Activity() {
     private fun addUserBubble(text: String) = addBubble(text, true)
     private fun addBubble(text: String, user: Boolean) { val tv = TextView(this).apply { this.text = text; textSize = 15f; setTextColor(if (user) Color.WHITE else 0xFFE1E4E8.toInt()); setPadding(16, 14, 16, 14); background = rounded(if (user) 0xFF2B2E34.toInt() else 0xFF17191D.toInt()); gravity = Gravity.RIGHT }; chat.addView(tv, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, 6, 0, 6) }) }
 
-    private fun showBrainSettings() { val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(18, 8, 18, 4) }; val endpoint = EditText(this).apply { hint = "عنوان Cloud Brain"; setSingleLine(); setText(brain.endpoint()); setTextColor(Color.WHITE); hintTextColor = 0xFF777C84.toInt() }; val token = EditText(this).apply { hint = "رمز الوصول"; setSingleLine(); setText(brain.token()); setTextColor(Color.WHITE); inputType = 0x81 }; box.addView(endpoint); box.addView(token); AlertDialog.Builder(this).setTitle("ربط Cloud Brain").setView(box).setNegativeButton("إلغاء", null).setPositiveButton("حفظ") { _, _ -> brain.saveConfig(endpoint.text.toString(), token.text.toString()); refreshConnectionState() }.setNeutralButton("اختبار") { _, _ -> brain.health { ok, detail -> runOnUiThread { Toast.makeText(this, if (ok) "Cloud Brain متاح: $detail" else "فشل: $detail", Toast.LENGTH_LONG).show() } } }.show() }
+    private fun showBrainSettings() { val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(18, 8, 18, 4) }; val endpoint = EditText(this).apply { hint = "عنوان Cloud Brain"; setSingleLine(); setText(brain.endpoint()); setTextColor(Color.WHITE); setHintTextColor(0xFF777C84.toInt()) }; val token = EditText(this).apply { hint = "رمز الوصول"; setSingleLine(); setText(brain.token()); setTextColor(Color.WHITE); inputType = 0x81 }; box.addView(endpoint); box.addView(token); AlertDialog.Builder(this).setTitle("ربط Cloud Brain").setView(box).setNegativeButton("إلغاء", null).setPositiveButton("حفظ") { _, _ -> brain.saveConfig(endpoint.text.toString(), token.text.toString()); refreshConnectionState() }.setNeutralButton("اختبار") { _, _ -> brain.health { ok, detail -> runOnUiThread { Toast.makeText(this, if (ok) "Cloud Brain متاح: $detail" else "فشل: $detail", Toast.LENGTH_LONG).show() } } }.show() }
     private fun connectPhone() { PermissionCoordinator.openAccessibilitySettings(this); Toast.makeText(this, "فعّل Universal Creative Agent في خدمات الوصول ثم ارجع.", Toast.LENGTH_LONG).show() }
     private fun chooseMedia() { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply { type = "*/*"; putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); addCategory(Intent.CATEGORY_OPENABLE) }, pickMedia) }
     private fun startSpeech() { runCatching { startActivityForResult(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply { putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM); putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-SA") }, speech) }.onFailure { Toast.makeText(this, "التعرف الصوتي غير متاح.", Toast.LENGTH_SHORT).show() } }
