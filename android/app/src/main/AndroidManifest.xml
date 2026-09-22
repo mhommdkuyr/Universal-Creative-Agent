@@ -1,7 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <application android:theme="@style/Theme.UCOA" android:label="الذكاء العملي الكامل" android:allowBackup="false">
-        <activity android:name=".ChatStyleActivity" android:exported="true" android:label="الذكاء العملي الكامل">
+        <activity android:name=".MainActivity" android:exported="true" android:label="الذكاء العملي الكامل">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

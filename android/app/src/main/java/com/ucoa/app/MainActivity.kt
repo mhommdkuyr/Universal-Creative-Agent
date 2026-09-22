@@ -56,7 +56,7 @@ class MainActivity : Activity() {
     override fun onDestroy() { unsubscribeDiagnostics?.invoke(); unsubscribeLive?.invoke(); super.onDestroy() }
 
     private fun buildUi(): View {
-        // Reference layout: 728x1536 screenshot translated to density-independent Android proportions.
+        // Reference layout: 728x1536 screenshot translated to density-independent Android proportions; source of truth is the Figma final mobile UI.
         val density = resources.displayMetrics.density
         val dp = { value: Float -> (value * density + 0.5f).toInt() }
         root = FrameLayout(this).apply {
