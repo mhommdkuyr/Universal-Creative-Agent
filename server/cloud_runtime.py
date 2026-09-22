@@ -82,6 +82,17 @@ def _normalize_action(value: dict[str, Any], image: str | None) -> dict[str, Any
                 if key in params:
                     params[key] = round(float(params[key]) * scale / 1000.0, 1)
             result["coordinate_space"] = "pixel"
+
+    # The Android bridge accepts the historical top-level action arguments.
+    # Mirror controller params to those fields so current and older clients
+    # receive the same executable command without changing the action schema.
+    for key in (
+        "url", "app_name", "texts", "hints", "text", "uri", "package_name",
+        "x", "y", "x1", "y1", "x2", "y2", "duration_ms",
+        "optional", "error", "wait_after_ms",
+    ):
+        if key in params and key not in result:
+            result[key] = params[key]
     return result
 
 
