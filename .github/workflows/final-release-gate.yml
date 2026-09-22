@@ -244,7 +244,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-      id-token: write
+      actions: read
     env:
       BASE: https://ucoa-agent-brain.onrender.com
     steps:
@@ -264,15 +264,12 @@ jobs:
           grep -q '"ok":true' /tmp/health.json
       - name: Discover a recently active physical phone
         id: device
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          get_oidc_token() {
-            curl --fail --silent --show-error               -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}"               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=ucoa-live-phone" |
-              python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])'
-          }
           for i in $(seq 1 40); do
-            token="$(get_oidc_token)"
-            code="$(curl -sS -o /tmp/devices.json -w '%{http_code}'               -H "Authorization: Bearer $token" "$BASE/v1/qa/phone/devices" || true)"
+            code="$(curl -sS -o /tmp/devices.json -w '%{http_code}'               -H "Authorization: Bearer ${GITHUB_TOKEN}"               -H "X-GitHub-Run-ID: ${GITHUB_RUN_ID}" "$BASE/v1/qa/phone/devices" || true)"
             echo "devices HTTP=$code attempt=$i"
             if [ "$code" = "200" ]; then
               cat /tmp/devices.json
@@ -291,12 +288,10 @@ jobs:
           exit 1
       - name: Execute Settings task on the real installed phone
         id: command
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          get_oidc_token() {
-            curl --fail --silent --show-error               -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}"               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=ucoa-live-phone" |
-              python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])'
-          }
           task='اختبار القبول النهائي: افتح تطبيق الإعدادات فقط. لا تغيّر أي إعداد. يجب إثبات النتيجة من UCOA عبر Accessibility UI tree ولقطة الشاشة. بقاء ChatGPT أو فتح متصفح ليس نجاحًا.'
           body="$(python3 - "$task" <<'PY'
           import json,sys
@@ -313,15 +308,13 @@ jobs:
           },ensure_ascii=False))
           PY
           )"
-          token="$(get_oidc_token)"
-          queued="$(curl --fail --silent --show-error             -H "Authorization: Bearer $token"             -H "Content-Type: application/json"             -d "$body" "$BASE/v1/qa/phone/commands")"
+          queued="$(curl --fail --silent --show-error             -H "Authorization: Bearer ${GITHUB_TOKEN}"             -H "X-GitHub-Run-ID: ${GITHUB_RUN_ID}"             -H "Content-Type: application/json"             -d "$body" "$BASE/v1/qa/phone/commands")"
           echo "$queued"
           command_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["command_id"])' <<<"$queued")"
           test -n "$command_id"
           echo "COMMAND_ID=$command_id" >> "$GITHUB_OUTPUT"
           for i in $(seq 1 120); do
-            token="$(get_oidc_token)"
-            state="$(curl --fail --silent --show-error               -H "Authorization: Bearer $token" "$BASE/v1/qa/phone/commands/$command_id")"
+            state="$(curl --fail --silent --show-error               -H "Authorization: Bearer ${GITHUB_TOKEN}"               -H "X-GitHub-Run-ID: ${GITHUB_RUN_ID}" "$BASE/v1/qa/phone/commands/$command_id")"
             echo "$state" > /tmp/final-phone-state.json
             status="$(python3 -c 'import json; print(json.load(open("/tmp/final-phone-state.json"))["command"]["status"])')"
             echo "poll=$i status=$status"
