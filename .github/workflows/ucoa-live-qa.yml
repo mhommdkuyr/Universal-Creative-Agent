@@ -1,6 +1,7 @@
 name: UCOA Live Phone QA
 # Re-run acceptance whenever a live Android client is connected.
 # Final-phone QA trigger: execute against the currently connected physical Android client.
+# Observable PR acceptance run.
 
 on:
   pull_request:
