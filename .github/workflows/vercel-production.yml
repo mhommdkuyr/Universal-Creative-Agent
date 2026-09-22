@@ -1,0 +1,29 @@
+name: Vercel Production API
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  VERCEL_SCOPE: team_k9X5uSiiWeL0rsUU5IIW4Z5G
+  VERCEL_PROJECT: ucoa-agent-brain
+
+jobs:
+  deploy:
+    if: ${{ secrets.VERCEL_TOKEN != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy FastAPI brain to Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          npx --yes vercel@latest --prod --yes --token "$VERCEL_TOKEN" --scope "$VERCEL_SCOPE" --name "$VERCEL_PROJECT"
+      - name: Print production endpoint
+        run: echo "UCOA Cloud Brain: https://ucoa-agent-brain.vercel.app/api"
