@@ -16,6 +16,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.*
+import java.util.UUID
 
 class MainActivity : Activity() {
     private lateinit var root: FrameLayout
@@ -120,6 +121,7 @@ class MainActivity : Activity() {
     }
 
     private fun addPlanCard(summary: String, steps: List<String>) {
+        val executionKey = UUID.randomUUID().toString()
         val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(18, 16, 18, 16); background = rounded(0xFF1A1C20.toInt(), 24f) }
         card.addView(TextView(this).apply { text = "خطة التنفيذ"; textSize = 18f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE) })
         card.addView(TextView(this).apply { text = summary; textSize = 13f; setTextColor(0xFFB8BEC8.toInt()); setPadding(0, 7, 0, 8) })
