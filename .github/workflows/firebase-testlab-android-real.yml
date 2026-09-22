@@ -101,55 +101,11 @@ jobs:
           PY
           cat /tmp/ftl-models.json >/dev/null
 
-      - name: Prepare writable Test Lab results bucket
+      - name: Use Firebase Test Lab managed results storage
         id: bucket
-        shell: bash
-        env:
-          CONFIGURED_RESULTS_BUCKET: ${{ secrets.FIREBASE_TEST_RESULTS_BUCKET || secrets.RESULTS_BUCKET || '' }}
         run: |
-          set -euo pipefail
-          PROJECT_ID="$(python3 - <<'PY'
-          import json, os
-          print(json.load(open(os.environ['GOOGLE_GHA_CREDS_PATH']))['project_id'])
-          PY
-          )"
-          CLIENT_EMAIL="$(python3 - <<'PY'
-          import json, os
-          print(json.load(open(os.environ['GOOGLE_GHA_CREDS_PATH']))['client_email'])
-          PY
-          )"
-          normalize_bucket() {
-            local value="$1"
-            if [ -n "$value" ] && [[ "$value" != gs://* ]]; then value="gs://$value"; fi
-            printf "%s" "$value"
-          }
-          BUCKET="$(normalize_bucket "$CONFIGURED_RESULTS_BUCKET")"
-          if [ -z "$BUCKET" ]; then
-            BUCKET="gs://ucoa-ftl-results-${PROJECT_ID}"
-            echo "Ensuring writable bucket: $BUCKET"
-            if ! gcloud storage buckets describe "$BUCKET" >/dev/null 2>&1; then
-              gcloud storage buckets create "$BUCKET" --project="$PROJECT_ID" --location=us-central1 --uniform-bucket-level-access
-            fi
-          fi
-          echo "Granting object create permission to $CLIENT_EMAIL on $BUCKET"
-          gcloud storage buckets add-iam-policy-binding "$BUCKET" --member="serviceAccount:$CLIENT_EMAIL" --role="roles/storage.objectCreator" --quiet
-          echo "BUCKET=$BUCKET" >> "$GITHUB_OUTPUT"
-          echo "RESULTS_BUCKET=$BUCKET" >> "$GITHUB_ENV"
-          echo "Prepared writable results bucket: $BUCKET"
-
-      - name: Verify results bucket access
-        env:
-          RESULTS_BUCKET: ${{ steps.bucket.outputs.BUCKET }}
-        run: |
-          set -euo pipefail
-          test -n "$RESULTS_BUCKET"
-          gcloud storage ls "$RESULTS_BUCKET"
-          PROBE="/tmp/ucoa-results-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
-          printf "ucoa-results-probe\n" > "$PROBE"
-          PROBE_OBJECT="${RESULTS_BUCKET%/}/ucoa-ci-probes/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
-          gcloud storage cp "$PROBE" "$PROBE_OBJECT"
-          gcloud storage rm "$PROBE_OBJECT"
-          echo "RESULTS_BUCKET_WRITE_OK=$RESULTS_BUCKET" >> "$GITHUB_ENV"
+          echo "RESULTS_BUCKET=" >> "$GITHUB_OUTPUT"
+          echo "Using Firebase Test Lab managed results storage."
       - name: Run real execution on Firebase Test Lab physical device
         id: ftl
         env:
@@ -157,7 +113,6 @@ jobs:
           TEST_APK: android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
           MODEL: ${{ steps.device.outputs.MODEL }}
           VERSION: ${{ steps.device.outputs.VERSION }}
-          RESULTS_BUCKET: ${{ steps.bucket.outputs.BUCKET }}
         run: |
           set -euo pipefail
           PROJECT_ID="$(python3 - <<'PY'
@@ -170,9 +125,7 @@ jobs:
           echo "Firebase project: $PROJECT_ID"
           echo "Firebase physical device: $MODEL / Android $VERSION"
 
-          test -n "$RESULTS_BUCKET"
-          EXTRA_ARGS=("--results-bucket=$RESULTS_BUCKET")
-          EXTRA_ARGS+=("--results-dir=ucoa/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}")
+          EXTRA_ARGS=("--results-dir=ucoa/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}")
 
           set +e
           gcloud firebase test android run \
