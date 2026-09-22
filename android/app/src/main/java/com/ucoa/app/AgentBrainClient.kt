@@ -17,9 +17,17 @@ class AgentBrainClient(private val context: Context) {
     data class Response(val ok: Boolean, val body: JSONObject?, val error: String? = null)
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private val prefs get() = context.getSharedPreferences("ucoa_brain", Context.MODE_PRIVATE)
-    private val defaultEndpoint = "https://ucoa-agent-brain.onrender.com"
-    private val appVersion = "1.0.2"
-    fun endpoint(): String = prefs.getString("endpoint", defaultEndpoint)?.trim().orEmpty().trimEnd('/')
+    private val defaultEndpoint = "https://ucoa-agent-brain-69bo.onrender.com"
+    private val legacyEndpoint = "https://ucoa-agent-brain.onrender.com"
+    private val appVersion = "1.0.3"
+    fun endpoint(): String {
+        val saved = prefs.getString("endpoint", null)?.trim().orEmpty().trimEnd('/')
+        if (saved.isBlank() || saved == legacyEndpoint) {
+            if (saved == legacyEndpoint) prefs.edit().putString("endpoint", defaultEndpoint).apply()
+            return defaultEndpoint
+        }
+        return saved
+    }
     fun token(): String = prefs.getString("token", "")?.trim().orEmpty()
     fun configured(): Boolean = endpoint().isNotBlank()
     fun sessionId(): String { val current = prefs.getString("session_id", null); if (!current.isNullOrBlank()) return current; val created = UUID.randomUUID().toString().replace("-", ""); prefs.edit().putString("session_id", created).apply(); return created }
