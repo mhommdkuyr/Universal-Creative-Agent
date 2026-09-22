@@ -8,7 +8,6 @@
             </intent-filter>
         </activity>
         <activity android:name=".ModernMainActivity" android:exported="false" />
-        <activity android:name=".MainActivity" android:exported="false" />
         <activity android:name=".UcoaSmokeActivity" android:exported="true" android:label="اختبار التحكم" />
         <activity android:name=".UcoaCapCutSmokeActivity" android:exported="true" android:label="اختبار المحرر" />
         <service android:name=".UcoaAccessibilityService" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" android:exported="false">
