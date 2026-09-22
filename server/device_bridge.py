@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import httpx
 import os
 import sqlite3
 import time
@@ -32,10 +33,69 @@ GITHUB_QA_WORKFLOW = os.getenv("UCOA_GITHUB_QA_WORKFLOW", "CI")
 GITHUB_QA_WORKFLOW_ALIASES = {"CI", "Final Release Gate", "Live Phone Cloud E2E", "Render Bridge Smoke Check", "Render Bridge Manual Diagnostic", "UCOA Live Phone QA", "Render Brain Smoke", ".github/workflows/render-bridge-smoke.yml"}
 _GITHUB_JWK_CLIENT = PyJWKClient(f"{GITHUB_OIDC_ISSUER}/.well-known/jwks")
 
-def _github_oidc_claims(authorization: str | None) -> dict[str, Any]:
+def _github_oidc_claims(authorization: str | None, run_id: str | None = None) -> dict[str, Any]:
+    """Authorize GitHub Actions callers without depending solely on OIDC JWK retrieval.
+
+    When a workflow supplies its short-lived GITHUB_TOKEN plus its run id, Render
+    verifies the token directly against GitHub's Actions API. OIDC JWT validation
+    remains the fallback for existing callers.
+    """
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(401, "GitHub OIDC token required")
+        raise HTTPException(401, "GitHub authorization required")
     token = authorization[7:].strip()
+
+    if run_id:
+        try:
+            run_number = int(str(run_id))
+        except ValueError:
+            run_number = 0
+        if run_number > 0:
+            try:
+                response = httpx.get(
+                    f"https://api.github.com/repos/{GITHUB_QA_REPOSITORY}/actions/runs/{run_number}",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Accept": "application/vnd.github+json",
+                        "X-GitHub-Api-Version": "2022-11-28",
+                    },
+                    timeout=8.0,
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    repo = str((data.get("repository") or {}).get("full_name", ""))
+                    path = str(data.get("path", ""))
+                    branch = str(data.get("head_branch", ""))
+                    allowed_paths = {
+                        ".github/workflows/final-release-gate.yml",
+                        ".github/workflows/phone-live-e2e.yml",
+                        ".github/workflows/render-bridge-smoke.yml",
+                        ".github/workflows/ci.yml",
+                        ".github/workflows/ucoa-live-qa.yml",
+                        ".github/workflows/render-brain-smoke.yml",
+                        ".github/workflows/ucoa-live-single.yml",
+                    }
+                    if repo != GITHUB_QA_REPOSITORY:
+                        raise HTTPException(403, "Repository is not authorized for phone QA")
+                    if branch != "main":
+                        raise HTTPException(403, "Only main branch may run phone QA")
+                    if path not in allowed_paths:
+                        raise HTTPException(403, "Workflow is not authorized for phone QA")
+                    return {
+                        "repository": repo,
+                        "ref": "refs/heads/main",
+                        "workflow": path,
+                        "job_workflow_ref": f"{GITHUB_QA_REPOSITORY}/{path}@refs/heads/main",
+                        "run_id": run_number,
+                    }
+                # A GitHub API validation miss is allowed to fall back to the
+                # existing OIDC verifier for callers already using JWTs.
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+
+    if not token:
+        raise HTTPException(401, "GitHub authorization required")
     try:
         signing_key = _GITHUB_JWK_CLIENT.get_signing_key_from_jwt(token).key
         claims = jwt.decode(token, signing_key, algorithms=["RS256"], audience=GITHUB_OIDC_AUDIENCE, issuer=GITHUB_OIDC_ISSUER)
@@ -285,13 +345,13 @@ def queue_device_command(install_id: str, req: DeviceCommandRequest, authorizati
     return _insert_command(install_id, req)
 
 @app_v3.app.get("/v1/qa/phone/devices")
-def qa_phone_devices(authorization: str | None = Header(default=None)):
-    _github_oidc_claims(authorization)
+def qa_phone_devices(authorization: str | None = Header(default=None), x_github_run_id: str | None = Header(default=None, alias="X-GitHub-Run-ID")):
+    _github_oidc_claims(authorization, x_github_run_id)
     return {"ok": True, "devices": _active_device_ids()}
 
 @app_v3.app.post("/v1/qa/phone/commands")
-def qa_queue_phone_command(req: DeviceCommandRequest, authorization: str | None = Header(default=None)):
-    _github_oidc_claims(authorization)
+def qa_queue_phone_command(req: DeviceCommandRequest, authorization: str | None = Header(default=None), x_github_run_id: str | None = Header(default=None, alias="X-GitHub-Run-ID")):
+    _github_oidc_claims(authorization, x_github_run_id)
     devices = _active_device_ids()
     if not devices:
         raise HTTPException(409, "No active Android device session found")
@@ -299,8 +359,8 @@ def qa_queue_phone_command(req: DeviceCommandRequest, authorization: str | None 
     return _insert_command(install_id, req)
 
 @app_v3.app.get("/v1/qa/phone/commands/{command_id}")
-def qa_inspect_phone_command(command_id: str, authorization: str | None = Header(default=None)):
-    _github_oidc_claims(authorization)
+def qa_inspect_phone_command(command_id: str, authorization: str | None = Header(default=None), x_github_run_id: str | None = Header(default=None, alias="X-GitHub-Run-ID")):
+    _github_oidc_claims(authorization, x_github_run_id)
     _ensure_schema()
     conn = _pg_conn()
     if conn is not None:
