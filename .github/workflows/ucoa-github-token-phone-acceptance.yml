@@ -1,4 +1,5 @@
 name: UCOA GitHub Token Phone Acceptance
+# Live validation trigger: 2026-09-22T22:16Z
 
 on:
   push:
