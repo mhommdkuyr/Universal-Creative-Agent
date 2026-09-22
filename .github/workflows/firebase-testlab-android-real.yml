@@ -201,5 +201,6 @@ jobs:
             android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
             ucoa_apk_sha256.txt
             ftl-result.json
+            ftl-stderr.log
           if-no-files-found: ignore
           retention-days: 14
