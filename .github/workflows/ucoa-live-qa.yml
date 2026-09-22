@@ -123,3 +123,24 @@ if int(r.get("steps",0) or 0) <= 0:
     raise SystemExit("no execution steps recorded")
 print("REAL_DEVICE_ACCEPTANCE_PASS")
 PY
+
+      - name: Report real-phone result to GitHub
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TITLE="UCOA real-phone QA ${GITHUB_SHA}"
+          if [ -f /tmp/state.json ]; then
+            {
+              echo "## Real-phone QA"
+              echo
+              echo '```json'
+              cat /tmp/state.json
+              echo
+              echo '```'
+            } > /tmp/qa-report.md
+          else
+            printf '%s\n' "Real-phone QA did not reach command result collection." > /tmp/qa-report.md
+          fi
+          gh issue create --repo "${GITHUB_REPOSITORY}" --title "${TITLE}" --body-file /tmp/qa-report.md || true
