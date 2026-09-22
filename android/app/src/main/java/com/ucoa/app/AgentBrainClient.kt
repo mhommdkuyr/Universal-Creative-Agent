@@ -17,7 +17,7 @@ class AgentBrainClient(private val context: Context) {
     data class Response(val ok: Boolean, val body: JSONObject?, val error: String? = null)
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private val prefs get() = context.getSharedPreferences("ucoa_brain", Context.MODE_PRIVATE)
-    private val defaultEndpoint = "https://ucoa-agent-brain.vercel.app/api"
+    private val defaultEndpoint = "https://ucoa-agent-brain.onrender.com"
     private val appVersion = "1.0.2"
     fun endpoint(): String = prefs.getString("endpoint", defaultEndpoint)?.trim().orEmpty().trimEnd('/')
     fun token(): String = prefs.getString("token", "")?.trim().orEmpty()
