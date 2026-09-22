@@ -34,6 +34,7 @@ class MainActivity : Activity() {
     private var latestTaskText = ""
     private var conversationStarted = false
     private var executionSubmitted = false
+    private var planningInProgress = false
     private var currentConversationTitle = "محادثة جديدة"
     private val pickMedia = 401
     private val speech = 402
@@ -84,7 +85,7 @@ class MainActivity : Activity() {
     }
     private fun drawerAction(label: String, click: () -> Unit) = TextView(this).apply { text = label; textSize = 16f; setTextColor(Color.WHITE); gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL; setPadding(16, 15, 16, 15); background = rounded(0xFF202226.toInt(), 18f); setOnClickListener { click() }; layoutParams = LinearLayout.LayoutParams(-1, 54).apply { setMargins(0, 5, 0, 5) } }
 
-    private fun startNewConversation() { conversationStarted = false; executionSubmitted = false; currentConversationTitle = "محادثة جديدة"; latestTaskText = ""; selectedMedia.clear(); chat.removeAllViews(); addAssistantBubble("محادثة جديدة. هذه المساحة للمحادثة والتخطيط؛ التنفيذ يبدأ فقط بعد اعتماد المهمة."); menuButton.text = "◌"; menuButton.contentDescription = "محادثة جديدة" }
+    private fun startNewConversation() { conversationStarted = false; executionSubmitted = false; planningInProgress = false; currentConversationTitle = "محادثة جديدة"; latestTaskText = ""; selectedMedia.clear(); chat.removeAllViews(); addAssistantBubble("محادثة جديدة. هذه المساحة للمحادثة والتخطيط؛ التنفيذ يبدأ فقط بعد اعتماد المهمة."); menuButton.text = "◌"; menuButton.contentDescription = "محادثة جديدة" }
     private fun showConversationMenu() = AlertDialog.Builder(this).setTitle("إعدادات المحادثة").setItems(arrayOf("مشاركة", "حذف", "تثبيت", "أرشفة", "البحث في المحادثة")) { _, which -> addAssistantBubble("تم اختيار: ${arrayOf("مشاركة", "حذف", "تثبيت", "أرشفة", "البحث في المحادثة")[which]}.") }.show()
     private fun showSearchDialog() { val q = EditText(this).apply { hint = "ابحث في محادثاتك"; setTextColor(Color.WHITE); setHintTextColor(0xFF888C93.toInt()) }; AlertDialog.Builder(this).setTitle("البحث في المحادثات").setView(q).setPositiveButton("بحث") { _, _ -> addAssistantBubble("نتائج البحث عن: ${q.text}"); toggleDrawer(false) }.setNegativeButton("إلغاء", null).show() }
     private fun showConnectedApps() { val apps = UcoaAccessibilityService.instance?.installedAppLabels()?.take(30)?.joinToString("\n") ?: "فعّل خدمة الوصول أولًا لقراءة التطبيقات المثبتة."; AlertDialog.Builder(this).setTitle("التطبيقات المتصلة").setMessage(apps).setPositiveButton("حسنًا", null).show() }
@@ -105,17 +106,17 @@ class MainActivity : Activity() {
     private fun refreshConnectionState() { val enabled = PermissionCoordinator.isAccessibilityEnabled(this); val live = PermissionCoordinator.isServiceLive(); status.text = when { live -> "● متصل — تنفيذ ومراقبة سحابية"; enabled -> "● الصلاحية مفعلة — الخدمة قيد الاتصال"; else -> "○ فعّل الوصول من الإعدادات لبدء التنفيذ" } }
 
     private fun analyzeTask() {
-        val task = input.text.toString().trim(); if (task.isEmpty() || executionSubmitted) return
-        latestTaskText = task; conversationStarted = true; executionSubmitted = false; menuButton.text = "⋮"; menuButton.contentDescription = "إعدادات المحادثة"; currentConversationTitle = task.take(40)
+        val task = input.text.toString().trim(); if (task.isEmpty() || planningInProgress) return
+        latestTaskText = task; conversationStarted = true; executionSubmitted = false; planningInProgress = true; menuButton.text = "⋮"; menuButton.contentDescription = "إعدادات المحادثة"; currentConversationTitle = task.take(40)
         addUserBubble(task + if (selectedMedia.isNotEmpty()) "\n📎 ${selectedMedia.size} ملف" else ""); input.setText("")
         brain.readiness { transportOk, ready, detail -> runOnUiThread {
-            if (!transportOk || !ready) { addAssistantBubble("تعذر الوصول إلى Cloud Brain: $detail"); return@runOnUiThread }
+            if (!transportOk || !ready) { planningInProgress = false; addAssistantBubble("تعذر الوصول إلى Cloud Brain: $detail"); return@runOnUiThread }
             addAssistantBubble("أخطط للمهمة سحابيًا…")
             brain.plan(task, selectedMedia) { r -> runOnUiThread {
-                if (!r.ok || r.body == null) { addAssistantBubble("تعذر التخطيط: ${r.error ?: "خطأ غير معروف"}"); return@runOnUiThread }
+                if (!r.ok || r.body == null) { planningInProgress = false; addAssistantBubble("تعذر التخطيط: ${r.error ?: "خطأ غير معروف"}"); return@runOnUiThread }
                 val steps = mutableListOf<String>(); r.body?.optJSONArray("steps")?.let { a -> for (i in 0 until a.length()) steps += a.optString(i) }
-                if (steps.isEmpty()) { addAssistantBubble("الخطة السحابية لم تُرجع خطوات."); return@runOnUiThread }
-                addPlanCard(r.body!!.optString("summary", "خطة سحابية جاهزة"), steps)
+                if (steps.isEmpty()) { planningInProgress = false; addAssistantBubble("الخطة السحابية لم تُرجع خطوات."); return@runOnUiThread }
+                planningInProgress = false; addPlanCard(r.body!!.optString("summary", "خطة سحابية جاهزة"), steps)
             } }
         } }
     }
@@ -132,9 +133,9 @@ class MainActivity : Activity() {
                 if (executionSubmitted) return@setOnClickListener
                 if (!PermissionCoordinator.isServiceLive()) { connectPhone(); return@setOnClickListener }
                 executionSubmitted = true
-                (this as? Button)?.isEnabled = false
+                isEnabled = false
                 addAssistantBubble("تمت الموافقة. أرسل المهمة إلى جسر الهاتف السحابي؛ التنفيذ سيظهر هنا حيًا.")
-                brain.queueTask(latestTaskText, selectedMedia, JSONObject().put("ui", "conversation_live").put("evidence_required", true)) { r -> runOnUiThread { if (r.ok) { LiveExecutionState.begin(latestTaskText); addAssistantBubble("✓ تم تسليم المهمة للجهاز. التنفيذ الوحيد لهذه الموافقة جارٍ الآن.") } else { executionSubmitted = false; addAssistantBubble("تعذر تسليم المهمة للجسر السحابي: ${r.error ?: "خطأ غير معروف"}") } } }
+                brain.queueTask(latestTaskText, selectedMedia, JSONObject().put("ui", "conversation_live").put("evidence_required", true).put("idempotency_key", executionKey)) { r -> runOnUiThread { if (r.ok) { LiveExecutionState.begin(latestTaskText); addAssistantBubble("✓ تم تسليم المهمة للجهاز. التنفيذ الوحيد لهذه الموافقة جارٍ الآن.") } else { executionSubmitted = false; isEnabled = true; addAssistantBubble("تعذر تسليم المهمة للجسر السحابي: ${r.error ?: "خطأ غير معروف"}") } } }
             }
         })
         chat.addView(card, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, 12, 0, 14) })
