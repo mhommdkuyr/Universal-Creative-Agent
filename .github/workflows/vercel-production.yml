@@ -1,4 +1,5 @@
 name: Vercel Production API
+# Final-phone QA deployment gate: deploy the dedicated UCOA brain, never the web UI project.
 
 on:
   workflow_dispatch:
