@@ -45,6 +45,10 @@ jobs:
             token="$(get_oidc_token)"
             code="$(curl -sS -o /tmp/devices.json -w '%{http_code}'               -H "Authorization: Bearer ${token}"               "$BASE/v1/qa/phone/devices" || true)"
             echo "devices attempt=$i http=$code"
+            if [ "$code" != "200" ]; then
+              echo "device-discovery-response:"
+              cat /tmp/devices.json || true
+            fi
             if [ "$code" = "200" ]; then
               cat /tmp/devices.json
               count="$(python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("devices") or []))' < /tmp/devices.json)"
