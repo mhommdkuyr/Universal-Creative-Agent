@@ -80,7 +80,7 @@ jobs:
           import zipfile
           badging=open('/tmp/badging.txt', encoding='utf-8').read()
           assert "targetSdkVersion:'36'" in badging, badging
-          assert "versionName='1.0.2'" in badging, badging
+          assert "versionName='1.0.3'" in badging, badging
           with zipfile.ZipFile("android/app/build/outputs/apk/debug/app-debug.apk") as z:
               names=z.namelist()
               forbidden=[n for n in names if "ucoa_local_model" in n or n.endswith(".litertlm")]
@@ -393,40 +393,16 @@ jobs:
           print(f'MODEL={mid}')
           print(f'VERSION={version}')
           PY
-      - name: Prepare writable Test Lab bucket
+      - name: Use Firebase Test Lab managed results storage
         id: bucket
-        env:
-          CONFIGURED_RESULTS_BUCKET: ${{ secrets.FIREBASE_TEST_RESULTS_BUCKET || secrets.RESULTS_BUCKET || '' }}
         run: |
-          set -euo pipefail
-          PROJECT_ID="$(python3 - <<'PY'
-          import json,os
-          print(json.load(open(os.environ['GOOGLE_GHA_CREDS_PATH']))['project_id'])
-          PY
-          )"
-          BUCKET="$CONFIGURED_RESULTS_BUCKET"
-          [[ -z "$BUCKET" ]] || [[ "$BUCKET" == gs://* ]] || BUCKET="gs://$BUCKET"
-          if [ -z "$BUCKET" ]; then
-            BUCKET="gs://ucoa-ftl-results-${PROJECT_ID}"
-            gcloud storage buckets describe "$BUCKET" >/dev/null 2>&1 || gcloud storage buckets create "$BUCKET" --project="$PROJECT_ID" --location=us-central1 --uniform-bucket-level-access
-          fi
-          CLIENT_EMAIL="$(python3 - <<'PY'
-          import json,os
-          print(json.load(open(os.environ['GOOGLE_GHA_CREDS_PATH']))['client_email'])
-          PY
-          )"
-          gcloud storage buckets add-iam-policy-binding "$BUCKET" --member="serviceAccount:$CLIENT_EMAIL" --role="roles/storage.objectCreator" --quiet
-          PROBE="/tmp/ucoa-${GITHUB_RUN_ID}-probe.txt"
-          printf "ucoa\n" > "$PROBE"
-          gcloud storage cp "$PROBE" "${BUCKET%/}/probes/${GITHUB_RUN_ID}.txt"
-          gcloud storage rm "${BUCKET%/}/probes/${GITHUB_RUN_ID}.txt"
-          echo "BUCKET=$BUCKET" >> "$GITHUB_OUTPUT"
+          echo "BUCKET=" >> "$GITHUB_OUTPUT"
+          echo "Using Firebase Test Lab managed results storage."
       - name: Run physical Firebase acceptance
         id: ftl
         env:
           MODEL: ${{ steps.device.outputs.MODEL }}
           VERSION: ${{ steps.device.outputs.VERSION }}
-          RESULTS_BUCKET: ${{ steps.bucket.outputs.BUCKET }}
         run: |
           set -euo pipefail
           PROJECT_ID="$(python3 - <<'PY'
@@ -435,7 +411,7 @@ jobs:
           PY
           )"
           set +e
-          gcloud firebase test android run             --project="$PROJECT_ID"             --type=instrumentation             --app=release-candidate/app-debug.apk             --test=release-candidate/app-debug-androidTest.apk             --device model="$MODEL",version="$VERSION",locale=en,orientation=portrait             --timeout 15m             --num-flaky-test-attempts 0             --results-bucket="$RESULTS_BUCKET"             --results-dir="ucoa/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"             --environment-variables "UCOA_SMOKE_TASK=افتح الإعدادات"             --format=json > ftl-result.json 2> ftl-stderr.log
+          gcloud firebase test android run             --project="$PROJECT_ID"             --type=instrumentation             --app=release-candidate/app-debug.apk             --test=release-candidate/app-debug-androidTest.apk             --device model="$MODEL",version="$VERSION",locale=en,orientation=portrait             --timeout 15m             --num-flaky-test-attempts 0             --results-dir="ucoa/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"             --environment-variables "UCOA_SMOKE_TASK=افتح الإعدادات"             --format=json > ftl-result.json 2> ftl-stderr.log
           RC=$?
           set -e
           cat ftl-result.json || true
