@@ -12,5 +12,6 @@ if str(SERVER) not in sys.path:
 os.environ.setdefault("UCOA_STATE_DB", "/tmp/ucoa-state.db")
 os.environ.setdefault("UCOA_REMOTE_OPS_DB", "/tmp/ucoa-remote-ops.db")
 os.environ.setdefault("UCOA_REMOTE_OPS_DB", "/tmp/ucoa-remote-ops.db")
+os.environ.setdefault("UCOA_REMOTE_OPS_DB", "/tmp/ucoa-remote-ops.db")
 
 from app import app  # noqa: E402,F401
