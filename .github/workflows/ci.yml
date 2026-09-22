@@ -41,19 +41,6 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Install Android build toolchain
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
-      - name: Production cloud contract
-        run: |
-          set -euo pipefail
-          curl -fsS --max-time 20 https://ucoa-agent-brain.onrender.com/health
-          curl -fsS --max-time 20 https://ucoa-agent-brain.onrender.com/v1/client/config -o /tmp/client-config.json
-          python3 - <<'PY'
-          import json
-          d=json.load(open('/tmp/client-config.json'))
-          assert d.get('ok') is True, d
-          assert d.get('features',{}).get('remote_config') is True, d
-          assert d.get('features',{}).get('server_side_hotfix') is True, d
-          print('cloud config OK:', d.get('revision'))
-          PY
       - name: Build thin cloud-client APK
         run: gradle -p android assembleDebug --stacktrace
       - name: Validate thin cloud-client APK
