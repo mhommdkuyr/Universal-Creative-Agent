@@ -56,23 +56,196 @@ class MainActivity : Activity() {
     override fun onDestroy() { unsubscribeDiagnostics?.invoke(); unsubscribeLive?.invoke(); super.onDestroy() }
 
     private fun buildUi(): View {
-        root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK); layoutDirection = View.LAYOUT_DIRECTION_RTL }
-        val main = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.BLACK) }
-        val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(18, 12, 18, 10) }
-        top.addView(iconButton("☰", "المحادثات") { toggleDrawer(true) }, LinearLayout.LayoutParams(54, 54))
-        val plus = TextView(this).apply { text = "✦ الحصول على Plus"; textSize = 15f; typeface = Typeface.DEFAULT_BOLD; setTextColor(0xFFBFE4FF.toInt()); gravity = Gravity.CENTER; background = rounded(0xFF26313B.toInt(), 70f); setPadding(20, 10, 20, 10) }
-        top.addView(plus, LinearLayout.LayoutParams(0, 54, 1f).apply { setMargins(18, 0, 18, 0) })
-        menuButton = iconButton("◌", "محادثة جديدة") { if (!conversationStarted) startNewConversation() else showConversationMenu() }
-        top.addView(menuButton, LinearLayout.LayoutParams(54, 54)); main.addView(top)
-        status = TextView(this).apply { textSize = 11f; setTextColor(0xFF9AA3AE.toInt()); gravity = Gravity.CENTER; setPadding(8, 2, 8, 4) }; main.addView(status, LinearLayout.LayoutParams(-1, 28))
-        val scroll = ScrollView(this).apply { setFillViewport(true); isVerticalScrollBarEnabled = false; layoutParams = LinearLayout.LayoutParams(-1, 0, 1f) }
-        chat = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; setPadding(16, 12, 16, 22) }; addAssistantBubble("اكتب ما تريد، وسأخطط له سحابيًا ثم أنفذه مرة واحدة مع تحقق حي من النتيجة."); scroll.addView(chat); main.addView(scroll)
-        val composer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(12, 8, 12, 12); background = rounded(0xFF17191D.toInt(), 28f) }
-        composer.addView(iconButton("＋", "إضافة ملف") { chooseMedia() }, LinearLayout.LayoutParams(44, 52)); composer.addView(iconButton("⌕", "الصوت") { startSpeech() }, LinearLayout.LayoutParams(44, 52))
-        input = EditText(this).apply { hint = "اكتب ما تريد تنفيذه…"; setHintTextColor(0xFF7E858F.toInt()); setTextColor(Color.WHITE); textSize = 16f; background = null; maxLines = 5; minLines = 1; gravity = Gravity.CENTER_VERTICAL; setPadding(12, 6, 12, 6) }
-        composer.addView(input, LinearLayout.LayoutParams(0, 56, 1f)); composer.addView(iconButton("↑", "إرسال") { analyzeTask() }, LinearLayout.LayoutParams(50, 52)); main.addView(composer, LinearLayout.LayoutParams(-1, 78)); root.addView(main)
-        drawerScrim = View(this).apply { setBackgroundColor(0x99000000.toInt()); visibility = View.GONE; setOnClickListener { toggleDrawer(false) } }; root.addView(drawerScrim, FrameLayout.LayoutParams(-1, -1))
-        drawer = buildDrawer(); root.addView(drawer, FrameLayout.LayoutParams((resources.displayMetrics.widthPixels * 0.74f).toInt(), -1, Gravity.RIGHT)); return root
+        // Reference layout: 728x1536 screenshot translated to density-independent Android proportions.
+        val density = resources.displayMetrics.density
+        val dp = { value: Float -> (value * density + 0.5f).toInt() }
+        root = FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK)
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+        }
+
+        val main = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.BLACK)
+        }
+
+        // Header — intentionally mirrors the supplied reference: circular action, centered Plus pill, menu.
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14f), dp(28f), dp(14f), dp(8f))
+        }
+        menuButton = iconButton("⋮", "إعدادات المحادثة") {
+            if (!conversationStarted) startNewConversation() else showConversationMenu()
+        }.apply {
+            text = "◌"
+            textSize = 25f
+            background = rounded(0xFF202020.toInt(), dp(44f).toFloat())
+        }
+        top.addView(menuButton, LinearLayout.LayoutParams(dp(44f), dp(44f)))
+
+        val plus = TextView(this).apply {
+            text = "الحصول على Plus  ✦"
+            textSize = 17f
+            typeface = Typeface.DEFAULT
+            setTextColor(0xFF4AA3FF.toInt())
+            gravity = Gravity.CENTER
+            background = rounded(0xFF2B3A45.toInt(), dp(44f).toFloat())
+            setPadding(dp(8f), 0, dp(8f), 0)
+        }
+        top.addView(plus, LinearLayout.LayoutParams(0, dp(44f), 1f).apply {
+            setMargins(dp(12f), 0, dp(12f), 0)
+        })
+        top.addView(iconButton("☰", "المحادثات") { toggleDrawer(true) }, LinearLayout.LayoutParams(dp(44f), dp(44f)))
+        main.addView(top, LinearLayout.LayoutParams(-1, dp(84f)))
+
+        // Small status line remains visually quiet; execution itself is rendered in the conversation.
+        status = TextView(this).apply {
+            textSize = 10f
+            setTextColor(0xFF70757D.toInt())
+            gravity = Gravity.CENTER
+            setPadding(dp(8f), 0, dp(8f), 0)
+        }
+        main.addView(status, LinearLayout.LayoutParams(-1, dp(22f)))
+
+        val scroll = ScrollView(this).apply {
+            setFillViewport(true)
+            isVerticalScrollBarEnabled = false
+            layoutParams = LinearLayout.LayoutParams(-1, 0, 1f)
+        }
+        chat = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(5f), dp(8f), dp(5f), dp(14f))
+        }
+
+        // Empty-state composition follows the reference: large black breathing space, then the centered live viewport.
+        val liveViewport = buildReferenceViewport()
+        chat.addView(liveViewport, LinearLayout.LayoutParams(-1, dp(318f)).apply {
+            setMargins(0, dp(115f), 0, dp(12f))
+        })
+        scroll.addView(chat)
+        main.addView(scroll)
+
+        // Bottom composer — pill shape and proportions from the reference image.
+        val composer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8f), dp(7f), dp(8f), dp(7f))
+            background = rounded(0xFF202020.toInt(), dp(34f).toFloat())
+        }
+        composer.addView(iconButton("↑", "إرسال") { analyzeTask() }, LinearLayout.LayoutParams(dp(40f), dp(40f)))
+        composer.addView(iconButton("🎙", "الصوت") { startSpeech() }, LinearLayout.LayoutParams(dp(40f), dp(40f)))
+        input = EditText(this).apply {
+            hint = ""
+            setHintTextColor(0xFF777C84.toInt())
+            setTextColor(Color.WHITE)
+            textSize = 16f
+            background = null
+            maxLines = 4
+            minLines = 1
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(10f), 0, dp(10f), 0)
+        }
+        composer.addView(input, LinearLayout.LayoutParams(0, dp(48f), 1f))
+        composer.addView(iconButton("＋", "إضافة ملف") { chooseMedia() }, LinearLayout.LayoutParams(dp(40f), dp(40f)))
+        main.addView(composer, LinearLayout.LayoutParams(-1, dp(66f)).apply {
+            setMargins(dp(12f), dp(7f), dp(12f), dp(12f))
+        })
+
+        root.addView(main)
+        drawerScrim = View(this).apply {
+            setBackgroundColor(0x99000000.toInt())
+            visibility = View.GONE
+            setOnClickListener { toggleDrawer(false) }
+        }
+        root.addView(drawerScrim, FrameLayout.LayoutParams(-1, -1))
+        drawer = buildDrawer()
+        root.addView(drawer, FrameLayout.LayoutParams((resources.displayMetrics.widthPixels * 0.35f).toInt(), -1, Gravity.RIGHT))
+        return root
+    }
+
+    private fun buildReferenceViewport(): View {
+        val density = resources.displayMetrics.density
+        val dp = { value: Float -> (value * density + 0.5f).toInt() }
+        val outer = FrameLayout(this).apply {
+            background = rounded(0xFF3D3D3D.toInt(), dp(9f).toFloat())
+            setPadding(dp(3f), dp(12f), dp(3f), dp(3f))
+        }
+        val inner = FrameLayout(this).apply {
+            background = rounded(0xFF111111.toInt(), dp(6f).toFloat())
+        }
+        outer.addView(inner, FrameLayout.LayoutParams(-1, -1))
+
+        val indicator = View(this).apply {
+            background = rounded(0xFF4AA3FF.toInt(), dp(4f).toFloat())
+        }
+        outer.addView(indicator, FrameLayout.LayoutParams(dp(44f), dp(4f), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+            topMargin = 0
+        })
+
+        val title = TextView(this).apply {
+            text = "Shorts"
+            textSize = 21f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL
+        }
+        inner.addView(title, FrameLayout.LayoutParams(dp(130f), dp(42f), Gravity.TOP or Gravity.RIGHT).apply {
+            topMargin = dp(62f)
+            rightMargin = dp(28f)
+        })
+
+        val dots = TextView(this).apply {
+            text = "⋮"
+            textSize = 28f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+        }
+        inner.addView(dots, FrameLayout.LayoutParams(dp(32f), dp(48f), Gravity.TOP or Gravity.LEFT).apply {
+            topMargin = dp(56f)
+            leftMargin = dp(20f)
+        })
+
+        val grid = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(12f), 0, dp(12f), 0)
+        }
+        fun mediaCard(): View = FrameLayout(this).apply {
+            background = rounded(0xFF050505.toInt(), dp(9f).toFloat())
+            val mediaDots = TextView(this@MainActivity).apply {
+                text = "⋮"
+                textSize = 23f
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+            }
+            addView(mediaDots, FrameLayout.LayoutParams(dp(30f), dp(42f), Gravity.TOP or Gravity.LEFT).apply {
+                topMargin = dp(4f)
+                leftMargin = dp(4f)
+            })
+        }
+        grid.addView(mediaCard(), LinearLayout.LayoutParams(0, dp(155f), 1f).apply { setMargins(0, dp(58f), dp(7f), 0) })
+        grid.addView(mediaCard(), LinearLayout.LayoutParams(0, dp(155f), 1f).apply { setMargins(dp(7f), dp(58f), 0, 0) })
+        inner.addView(grid, FrameLayout.LayoutParams(-1, dp(215f), Gravity.TOP))
+
+        val nav = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(0xFF111111.toInt())
+        }
+        val navItems = listOf("أنت", "الاشتراكات", "+", "Shorts", "الصفحة الرئيسية")
+        navItems.forEach { label ->
+            val t = TextView(this@MainActivity).apply {
+                text = label
+                textSize = if (label == "+") 26f else 11f
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+            }
+            nav.addView(t, LinearLayout.LayoutParams(0, dp(48f), 1f))
+        }
+        inner.addView(nav, FrameLayout.LayoutParams(-1, dp(48f), Gravity.BOTTOM))
+
+        return outer
     }
 
     private fun buildDrawer(): LinearLayout {
