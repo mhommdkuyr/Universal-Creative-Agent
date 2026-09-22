@@ -23,6 +23,7 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 COMMAND_TTL = max(60, int(os.getenv("UCOA_COMMAND_TTL_SECONDS", "900")))
 CLAIM_TTL = max(30, int(os.getenv("UCOA_COMMAND_CLAIM_TTL_SECONDS", "120")))
 DEVICE_ONLINE_TTL_SECONDS = max(15, int(os.getenv("UCOA_DEVICE_ONLINE_TTL_SECONDS", "45")))
+DUPLICATE_WINDOW_SECONDS = max(15, int(os.getenv("UCOA_COMMAND_DEDUP_SECONDS", "180")))
 
 GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 GITHUB_OIDC_AUDIENCE = "ucoa-live-phone"
@@ -131,12 +132,78 @@ def _preferred_active_device_id() -> str | None:
     finally:
         conn.close()
 
+def _find_recent_duplicate(install_id: str, req: DeviceCommandRequest) -> dict[str, Any] | None:
+    """Return an existing queued/claimed command for the same user action.
+
+    This is a backstop for double taps, duplicate Android lifecycle delivery, or
+    multiple bridge polls. Completed commands are intentionally excluded so the
+    same task can be requested again later.
+    """
+    key = str(req.metadata.get("idempotency_key", "")).strip()
+    conn = _pg_conn()
+    if conn is not None:
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT id,kind,payload,status,created_at FROM ucoa_device_commands "
+                        "WHERE install_id=%s AND status IN ('queued','claimed') "
+                        "AND created_at > now() - (%s || ' seconds')::interval "
+                        "ORDER BY created_at DESC LIMIT 20",
+                        (install_id, DUPLICATE_WINDOW_SECONDS),
+                    )
+                    rows = cur.fetchall()
+            conn.close()
+            for row in rows:
+                payload = row[2] if isinstance(row[2], dict) else {}
+                existing_key = str((payload.get("metadata") or {}).get("idempotency_key", "")).strip()
+                same_key = bool(key and existing_key and key == existing_key)
+                same_payload = (
+                    str(payload.get("task", "")) == req.task[:12000]
+                    and list(payload.get("attachments") or [])[:20] == req.attachments[:20]
+                )
+                if same_key or (not key and same_payload):
+                    return {"ok": True, "install_id": install_id, "command_id": row[0], "status": row[3], "expires_in": COMMAND_TTL, "deduplicated": True}
+        except Exception:
+            try: conn.close()
+            except Exception: pass
+        return None
+
+    conn = sqlite3.connect(DB_PATH, timeout=15)
+    try:
+        rows = conn.execute(
+            "SELECT id,kind,payload,status,created_at FROM device_commands "
+            "WHERE install_id=? AND status IN ('queued','claimed') AND created_at > ? "
+            "ORDER BY created_at DESC LIMIT 20",
+            (install_id, time.time() - DUPLICATE_WINDOW_SECONDS),
+        ).fetchall()
+        for row in rows:
+            try:
+                payload = json.loads(row[2]) if isinstance(row[2], str) else (row[2] or {})
+            except Exception:
+                payload = {}
+            existing_key = str((payload.get("metadata") or {}).get("idempotency_key", "")).strip()
+            same_key = bool(key and existing_key and key == existing_key)
+            same_payload = (
+                str(payload.get("task", "")) == req.task[:12000]
+                and list(payload.get("attachments") or [])[:20] == req.attachments[:20]
+            )
+            if same_key or (not key and same_payload):
+                return {"ok": True, "install_id": install_id, "command_id": row[0], "status": row[3], "expires_in": COMMAND_TTL, "deduplicated": True}
+    finally:
+        conn.close()
+    return None
+
+
 def _insert_command(install_id: str, req: DeviceCommandRequest) -> dict[str, Any]:
     install_id = install_id.strip()[:128]
     if not install_id or len(req.task.strip()) < 1:
         raise HTTPException(400, "install_id and task are required")
     if req.kind != "task":
         raise HTTPException(400, "Unsupported command kind")
+    duplicate = _find_recent_duplicate(install_id, req)
+    if duplicate is not None:
+        return duplicate
     command_id = uuid.uuid4().hex
     payload = {"task": req.task[:12000], "attachments": req.attachments[:20], "metadata": req.metadata}
     conn = _pg_conn()
