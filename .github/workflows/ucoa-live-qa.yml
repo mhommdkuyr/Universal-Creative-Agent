@@ -3,6 +3,8 @@ name: UCOA Live Phone QA
 # Final-phone QA trigger: execute against the currently connected physical Android client.
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches:
       - main
