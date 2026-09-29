@@ -1,0 +1,74 @@
+name: AGI Control Endpoint Smoke
+
+on:
+  push:
+    paths:
+      - ".github/workflows/agi-control-endpoint-smoke.yml"
+      - "server/app.py"
+      - "server/production_overrides.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      BASE: https://ucoa-agent-brain-agi-control.onrender.com
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Wait for test service
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 5 "$BASE/health" >/tmp/health.json; then
+              cat /tmp/health.json
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/health.json || true
+          exit 1
+      - name: Validate health and live control step
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64, json, os, urllib.request
+
+          base = os.environ["BASE"]
+          health = json.load(urllib.request.urlopen(base + "/health", timeout=20))
+          print("health=", json.dumps(health, ensure_ascii=False))
+          assert health.get("ok") is True, health
+          assert health.get("auth_required") is False, health
+
+          png = base64.b64encode(b"test-only-placeholder").decode()
+          payload = {
+            "task": "افتح تطبيق الإعدادات",
+            "step": 0,
+            "max_steps": 4,
+            "history": [],
+            "ui_tree": "[]",
+            "screenshot_base64": png,
+            "installed_apps": ["Settings", "Chrome"],
+            "capabilities": ["open_app_by_name","tap","observe","done"],
+            "session_id": "agi-control-endpoint-smoke",
+            "foreground_package": "com.android.launcher"
+          }
+          req=urllib.request.Request(
+            base + "/v1/agent/step",
+            data=json.dumps(payload, ensure_ascii=False).encode(),
+            headers={"Content-Type":"application/json"},
+            method="POST",
+          )
+          result=json.load(urllib.request.urlopen(req, timeout=30))
+          print("step=", json.dumps(result, ensure_ascii=False))
+          assert result.get("action") == "open_app_by_name", result
+          assert result.get("provider") in {"deterministic-target-gate","deterministic-foreground-gate"}, result
+          assert (result.get("params") or {}).get("app_name") == "settings", result
+          print("UCOA_AGI_CONTROL_ENDPOINT_PASS")
+          PY
