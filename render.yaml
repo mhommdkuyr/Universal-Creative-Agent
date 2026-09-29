@@ -15,3 +15,5 @@ services:
         sync: false
       - key: UCOA_AGENT_TOKEN
         sync: false
+      - key: UCOA_MCP_TOKEN
+        sync: false
