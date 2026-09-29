@@ -292,3 +292,5 @@ def visual(task, ui_tree, image):
 
 def reasoning(system,user):
     return call(system,user,None)
+
+# Provider probe workflow trigger: live non-Gemini credentials are never printed.
