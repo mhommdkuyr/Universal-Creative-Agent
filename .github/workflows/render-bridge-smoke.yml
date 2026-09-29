@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      BASE: https://ucoa-agent-brain.onrender.com
+      BASE: https://ucoa-agent-brain-69bo.onrender.com
     steps:
       - name: Wait for Render bridge
         shell: bash
