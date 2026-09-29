@@ -162,7 +162,8 @@ def storage_status():return {"durable_storage":durable_state.configured()}
 app=app_v3.app
 import production_overrides  # noqa: E402,F401
 import remote_ops  # noqa: E402,F401
-import device_bridge  # noqa: E402,F401
+import device_bridge  # noqa: E402
+import mcp_android  # noqa: E402,F401,F401
 
 # Ensure the device polling/result routes are attached to the final FastAPI app.
 # Some production import paths can replace route collections before device_bridge
