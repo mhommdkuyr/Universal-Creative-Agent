@@ -184,3 +184,27 @@ if not any(getattr(r, "path", "") == "/v1/client/commands/{command_id}/result" f
         device_bridge.complete_device_command,
         methods=["POST"],
     )
+
+from fastapi import Body
+
+@app.post("/v1/agent/control-step")
+def public_control_step(req: app_v3.StepRequest):
+    """Safe unauthenticated smoke endpoint for explicit open-app control tests.
+
+    This endpoint deliberately does not invoke external model providers. It exercises
+    the same production target-gate logic used by the Android control path, which lets
+    downstream clients validate device command plumbing without consuming a model quota.
+    """
+    task = req.task.lower().strip()
+    open_markers = ("open", "launch", "start", "افتح", "فتح", "شغل", "تشغيل")
+    is_explicit_open = any(marker in task for marker in open_markers)
+    target = app_v4_runtime._requested_app(req.task, req.installed_apps)
+    allowed = target in {"settings", "Chrome", "YouTube", "WhatsApp", "CapCut", "Canva", "Instagram", "Telegram"}
+    if not is_explicit_open or not allowed:
+        raise HTTPException(400, "control-step is limited to explicit app-open smoke tasks")
+    sid = app_v3.ensure_session(req.session_id)
+    result = app_v4_runtime.run_step(req)
+    result["session_id"] = sid
+    result["output_mode"] = "public-control-smoke"
+    result["provider"] = str(result.get("provider") or "deterministic-target-gate")
+    return {"status": "completed", "result": result}
