@@ -543,12 +543,23 @@ def _http_response(message: dict[str, Any] | None, request: Request) -> Response
 
 @app_v3.app.get("/.well-known/oauth-protected-resource")
 @app_v3.app.get("/.well-known/oauth-protected-resource/mcp")
+@app_v3.app.get("/mcp/.well-known/oauth-protected-resource")
+@app_v3.app.get("/mcp/.well-known/oauth-protected-resource/mcp")
 async def oauth_protected_resource_metadata():
     return JSONResponse(_protected_resource_metadata())
 
 
 @app_v3.app.get("/.well-known/oauth-authorization-server")
+@app_v3.app.get("/.well-known/oauth-authorization-server/mcp")
+@app_v3.app.get("/mcp/.well-known/oauth-authorization-server")
 async def oauth_authorization_server_metadata():
+    return JSONResponse(_oauth_metadata())
+
+
+@app_v3.app.get("/.well-known/openid-configuration")
+@app_v3.app.get("/.well-known/openid-configuration/mcp")
+@app_v3.app.get("/mcp/.well-known/openid-configuration")
+async def openid_configuration():
     return JSONResponse(_oauth_metadata())
 
 
@@ -671,9 +682,11 @@ async def oauth_token(request: Request):
             return JSONResponse({"error": "invalid_grant"}, status_code=400)
 
         _, stored_client, stored_redirect, code_challenge, resource, scope, subject, _, expires_at = row
+        requested_resource = _normalize_resource(str(form.get("resource", "")))
         if (
             stored_client != client_id
             or stored_redirect != redirect_uri
+            or requested_resource != RESOURCE_ID
             or resource != RESOURCE_ID
             or time.time() > float(expires_at)
         ):
