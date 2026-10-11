@@ -67,9 +67,29 @@ class UcoaAccessibilityService : AccessibilityService() {
         val known = mapOf("capcut" to "com.lemon.lvoverseas", "كاب كات" to "com.lemon.lvoverseas", "كابكات" to "com.lemon.lvoverseas", "youtube" to "com.google.android.youtube", "يوتيوب" to "com.google.android.youtube", "canva" to "com.canva.editor", "كانفا" to "com.canva.editor", "chrome" to "com.android.chrome", "كروم" to "com.android.chrome", "instagram" to "com.instagram.android", "انستجرام" to "com.instagram.android", "انستغرام" to "com.instagram.android", "whatsapp" to "com.whatsapp", "واتساب" to "com.whatsapp", "telegram" to "org.telegram.messenger", "تليجرام" to "org.telegram.messenger", "settings" to "com.android.settings", "الإعدادات" to "com.android.settings", "اعدادات" to "com.android.settings", "الضبط" to "com.android.settings")
         return known.entries.firstOrNull { q.contains(normalize(it.key)) }?.value
     }
-    fun openApp(pkg: String): Boolean = try { val intent = packageManager.getLaunchIntentForPackage(pkg) ?: return false.also { UcoaDiagnostics.log("EXECUTOR", "لم نجد launch intent", "package=$pkg") }; intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(intent); UcoaDiagnostics.log("EXECUTOR", "تم استدعاء startActivity", "package=$pkg"); true } catch (e: Exception) { UcoaDiagnostics.log("EXECUTOR", "استثناء أثناء فتح التطبيق", "package=$pkg error=${e.javaClass.simpleName}: ${e.message}"); false }
+    fun openApp(pkg: String): Boolean = try {
+        if (pkg == "com.android.settings") {
+            // Settings may not expose a package-manager launch intent on some Android builds.
+            // Use the public system Settings action rather than treating that as a failed launch.
+            val settingsIntent = Intent(android.provider.Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(settingsIntent)
+            UcoaDiagnostics.log("EXECUTOR", "تم استدعاء Android Settings ACTION_SETTINGS", "package=com.android.settings")
+            return true
+        }
+        val intent = packageManager.getLaunchIntentForPackage(pkg) ?: return false.also { UcoaDiagnostics.log("EXECUTOR", "لم نجد launch intent", "package=$pkg") }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(intent)
+        UcoaDiagnostics.log("EXECUTOR", "تم استدعاء startActivity", "package=$pkg")
+        true
+    } catch (e: Exception) {
+        UcoaDiagnostics.log("EXECUTOR", "استثناء أثناء فتح التطبيق", "package=$pkg error=${e.javaClass.simpleName}: ${e.message}")
+        false
+    }
     fun openAppByName(query: String): Boolean {
-        val q = normalize(query); val direct = packageForName(query); if (direct != null && openApp(direct)) return true
+        val q = normalize(query)
+        val direct = packageForName(query)
+        if (direct == "com.android.settings") return openApp(direct)
+        if (direct != null && openApp(direct)) return true
         val pm = packageManager; val candidates = pm.getInstalledApplications(0).filter { !it.packageName.equals(packageName, true) }.mapNotNull { app -> val label = pm.getApplicationLabel(app)?.toString() ?: return@mapNotNull null; if (normalize(label).contains(q) || normalize(app.packageName).contains(q)) app else null }.sortedBy { pm.getApplicationLabel(it)?.toString()?.length ?: 999 }
         val fallback = candidates.firstOrNull()?.packageName; UcoaDiagnostics.log("EXECUTOR", "نتيجة مطابقة اسم التطبيق", "query=$query mapped=$direct fallback=$fallback"); return fallback?.let { openApp(it) } ?: false
     }
