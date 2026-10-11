@@ -367,6 +367,9 @@ def qa_queue_phone_command(req: DeviceCommandRequest, authorization: str | None 
 def qa_inspect_phone_command(command_id: str, authorization: str | None = Header(default=None), x_github_run_id: str | None = Header(default=None, alias="X-GitHub-Run-ID")):
     _github_oidc_claims(authorization, x_github_run_id)
     _ensure_schema()
+
+    # PostgreSQL is preferred. If it is available but lacks this command, check
+    # the SQLite fallback too: the command may have been queued during a PG outage.
     conn = _pg_conn()
     if conn is not None:
         try:
@@ -375,29 +378,29 @@ def qa_inspect_phone_command(command_id: str, authorization: str | None = Header
                     cur.execute("SELECT id,install_id,kind,payload,status,created_at,claimed_at,completed_at,result FROM ucoa_device_commands WHERE id=%s", (command_id,))
                     row = cur.fetchone()
             conn.close()
-            if not row:
-                raise HTTPException(404, "Command not found")
-            return {"ok": True, "command": {
-                "id": row[0], "install_id": row[1], "kind": row[2], "payload": row[3], "status": row[4],
-                "created_at": row[5].isoformat(), "claimed_at": row[6].isoformat() if row[6] else None,
-                "completed_at": row[7].isoformat() if row[7] else None, "result": row[8]
-            }}
-        except HTTPException:
-            raise
+            if row:
+                return {"ok": True, "command": {
+                    "id": row[0], "install_id": row[1], "kind": row[2], "payload": row[3], "status": row[4],
+                    "created_at": row[5].isoformat(), "claimed_at": row[6].isoformat() if row[6] else None,
+                    "completed_at": row[7].isoformat() if row[7] else None, "result": row[8]
+                }}
         except Exception:
-            try: conn.close()
-            except Exception: pass
+            try:
+                conn.close()
+            except Exception:
+                pass
+
     conn = sqlite3.connect(DB_PATH, timeout=15)
     try:
         row = conn.execute("SELECT id,install_id,kind,payload,status,created_at,claimed_at,completed_at,result FROM device_commands WHERE id=?", (command_id,)).fetchone()
-        if not row:
-            raise HTTPException(404, "Command not found")
-        return {"ok": True, "command": {
-            "id": row[0], "install_id": row[1], "kind": row[2], "payload": json.loads(row[3]), "status": row[4],
-            "created_at": row[5], "claimed_at": row[6], "completed_at": row[7], "result": json.loads(row[8])
-        }}
+        if row:
+            return {"ok": True, "command": {
+                "id": row[0], "install_id": row[1], "kind": row[2], "payload": json.loads(row[3]), "status": row[4],
+                "created_at": row[5], "claimed_at": row[6], "completed_at": row[7], "result": json.loads(row[8])
+            }}
     finally:
         conn.close()
+    raise HTTPException(404, "Command not found")
 
 @app_v3.app.get("/v1/client/commands/next")
 def next_device_command(authorization: str | None = Header(default=None)):
