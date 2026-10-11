@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/ucoa-live-single.yml"
+      - "android/app/src/main/java/com/ucoa/app/RemoteCommandBridge.kt"
   workflow_dispatch:
 
 permissions:
