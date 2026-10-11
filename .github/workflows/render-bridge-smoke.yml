@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/render-bridge-smoke.yml"
+      - "android/app/src/main/java/com/ucoa/app/RemoteCommandBridge.kt"
 
 permissions:
   contents: read
