@@ -12,53 +12,49 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
+      BASE: https://ucoa-agent-brain-69bo.onrender.com
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Find the Render service currently receiving the phone heartbeat
+      - name: Wait for production bridge
         shell: bash
         run: |
           set -euo pipefail
-          candidates=(
-            "https://ucoa-agent-brain-69bo.onrender.com"
-            "https://ucoa-agent-brain.onrender.com"
-          )
-          selected=""
-          for base in "${candidates[@]}"; do
-            echo "Checking service $base"
-            health_code="$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 8 "$base/health" || true)"
-            echo "health_http=$health_code"
-            if [ "$health_code" != "200" ]; then
-              continue
+          for i in $(seq 1 40); do
+            code="$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 8 "$BASE/health" || true)"
+            echo "health_http=$code attempt=$i"
+            if [ "$code" = "200" ]; then
+              cat /tmp/health.json
+              exit 0
             fi
-            config_code="$(curl -sS -o /tmp/config.json -w '%{http_code}' --max-time 8 "$base/v1/client/config" || true)"
-            echo "config_http=$config_code"
-            devices_code="$(curl -sS -o /tmp/devices.json -w '%{http_code}' --max-time 8               -H "Authorization: Bearer ${GITHUB_TOKEN}"               -H "X-GitHub-Run-ID: ${GITHUB_RUN_ID}"               "$base/v1/qa/phone/devices" || true)"
-            echo "devices_http=$devices_code"
-            if [ "$devices_code" = "200" ]; then
+            sleep 3
+          done
+          exit 1
+
+      - name: Discover active Android phone
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 80); do
+            code="$(curl -sS -o /tmp/devices.json -w '%{http_code}' --max-time 10               -H "Authorization: Bearer ${GITHUB_TOKEN}"               -H "X-GitHub-Run-ID: ${GITHUB_RUN_ID}"               "$BASE/v1/qa/phone/devices" || true)"
+            echo "devices_http=$code attempt=$i"
+            if [ "$code" = "200" ]; then
+              cat /tmp/devices.json
               count="$(python3 -c 'import json; print(len(json.load(open("/tmp/devices.json")).get("devices") or []))')"
               echo "active_device_count=$count"
-              if [ "$count" -gt 0 ]; then
-                selected="$base"
-                break
-              fi
+              if [ "$count" -gt 0 ]; then exit 0; fi
             else
-              echo "device_discovery_body:"
               cat /tmp/devices.json || true
             fi
+            sleep 3
           done
-          if [ -z "$selected" ]; then
-            echo "No candidate service exposed an authorized active phone session."
-            echo "The result distinguishes service/auth errors from an empty heartbeat list."
-            exit 1
-          fi
-          echo "BASE=$selected" >> "$GITHUB_ENV"
-          echo "Selected the service reporting an active phone session."
+          echo "No active Android heartbeat appeared within the observation window."
+          exit 1
 
       - name: Execute safe Settings task on active phone
         shell: bash
         run: |
           set -euo pipefail
-          task='اختبار قبول حي: افتح تطبيق الإعدادات فقط. لا تغيّر أي إعداد. يجب أن يثبت UCOA من Accessibility UI tree ولقطة الشاشة أن شاشة الإعدادات ظاهرة.'
+          task='اختبار القبول الحقيقي: افتح تطبيق الإعدادات فقط. لا تغيّر أي إعداد. يجب إثبات الحالة النهائية من UCOA عبر Accessibility UI tree ولقطة الشاشة.'
           python3 - "$task" > /tmp/body.json <<'PY'
           import json,sys
           print(json.dumps({
@@ -77,8 +73,13 @@ jobs:
           command_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["command_id"])' <<<"$queued")"
           test -n "$command_id"
           for i in $(seq 1 150); do
-            state="$(curl --fail --silent --show-error               -H "Authorization: Bearer ${GITHUB_TOKEN}"               -H "X-GitHub-Run-ID: ${GITHUB_RUN_ID}"               "$BASE/v1/qa/phone/commands/$command_id")"
-            echo "$state" > /tmp/state.json
+            code="$(curl -sS -o /tmp/state.json -w '%{http_code}' --max-time 12               -H "Authorization: Bearer ${GITHUB_TOKEN}"               -H "X-GitHub-Run-ID: ${GITHUB_RUN_ID}"               "$BASE/v1/qa/phone/commands/$command_id" || true)"
+            if [ "$code" != "200" ]; then
+              echo "status_http=$code poll=$i"
+              cat /tmp/state.json || true
+              sleep 2
+              continue
+            fi
             status="$(python3 -c 'import json; print(json.load(open("/tmp/state.json"))["command"]["status"])')"
             echo "poll=$i status=$status"
             if [ "$status" = "completed" ] || [ "$status" = "failed" ] || [ "$status" = "cancelled" ]; then break; fi
@@ -94,6 +95,7 @@ jobs:
           assert r.get('completion_verified_by_ucoa') is True, r
           assert str(r.get('final_foreground','')).endswith('com.android.settings'), r
           assert int(r.get('steps',0) or 0) > 0, r
+          assert r.get('evidence_source'), r
           print('REAL_PHONE_ACCEPTANCE_PASS')
           PY
 
@@ -106,6 +108,5 @@ jobs:
             /tmp/state.json
             /tmp/devices.json
             /tmp/health.json
-            /tmp/config.json
           if-no-files-found: warn
           retention-days: 30
