@@ -19,7 +19,7 @@ class AgentBrainClient(private val context: Context) {
     private val prefs get() = context.getSharedPreferences("ucoa_brain", Context.MODE_PRIVATE)
     private val defaultEndpoint = "https://ucoa-agent-brain-69bo.onrender.com"
     private val legacyEndpoint = "https://ucoa-agent-brain.onrender.com"
-    private val appVersion = "1.0.3"
+    private val appVersion = BuildConfig.VERSION_NAME
     fun endpoint(): String {
         val saved = prefs.getString("endpoint", null)?.trim().orEmpty().trimEnd('/')
         if (saved.isBlank()) return defaultEndpoint

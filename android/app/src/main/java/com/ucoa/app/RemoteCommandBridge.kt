@@ -52,7 +52,43 @@ class RemoteCommandBridge(private val context: Context, private val service: Uco
         val result = json("task" to task.take(2000), "steps" to history.length(), "verified_steps" to verifiedSteps, "completion_verified_by_ucoa" to completed, "final_foreground" to (service.foregroundPackageName() ?: ""), "evidence_source" to "UCOA Accessibility UI tree + screenshot before/after"); if (lastError.isNotBlank()) result.put("error", lastError.take(2000)); LiveExecutionState.finish(completed, if (completed) "اكتمل بعد تحقق UCOA من الحالة النهائية." else lastError.ifBlank { "لم يثبت اكتمال المهمة." }); report(id, if (completed) "completed" else "failed", result)
     }
 
-    private fun executeAction(a: JSONObject, attachments: List<String>): Boolean = when (a.optString("action")) { "open_url" -> service.openUrl(a.optString("url")); "open_app_by_name" -> service.openAppByName(a.optString("app_name")); "click_any_text" -> service.clickAnyText(list(a.optJSONArray("texts"))); "click_text" -> service.clickText(a.optString("text")); "type_into_any" -> service.typeIntoAny(list(a.optJSONArray("hints")), a.optString("text")); "type_text" -> service.typeText(a.optString("text")); "share_attachment" -> service.shareAttachment(a.optString("uri").ifBlank { attachments.firstOrNull().orEmpty() }, a.optString("package_name").ifBlank { null }); "tap" -> service.tap(a.optDouble("x").toFloat(), a.optDouble("y").toFloat()); "long_press" -> service.longPress(a.optDouble("x").toFloat(), a.optDouble("y").toFloat(), a.optLong("duration_ms", 700L)); "swipe" -> service.swipe(a.optDouble("x1").toFloat(), a.optDouble("y1").toFloat(), a.optDouble("x2").toFloat(), a.optDouble("y2").toFloat(), a.optLong("duration_ms", 500L)); "back" -> service.back(); "home" -> service.home(); "wait", "observe", "done" -> true; else -> false }
+    private fun executeAction(a: JSONObject, attachments: List<String>): Boolean {
+        // The cloud planner contract nests arguments under "params". Read nested arguments first,
+        // while retaining top-level fallback for older plans and test fixtures.
+        val p = a.optJSONObject("params") ?: JSONObject()
+        fun argString(key: String, default: String = ""): String =
+            if (p.has(key)) p.optString(key, default) else a.optString(key, default)
+        fun argDouble(key: String, default: Double = 0.0): Double =
+            if (p.has(key)) p.optDouble(key, default) else a.optDouble(key, default)
+        fun argLong(key: String, default: Long): Long =
+            if (p.has(key)) p.optLong(key, default) else a.optLong(key, default)
+        fun argArray(key: String): JSONArray? = p.optJSONArray(key) ?: a.optJSONArray(key)
+
+        return when (a.optString("action")) {
+            "open_url" -> service.openUrl(argString("url"))
+            "open_app_by_name" -> service.openAppByName(argString("app_name"))
+            "click_any_text" -> service.clickAnyText(list(argArray("texts")))
+            "click_text" -> service.clickText(argString("text"))
+            "type_into_any" -> service.typeIntoAny(list(argArray("hints")), argString("text"))
+            "type_text" -> service.typeText(argString("text"))
+            "share_attachment" -> service.shareAttachment(
+                argString("uri").ifBlank { attachments.firstOrNull().orEmpty() },
+                argString("package_name").ifBlank { null }
+            )
+            "tap" -> service.tap(argDouble("x").toFloat(), argDouble("y").toFloat())
+            "long_press" -> service.longPress(argDouble("x").toFloat(), argDouble("y").toFloat(), argLong("duration_ms", 700L))
+            "swipe" -> service.swipe(
+                argDouble("x1").toFloat(), argDouble("y1").toFloat(),
+                argDouble("x2").toFloat(), argDouble("y2").toFloat(),
+                argLong("duration_ms", 500L)
+            )
+            "back" -> service.back()
+            "home" -> service.home()
+            "wait", "observe", "done" -> true
+            else -> false
+        }
+    }
+
     private fun awaitPlan(task: String, attachments: List<String>): Triple<Boolean, JSONObject?, String?> { val latch = CountDownLatch(1); var r = AgentBrainClient.Response(false, null, null); brain.plan(task, attachments) { x -> r = x; latch.countDown() }; latch.await(190, TimeUnit.SECONDS); return Triple(r.ok, r.body, r.error) }
     private fun awaitStep(task: String, step: Int, history: JSONArray, ui: String, shot: String?, attachments: List<String>): Triple<Boolean, JSONObject?, String?> { val latch = CountDownLatch(1); var r = AgentBrainClient.Response(false, null, null); brain.step(task, step, history, ui, shot, service.installedAppLabels(), attachments) { x -> r = x; latch.countDown() }; latch.await(80, TimeUnit.SECONDS); return Triple(r.ok, r.body, r.error) }
     private fun awaitVerification(task: String, action: JSONObject, beforeUi: String, afterUi: String, beforeScreenshot: String?, afterScreenshot: String?): Triple<Boolean, JSONObject?, String?> { val latch = CountDownLatch(1); var r = AgentBrainClient.Response(false, null, null); brain.verifyResult(task, action, beforeUi, afterUi, beforeScreenshot, afterScreenshot) { x -> r = x; latch.countDown() }; latch.await(35, TimeUnit.SECONDS); return Triple(r.ok, r.body, r.error) }
