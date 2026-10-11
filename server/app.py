@@ -138,14 +138,19 @@ def android_step(req:app_v3.StepRequest,authorization:str|None=Header(default=No
     app_v3.auth(authorization); runner=getattr(app_v3,"run_step",None)
     if not callable(runner):raise HTTPException(503,"step runtime not initialized")
     return _run_sync("step",runner,req)
+def android_verify_result(req:app_v3.ResultVerifyRequest,authorization:str|None=Header(default=None)):
+    app_v3.auth(authorization); runner=getattr(app_v3,"verify_result",None)
+    if not callable(runner):raise HTTPException(503,"verify-result runtime not initialized")
+    return _run_sync("verify-result",runner,req)
 def android_job(jid:str,authorization:str|None=Header(default=None)):
     app_v3.auth(authorization)
     with app_v3.JOB_LOCK: job=dict(app_v3.JOBS.get(jid,{}))
     if not job:raise HTTPException(404,"job not found")
     return job
-app_v3.app.routes[:]=[r for r in app_v3.app.routes if getattr(r,"path","") not in {"/v1/agent/plan","/v1/agent/step","/v1/agent/jobs/{jid}","/health"}]
+app_v3.app.routes[:]=[r for r in app_v3.app.routes if getattr(r,"path","") not in {"/v1/agent/plan","/v1/agent/step","/v1/agent/verify-result","/v1/agent/jobs/{jid}","/health"}]
 app_v3.app.add_api_route("/v1/agent/plan",android_plan,methods=["POST"])
 app_v3.app.add_api_route("/v1/agent/step",android_step,methods=["POST"])
+app_v3.app.add_api_route("/v1/agent/verify-result",android_verify_result,methods=["POST"])
 app_v3.app.add_api_route("/v1/agent/jobs/{jid}",android_job,methods=["GET"])
 @app_v3.app.get("/health")
 def health():
