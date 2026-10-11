@@ -1,10 +1,6 @@
 name: Live Phone Cloud E2E
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/ucoa-live-single.yml"
   workflow_dispatch:
 
 permissions:

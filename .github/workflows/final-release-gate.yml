@@ -2,8 +2,6 @@ name: Final Release Gate
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
 
 concurrency:
   group: final-release-${{ github.ref }}
