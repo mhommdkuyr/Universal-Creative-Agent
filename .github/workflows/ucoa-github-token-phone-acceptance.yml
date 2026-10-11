@@ -1,5 +1,4 @@
 name: UCOA GitHub Token Phone Acceptance
-# Live validation trigger: 2026-09-22T22:16Z
 
 on:
   workflow_dispatch:
@@ -11,48 +10,55 @@ permissions:
 jobs:
   live-phone:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     env:
-      BASE: https://ucoa-agent-brain-69bo.onrender.com
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Wait for production bridge
+      - name: Find the Render service currently receiving the phone heartbeat
+        shell: bash
         run: |
           set -euo pipefail
-          for i in $(seq 1 40); do
-            code="$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 8 "$BASE/health" || true)"
-            echo "health=$code"
-            if [ "$code" = "200" ]; then
-              cat /tmp/health.json
-              exit 0
+          candidates=(
+            "https://ucoa-agent-brain-69bo.onrender.com"
+            "https://ucoa-agent-brain.onrender.com"
+          )
+          selected=""
+          for base in "${candidates[@]}"; do
+            echo "Checking service $base"
+            health_code="$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 8 "$base/health" || true)"
+            echo "health_http=$health_code"
+            if [ "$health_code" != "200" ]; then
+              continue
             fi
-            sleep 3
-          done
-          exit 1
-
-      - name: Discover active Android phone
-        run: |
-          set -euo pipefail
-          for i in $(seq 1 80); do
-            code="$(curl -sS -o /tmp/devices.json -w '%{http_code}'               -H "Authorization: Bearer ${GITHUB_TOKEN}"               -H "X-GitHub-Run-ID: ${GITHUB_RUN_ID}"               "$BASE/v1/qa/phone/devices" || true)"
-            echo "devices_http=$code attempt=$i"
-            if [ "$code" != "200" ]; then
-              cat /tmp/devices.json || true
-            else
-              cat /tmp/devices.json
+            config_code="$(curl -sS -o /tmp/config.json -w '%{http_code}' --max-time 8 "$base/v1/client/config" || true)"
+            echo "config_http=$config_code"
+            devices_code="$(curl -sS -o /tmp/devices.json -w '%{http_code}' --max-time 8               -H "Authorization: Bearer ${GITHUB_TOKEN}"               -H "X-GitHub-Run-ID: ${GITHUB_RUN_ID}"               "$base/v1/qa/phone/devices" || true)"
+            echo "devices_http=$devices_code"
+            if [ "$devices_code" = "200" ]; then
               count="$(python3 -c 'import json; print(len(json.load(open("/tmp/devices.json")).get("devices") or []))')"
+              echo "active_device_count=$count"
               if [ "$count" -gt 0 ]; then
-                exit 0
+                selected="$base"
+                break
               fi
+            else
+              echo "device_discovery_body:"
+              cat /tmp/devices.json || true
             fi
-            sleep 3
           done
-          exit 1
+          if [ -z "$selected" ]; then
+            echo "No candidate service exposed an authorized active phone session."
+            echo "The result distinguishes service/auth errors from an empty heartbeat list."
+            exit 1
+          fi
+          echo "BASE=$selected" >> "$GITHUB_ENV"
+          echo "Selected the service reporting an active phone session."
 
       - name: Execute safe Settings task on active phone
+        shell: bash
         run: |
           set -euo pipefail
-          task='اختبار القبول الحقيقي: افتح تطبيق الإعدادات فقط. لا تغيّر أي إعداد. يجب إثبات الحالة النهائية من UCOA عبر Accessibility UI tree ولقطة الشاشة.'
+          task='اختبار قبول حي: افتح تطبيق الإعدادات فقط. لا تغيّر أي إعداد. يجب أن يثبت UCOA من Accessibility UI tree ولقطة الشاشة أن شاشة الإعدادات ظاهرة.'
           python3 - "$task" > /tmp/body.json <<'PY'
           import json,sys
           print(json.dumps({
@@ -100,4 +106,6 @@ jobs:
             /tmp/state.json
             /tmp/devices.json
             /tmp/health.json
+            /tmp/config.json
+          if-no-files-found: warn
           retention-days: 30
