@@ -49,6 +49,7 @@ def test_mcp_tools_list_exposes_android_contract():
         "android_run_task",
         "android_task_status",
         "android_wait_task",
+        "ucoa_profile",
     }
 
     run_task = next(t for t in result["result"]["tools"] if t["name"] == "android_run_task")
