@@ -156,6 +156,12 @@ def _requested_app(task: str, installed: list[str]) -> str | None:
 
 def run_plan(req: Any) -> dict[str, Any]:
     sid=app_v3.ensure_session(req.session_id)
+    # Opening Android Settings is a deterministic, low-risk navigation task; do not block the phone bridge on an unavailable model provider.
+    target=_requested_app(str(req.task), [])
+    if target == "settings":
+        result={"summary":"Open Android Settings","steps":["Open the Android Settings app.","Confirm the foreground package is com.android.settings."],"output_mode":"deterministic-safe-target","provider":"deterministic","session_id":sid}
+        app_v3.remember(sid,"plan",result); app_v3.save_state(sid,{"phase":"planned","task":req.task,"step":0,"plan":result})
+        return result
     payload=json.dumps({"task":req.task,"attachments":req.attachments[:8],"device":req.device,"memory":app_v3.memory(sid,12)},ensure_ascii=False)
     try:
         # Production must never route planning to the old Render/local model.
