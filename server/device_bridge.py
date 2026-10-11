@@ -15,7 +15,7 @@ from fastapi import Header, HTTPException
 from pydantic import BaseModel, Field
 
 import app_v3
-from remote_ops import _master_ok, _pg_conn, _require_client
+from remote_ops import _master_ok, _pg_conn, _require_client, _ensure_schema as _ensure_client_schema
 
 # Live-phone QA trigger: keep the stable Render Brain Smoke workflow exercising the deployed bridge.
 
@@ -125,6 +125,8 @@ def _github_oidc_claims(authorization: str | None, run_id: str | None = None) ->
 
 def _active_device_ids() -> list[str]:
     _ensure_schema()
+    # Ensure the session table exists before querying it; bridge-only startup may not have bootstrapped it yet.
+    _ensure_client_schema()
     conn = _pg_conn()
     if conn is not None:
         try:
@@ -148,6 +150,7 @@ def _preferred_active_device_id() -> str | None:
     Prefer the newest physical Samsung/SM-* Android session for live-phone QA.
     Emulator-like sessions are fallback only.
     """
+    _ensure_client_schema()
     conn = _pg_conn()
     if conn is not None:
         try:
