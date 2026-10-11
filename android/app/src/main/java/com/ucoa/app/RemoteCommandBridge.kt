@@ -12,6 +12,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 /** Cloud command bridge. It plans once, executes once, verifies once, then reports the outcome. */
+// Live acceptance workflow watches this file to exercise the deployed phone bridge after transport changes.
 class RemoteCommandBridge(private val context: Context, private val service: UcoaAccessibilityService) {
     @Volatile private var running = false
     private val brain = AgentBrainClient(context)
