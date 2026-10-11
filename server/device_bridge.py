@@ -30,7 +30,7 @@ GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 GITHUB_OIDC_AUDIENCE = "ucoa-live-phone"
 GITHUB_QA_REPOSITORY = "mhommdkuyr/Universal-Creative-Agent"
 GITHUB_QA_WORKFLOW = os.getenv("UCOA_GITHUB_QA_WORKFLOW", "CI")
-GITHUB_QA_WORKFLOW_ALIASES = {"CI", "Final Release Gate", "Live Phone Cloud E2E", "Render Bridge Smoke Check", "Render Bridge Manual Diagnostic", "UCOA Live Phone QA", "Render Brain Smoke", ".github/workflows/render-bridge-smoke.yml"}
+GITHUB_QA_WORKFLOW_ALIASES = {"CI", "Final Release Gate", "Live Phone Cloud E2E", "Render Bridge Smoke Check", "Render Bridge Manual Diagnostic", "UCOA Live Phone QA", "Render Brain Smoke", ".github/workflows/render-bridge-smoke.yml", "UCOA GitHub Token Phone Acceptance"}
 _GITHUB_JWK_CLIENT = PyJWKClient(f"{GITHUB_OIDC_ISSUER}/.well-known/jwks")
 
 def _github_oidc_claims(authorization: str | None, run_id: str | None = None) -> dict[str, Any]:
@@ -73,6 +73,7 @@ def _github_oidc_claims(authorization: str | None, run_id: str | None = None) ->
                         ".github/workflows/ucoa-live-qa.yml",
                         ".github/workflows/render-brain-smoke.yml",
                         ".github/workflows/ucoa-live-single.yml",
+                        ".github/workflows/ucoa-github-token-phone-acceptance.yml",
                     }
                     if repo != GITHUB_QA_REPOSITORY:
                         raise HTTPException(403, "Repository is not authorized for phone QA")
@@ -116,6 +117,7 @@ def _github_oidc_claims(authorization: str | None, run_id: str | None = None) ->
         "/.github/workflows/ci.yml@refs/heads/main",
         "/.github/workflows/ucoa-live-qa.yml@refs/heads/main",
         "/.github/workflows/render-brain-smoke.yml@refs/heads/main",
+        "/.github/workflows/ucoa-github-token-phone-acceptance.yml@refs/heads/main",
     )
     if not any(workflow_ref.endswith(ref) for ref in allowed_refs):
         raise HTTPException(403, "Unexpected QA workflow reference")
