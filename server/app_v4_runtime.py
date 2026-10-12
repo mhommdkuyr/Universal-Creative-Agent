@@ -272,10 +272,10 @@ def run_step(req: Any) -> dict[str, Any]:
         is_youtube = req.foreground_package == "com.google.android.youtube"
         if not is_youtube and not _looks_like_target_ui("YouTube", ui):
             return {
-                "action":"open_app_by_name","params":{"app_name":"YouTube"},
-                "message":"فتح YouTube أولًا قبل تنفيذ البحث.",
-                "done":False,"wait_after_ms":1000,"confidence":1.0,
-                "coordinate_space":None,"verification_goal":"ظهور حزمة YouTube الفعلية",
+                "action":"open_youtube_search","params":{"query":youtube_query},
+                "message":f"فتح نتائج YouTube مباشرة للاستعلام {youtube_query}.",
+                "done":False,"wait_after_ms":1800,"confidence":1.0,
+                "coordinate_space":None,"verification_goal":"ظهور حزمة YouTube مع شجرة واجهة قابلة للملاحظة",
                 "provider":"deterministic-youtube-search","output_mode":"deterministic-youtube-search"
             }
         if is_youtube and _youtube_results_visible(youtube_query, ui):
@@ -426,10 +426,12 @@ def verify_result(req: Any) -> dict[str, Any]:
             out["verification_source"] = "YouTube foreground + query text + result-list Accessibility evidence + screenshot" if confirmed else "YouTube search evidence incomplete"
             out["reason"] = "YouTube search results and query are visible." if confirmed else "Required YouTube query/result evidence was not visible in the final UI tree."
         else:
-            # Intermediate navigation/input steps may pass to the next step, but they
-            # never complete the task. The final 'done' action above has the strict gate.
+            # Intermediate launch/input steps can pass only with fresh UI evidence;
+            # only the final 'done' branch above is allowed to complete the search.
             changed = bool(req.before_ui_tree.strip() != req.after_ui_tree.strip())
-            if action_name in ("type_into_any", "type_text"):
+            if action_name == "open_youtube_search":
+                step_verified = youtube_foreground and after_tree_present and screenshot_present
+            elif action_name in ("type_into_any", "type_text"):
                 step_verified = youtube_foreground and after_tree_present and screenshot_present and query_visible
             elif action_name == "open_app_by_name":
                 step_verified = youtube_foreground and after_tree_present and screenshot_present

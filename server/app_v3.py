@@ -10,7 +10,7 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="UCOA Universal Agent Brain", version="3.0.0")
-ACTIONS = ["open_url","open_app_by_name","click_any_text","type_into_any","share_attachment","tap","long_press","swipe","back","home","wait","observe","done"]
+ACTIONS = ["open_url","open_app_by_name","open_youtube_search","click_any_text","type_into_any","share_attachment","tap","long_press","swipe","back","home","wait","observe","done"]
 LOCAL_BASE = os.getenv("UCOA_MODEL_BASE_URL", "").rstrip("/")
 LOCAL_MODEL = os.getenv("UCOA_MODEL_NAME", "")
 LOCAL_KEY = os.getenv("UCOA_MODEL_API_KEY", "")

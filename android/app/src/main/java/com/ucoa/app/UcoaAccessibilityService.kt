@@ -94,6 +94,27 @@ class UcoaAccessibilityService : AccessibilityService() {
         val fallback = candidates.firstOrNull()?.packageName; UcoaDiagnostics.log("EXECUTOR", "نتيجة مطابقة اسم التطبيق", "query=$query mapped=$direct fallback=$fallback"); return fallback?.let { openApp(it) } ?: false
     }
     fun installedAppLabels(): List<String> = packageManager.getInstalledApplications(0).filter { it.packageName != packageName }.mapNotNull { packageManager.getApplicationLabel(it)?.toString() }.distinct().sorted().take(250)
+    fun openYoutubeSearch(query: String): Boolean {
+        val safeQuery = query.trim().ifBlank { "Naruto episode 10" }
+        val searchUri = Uri.Builder()
+            .scheme("https")
+            .authority("www.youtube.com")
+            .appendPath("results")
+            .appendQueryParameter("search_query", safeQuery)
+            .build()
+        return try {
+            val intent = Intent(Intent.ACTION_VIEW, searchUri).apply {
+                setPackage("com.google.android.youtube")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            UcoaDiagnostics.log("EXECUTOR", "فتح بحث YouTube مباشر", "query=$safeQuery")
+            true
+        } catch (e: Exception) {
+            UcoaDiagnostics.log("EXECUTOR", "تعذر فتح رابط بحث YouTube المباشر؛ محاولة فتح التطبيق", "query=$safeQuery error=${e.javaClass.simpleName}: ${e.message}")
+            openApp("com.google.android.youtube")
+        }
+    }
     fun openUrl(url: String): Boolean = try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }); true } catch (_: Exception) { false }
     fun shareAttachment(uriString: String, packageNameTarget: String? = null): Boolean = try { val uri = Uri.parse(uriString); val intent = Intent(Intent.ACTION_SEND).apply { type = contentResolver.getType(uri) ?: "*/*"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION); packageNameTarget?.takeIf { it.isNotBlank() }?.let(::setPackage) }; startActivity(intent); true } catch (_: Exception) { false }
     fun observeUi(maxNodes: Int = 160): String { val result = JSONArray(); allNodes(maxNodes).forEach { node -> val b = android.graphics.Rect(); node.getBoundsInScreen(b); result.put(JSONObject().apply { put("class", node.className ?: ""); put("text", node.text ?: ""); put("hint", node.hintText ?: ""); put("description", node.contentDescription ?: ""); put("clickable", node.isClickable); put("editable", node.isEditable); put("enabled", node.isEnabled); put("focused", node.isFocused); put("bounds", JSONObject().apply { put("left", b.left); put("top", b.top); put("right", b.right); put("bottom", b.bottom) }) }) }; return result.toString() }

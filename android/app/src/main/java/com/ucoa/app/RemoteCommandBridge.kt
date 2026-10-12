@@ -120,6 +120,7 @@ class RemoteCommandBridge(private val context: Context, private val service: Uco
 
         return when (a.optString("action")) {
             "open_url" -> service.openUrl(argString("url"))
+            "open_youtube_search" -> service.openYoutubeSearch(argString("query"))
             "open_app_by_name" -> service.openAppByName(argString("app_name"))
             "click_any_text" -> service.clickAnyText(list(argArray("texts")))
             "click_text" -> service.clickText(argString("text"))
