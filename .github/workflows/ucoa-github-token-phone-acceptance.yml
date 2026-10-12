@@ -10,7 +10,8 @@ on:
         options:
           - settings
           - youtube_search
-        default: settings
+          - colab_open
+        default: colab_open
       task:
         description: "Optional task override"
         required: false
@@ -74,6 +75,8 @@ jobs:
           if [ -z "$task" ]; then
             if [ "$TARGET" = "youtube_search" ]; then
               task='افتح يوتيوب وابحث عن حلقة ناروتو العاشرة'
+            elif [ "$TARGET" = "colab_open" ]; then
+              task='افتح Chrome على هذا الهاتف وانتقل إلى https://colab.research.google.com/ وتوقف عند صفحة Colab أو تسجيل الدخول إلى Google إن ظهرت. لا تُدخل أي بيانات ولا تنشئ دفترًا ولا تبدأ جلسة تشغيل.'
             else
               task='اختبار القبول الحقيقي: افتح تطبيق الإعدادات فقط. لا تغيّر أي إعداد. يجب إثبات الحالة النهائية من UCOA عبر Accessibility UI tree ولقطة الشاشة.'
             fi
@@ -122,6 +125,9 @@ jobs:
               assert str(r.get('final_foreground','')) == 'com.google.android.youtube', r
               assert int(r.get('steps',0) or 0) >= 3, r
               assert int(r.get('verified_steps',0) or 0) > 0, r
+          elif target == 'colab_open':
+              assert str(r.get('final_foreground','')) == 'com.android.chrome', r
+              assert int(r.get('steps',0) or 0) > 0, r
           else:
               assert str(r.get('final_foreground','')).endswith('com.android.settings'), r
           assert int(r.get('steps',0) or 0) > 0, r
