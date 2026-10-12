@@ -72,11 +72,11 @@ jobs:
         run: |
           set -euo pipefail
           task="${TASK:-}"
-          if [ -z "$task" ]; then
+          if [ "$TARGET" = "colab_open" ]; then
+            task='افتح Chrome على هذا الهاتف وانتقل إلى https://colab.research.google.com/ وتوقف عند صفحة Colab أو تسجيل الدخول إلى Google إن ظهرت. لا تُدخل أي بيانات ولا تنشئ دفترًا ولا تبدأ جلسة تشغيل.'
+          elif [ -z "$task" ]; then
             if [ "$TARGET" = "youtube_search" ]; then
               task='افتح يوتيوب وابحث عن حلقة ناروتو العاشرة'
-            elif [ "$TARGET" = "colab_open" ]; then
-              task='افتح Chrome على هذا الهاتف وانتقل إلى https://colab.research.google.com/ وتوقف عند صفحة Colab أو تسجيل الدخول إلى Google إن ظهرت. لا تُدخل أي بيانات ولا تنشئ دفترًا ولا تبدأ جلسة تشغيل.'
             else
               task='اختبار القبول الحقيقي: افتح تطبيق الإعدادات فقط. لا تغيّر أي إعداد. يجب إثبات الحالة النهائية من UCOA عبر Accessibility UI tree ولقطة الشاشة.'
             fi
