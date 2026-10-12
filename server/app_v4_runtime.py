@@ -413,17 +413,35 @@ def verify_result(req: Any) -> dict[str, Any]:
     youtube_query = _youtube_search_query(req.task)
     target = _explicit_open_task_target(req.task, [])
     if youtube_query:
-        confirmed = (
-            req.action.get("action") == "done"
-            and req.foreground_package == "com.google.android.youtube"
-            and _youtube_results_visible(youtube_query, req.after_ui_tree)
-            and bool(req.after_screenshot_base64)
-        )
-        out["verified"] = confirmed
-        out["target_confirmed"] = confirmed
-        out["target_query"] = youtube_query
-        out["verification_source"] = "YouTube foreground + query text + result-list Accessibility evidence + screenshot" if confirmed else "YouTube search evidence incomplete"
-        out["reason"] = "YouTube search results and query are visible." if confirmed else "Required YouTube query/result evidence was not visible in the final UI tree."
+        action_name = str(req.action.get("action", "observe"))
+        youtube_foreground = req.foreground_package == "com.google.android.youtube"
+        after_tree_present = bool(req.after_ui_tree and req.after_ui_tree.strip() not in ("", "[]", "{}"))
+        screenshot_present = bool(req.after_screenshot_base64)
+        query_visible = _youtube_query_visible(youtube_query, req.after_ui_tree)
+        results_visible = _youtube_results_visible(youtube_query, req.after_ui_tree)
+        if action_name == "done":
+            confirmed = youtube_foreground and after_tree_present and screenshot_present and results_visible
+            out["verified"] = confirmed
+            out["target_confirmed"] = confirmed
+            out["verification_source"] = "YouTube foreground + query text + result-list Accessibility evidence + screenshot" if confirmed else "YouTube search evidence incomplete"
+            out["reason"] = "YouTube search results and query are visible." if confirmed else "Required YouTube query/result evidence was not visible in the final UI tree."
+        else:
+            # Intermediate navigation/input steps may pass to the next step, but they
+            # never complete the task. The final 'done' action above has the strict gate.
+            changed = bool(req.before_ui_tree.strip() != req.after_ui_tree.strip())
+            if action_name in ("type_into_any", "type_text"):
+                step_verified = youtube_foreground and after_tree_present and screenshot_present and query_visible
+            elif action_name == "open_app_by_name":
+                step_verified = youtube_foreground and after_tree_present and screenshot_present
+            elif action_name in ("click_any_text", "click_text", "tap", "swipe", "back", "observe", "wait"):
+                step_verified = youtube_foreground and after_tree_present and screenshot_present and (changed or query_visible)
+            else:
+                step_verified = False
+            out["verified"] = step_verified
+            out["target_confirmed"] = False
+            out["target_query"] = youtube_query
+            out["verification_source"] = "YouTube intermediate-step UI evidence" if step_verified else "YouTube intermediate-step evidence incomplete"
+            out["reason"] = "Intermediate YouTube action observed; task is not complete yet." if step_verified else "The intermediate YouTube action was not confirmed by fresh UI evidence."
     elif target == "settings" and req.foreground_package == "com.android.settings" and req.after_ui_tree and req.after_ui_tree != "[]" and req.after_screenshot_base64:
         out["verified"] = True
         out["target_confirmed"] = True
