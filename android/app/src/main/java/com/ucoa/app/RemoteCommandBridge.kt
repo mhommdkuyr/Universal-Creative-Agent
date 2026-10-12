@@ -105,7 +105,7 @@ class RemoteCommandBridge(private val context: Context, private val service: Uco
             verified -> null
             else -> verifierResult?.optString("reason")?.takeIf { it.isNotBlank() }
                 ?: verifierResult?.optJSONArray("reasons")?.let { reasons ->
-                    (0 until reasons.length()).joinToString(", ") { reasons.optString(it) }.ifBlank { null }
+                    (0 until reasons.length()).joinToString(", ") { reasons.optString(it) }.takeIf { it.isNotBlank() }
                 }
                 ?: "خادم التحقق لم يؤكد نجاح الخطوة"
         }
