@@ -44,7 +44,7 @@ class UcoaAccessibilityService : AccessibilityService() {
     }
     override fun onInterrupt() { UcoaDiagnostics.log("ACCESSIBILITY", "أرسل النظام interrupt للخدمة") }
 
-    fun foregroundPackageName(): String? = lastForegroundPackage ?: rootInActiveWindow?.packageName?.toString() ?: windows.asSequence().mapNotNull { it.root?.packageName?.toString() }.firstOrNull()
+    fun foregroundPackageName(): String? = rootInActiveWindow?.packageName?.toString()?.takeIf { it.isNotBlank() } ?: windows.asSequence().mapNotNull { it.root?.packageName?.toString()?.takeIf { name -> name.isNotBlank() } }.firstOrNull() ?: lastForegroundPackage
     fun findText(text: String): AccessibilityNodeInfo? = allNodes().firstOrNull { nodeText(it).contains(text, ignoreCase = true) }
     fun clickText(text: String): Boolean = findText(text)?.let(::clickNode) == true
     fun clickAnyText(texts: List<String>): Boolean {

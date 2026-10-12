@@ -45,9 +45,9 @@ class RemoteCommandBridge(private val context: Context, private val service: Uco
             val name = action.optString("action"); val fingerprint = action.toString(); if (fingerprint == lastFingerprint && name !in listOf("observe", "wait")) { lastError = "منع تكرار الأمر نفسه دون تغير في الحالة"; break }; lastFingerprint = fingerprint
             LiveExecutionState.update(task, "قرار Cloud AI", name, step + 1, 24, null, beforeShot, screenWidth(), screenHeight(), actionTapX(action), actionTapY(action)); val actionOk = executeAction(action, attachments); Thread.sleep(action.optLong("wait_after_ms", 550L).coerceIn(100L, 5000L)); val afterUi = safeObserveUi(); val afterShot = awaitScreenshot()
             val verification = awaitVerification(task, action, beforeUi, afterUi, beforeShot, afterShot); val verificationRequired = name != "observe"; val verified = !verificationRequired || verification.first; if (verificationRequired && verification.first) verifiedSteps++; LiveExecutionState.update(task, "التنفيذ والتحقق", name, step + 1, 24, verified, afterShot, screenWidth(), screenHeight(), actionTapX(action), actionTapY(action)); if (!verified && verificationRequired) { lastError = verification.third ?: "verification failed"; UcoaDiagnostics.log("REMOTE_BRIDGE", "فشل التحقق بعد التنفيذ؛ أوقف المهمة دون تكرار الأمر", "id=$id step=$step action=$name reason=$lastError") }
-            val targetConfirmedByUcoa = actionOk && verificationRequired && verification.first && taskRequestsSettings(task) && afterUi.isNotBlank() && afterUi != "[]" && !afterShot.isNullOrBlank(); if (targetConfirmedByUcoa) { completed = true; lastError = ""; LiveExecutionState.update(task, "نجاح مؤكد من UCOA", "Android Settings", step + 1, 24, true, afterShot, screenWidth(), screenHeight(), actionTapX(action), actionTapY(action)) }
+            val targetConfirmedByUcoa = actionOk && verificationRequired && verification.first && taskRequestsSettings(task) && service.foregroundPackageName() == "com.android.settings" && afterUi.isNotBlank() && afterUi != "[]" && !afterShot.isNullOrBlank(); if (targetConfirmedByUcoa) { completed = true; lastError = ""; LiveExecutionState.update(task, "نجاح مؤكد من UCOA", "Android Settings", step + 1, 24, true, afterShot, screenWidth(), screenHeight(), actionTapX(action), actionTapY(action)) }
             history.put(json("action" to name, "ucoa_action_ok" to actionOk, "ucoa_verified" to verified, "ucoa_foreground_package" to service.foregroundPackageName().orEmpty())); UcoaDiagnostics.log("REMOTE_BRIDGE", "تنفيذ أمر سحابي", "id=$id step=$step action=$name ok=$actionOk verified=$verified targetConfirmed=$targetConfirmedByUcoa"); brain.telemetry("remote_step_done", json("command_id" to id, "step" to step, "action" to name, "action_ok" to actionOk, "verified" to verified))
-            if (completed || name == "done" || action.optBoolean("done", false) || (verificationRequired && !verified)) { completed = completed || (actionOk && verified); if (!completed && lastError.isBlank()) lastError = verification.third ?: "لم يثبت UCOA اكتمال المهمة"; break }; if (!actionOk && !action.optBoolean("optional", false)) { lastError = action.optString("error", "action failed"); break }
+            if (completed || name == "done" || action.optBoolean("done", false) || (verificationRequired && !verified)) { completed = completed || (actionOk && verified && (!taskRequestsSettings(task) || targetConfirmedByUcoa)); if (!completed && lastError.isBlank()) lastError = verification.third ?: "لم يثبت UCOA اكتمال الهدف النهائي"; break }; if (!actionOk && !action.optBoolean("optional", false)) { lastError = action.optString("error", "action failed"); break }
         }
         val result = json("task" to task.take(2000), "steps" to history.length(), "verified_steps" to verifiedSteps, "completion_verified_by_ucoa" to completed, "final_foreground" to (service.foregroundPackageName() ?: ""), "evidence_source" to "UCOA Accessibility UI tree + screenshot before/after"); if (lastError.isNotBlank()) result.put("error", lastError.take(2000)); LiveExecutionState.finish(completed, if (completed) "اكتمل بعد تحقق UCOA من الحالة النهائية." else lastError.ifBlank { "لم يثبت اكتمال المهمة." }); report(id, if (completed) "completed" else "failed", result)
     }
@@ -91,7 +91,26 @@ class RemoteCommandBridge(private val context: Context, private val service: Uco
 
     private fun awaitPlan(task: String, attachments: List<String>): Triple<Boolean, JSONObject?, String?> { val latch = CountDownLatch(1); var r = AgentBrainClient.Response(false, null, null); brain.plan(task, attachments) { x -> r = x; latch.countDown() }; latch.await(190, TimeUnit.SECONDS); return Triple(r.ok, r.body, r.error) }
     private fun awaitStep(task: String, step: Int, history: JSONArray, ui: String, shot: String?, attachments: List<String>): Triple<Boolean, JSONObject?, String?> { val latch = CountDownLatch(1); var r = AgentBrainClient.Response(false, null, null); brain.step(task, step, history, ui, shot, service.installedAppLabels(), attachments) { x -> r = x; latch.countDown() }; latch.await(80, TimeUnit.SECONDS); return Triple(r.ok, r.body, r.error) }
-    private fun awaitVerification(task: String, action: JSONObject, beforeUi: String, afterUi: String, beforeScreenshot: String?, afterScreenshot: String?): Triple<Boolean, JSONObject?, String?> { val latch = CountDownLatch(1); var r = AgentBrainClient.Response(false, null, null); brain.verifyResult(task, action, beforeUi, afterUi, beforeScreenshot, afterScreenshot) { x -> r = x; latch.countDown() }; latch.await(35, TimeUnit.SECONDS); return Triple(r.ok, r.body, r.error) }
+    private fun awaitVerification(task: String, action: JSONObject, beforeUi: String, afterUi: String, beforeScreenshot: String?, afterScreenshot: String?): Triple<Boolean, JSONObject?, String?> {
+        val latch = CountDownLatch(1)
+        var r = AgentBrainClient.Response(false, null, null)
+        brain.verifyResult(task, action, beforeUi, afterUi, beforeScreenshot, afterScreenshot) { x -> r = x; latch.countDown() }
+        latch.await(35, TimeUnit.SECONDS)
+        // HTTP 200 only means the verifier endpoint responded. A step passes only when
+        // the actual nested verifier result explicitly returns verified=true.
+        val verifierResult = r.body?.optJSONObject("result") ?: r.body
+        val verified = r.ok && verifierResult?.optBoolean("verified", false) == true
+        val error = when {
+            !r.ok -> r.error
+            verified -> null
+            else -> verifierResult?.optString("reason")?.takeIf { it.isNotBlank() }
+                ?: verifierResult?.optJSONArray("reasons")?.let { reasons ->
+                    (0 until reasons.length()).joinToString(", ") { reasons.optString(it) }.ifBlank { null }
+                }
+                ?: "خادم التحقق لم يؤكد نجاح الخطوة"
+        }
+        return Triple(verified, verifierResult, error)
+    }
     private fun awaitScreenshot(): String? { val latch = CountDownLatch(1); var value: String? = null; service.captureScreenshotBase64 { x -> value = x; latch.countDown() }; latch.await(8, TimeUnit.SECONDS); return value }
     private fun safeObserveUi(): String = runCatching { service.observeUi(320) }.getOrDefault("[]")
     private fun screenWidth(): Int = context.resources.displayMetrics.widthPixels
