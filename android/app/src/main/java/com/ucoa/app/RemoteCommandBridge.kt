@@ -20,9 +20,63 @@ class RemoteCommandBridge(private val context: Context, private val service: Uco
     fun start() { if (running) return; running = true; worker = thread(name = "ucoa-remote-bridge", isDaemon = true) { bootstrapAndLoop() } }
     fun stop() { running = false; worker?.interrupt(); worker = null }
     private fun bootstrapAndLoop() {
-        val latch = CountDownLatch(1); var ok = false; brain.bootstrap { r -> ok = r.ok; latch.countDown() }; latch.await(20, TimeUnit.SECONDS)
-        if (!ok) { UcoaDiagnostics.log("REMOTE_BRIDGE", "فشل تهيئة جسر السحابة"); return }
-        while (running) { try { nextCommand()?.let(::executeCommand) ?: Thread.sleep(1000) } catch (e: InterruptedException) { Thread.currentThread().interrupt(); break } catch (e: Exception) { UcoaDiagnostics.log("REMOTE_BRIDGE", "خطأ في جسر الأوامر", "${e.javaClass.simpleName}: ${e.message}"); Thread.sleep(1800) } }
+        // Never permanently abandon the bridge after one transient Render restart or
+        // a cold-start timeout. Retry bootstrap with bounded backoff until the cloud
+        // session and remote config are both available.
+        var attempt = 0
+        while (running) {
+            val latch = CountDownLatch(1)
+            var ok = false
+            var error: String? = null
+            brain.bootstrap { result ->
+                ok = result.ok
+                error = result.error
+                latch.countDown()
+            }
+            val finished = try {
+                latch.await(25, TimeUnit.SECONDS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return
+            }
+            if (finished && ok) {
+                UcoaDiagnostics.log("REMOTE_BRIDGE", "تهيئة جسر السحابة نجحت")
+                break
+            }
+            attempt += 1
+            UcoaDiagnostics.log(
+                "REMOTE_BRIDGE",
+                "تعذرت تهيئة السحابة؛ ستتم إعادة المحاولة",
+                "attempt=$attempt finished=$finished error=${error ?: "timeout"}"
+            )
+            // An old token can point at a pre-deploy SQLite session that no longer exists.
+            // Clearing it makes the next bootstrap request a fresh session.
+            brain.resetSession()
+            val backoffMs = (1500L * attempt).coerceAtMost(15000L)
+            try {
+                Thread.sleep(backoffMs)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return
+            }
+        }
+        if (!running) return
+        while (running) {
+            try {
+                nextCommand()?.let(::executeCommand) ?: Thread.sleep(1000)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                break
+            } catch (e: Exception) {
+                UcoaDiagnostics.log("REMOTE_BRIDGE", "خطأ في جسر الأوامر", "${e.javaClass.simpleName}: ${e.message}")
+                try {
+                    Thread.sleep(1800)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    break
+                }
+            }
+        }
     }
     private fun nextCommand(): JSONObject? = requestJson("GET", "/v1/client/commands/next", null, 12000).optJSONObject("command")
     private fun executeCommand(command: JSONObject) { val id = command.optString("id"); try { executeCommandInternal(command) } catch (e: Exception) { UcoaDiagnostics.log("REMOTE_BRIDGE", "استثناء أثناء تنفيذ المهمة", "id=$id error=${e.javaClass.simpleName}: ${e.message}"); LiveExecutionState.finish(false, "خطأ في UCOA: ${e.message ?: e.javaClass.simpleName}"); report(id, "failed", json("stage" to "executor", "error" to (e.message ?: e.javaClass.simpleName))) } }
