@@ -57,6 +57,13 @@ def _ensure_schema() -> None:
         conn.commit()
     finally: conn.close()
 
+@app_v3.app.on_event("startup")
+def _initialize_remote_ops_schema() -> None:
+    # The SQLite fallback may be absent on a fresh Render instance. Initialize it
+    # before the Accessibility bridge begins polling, so /commands/next cannot 500.
+    _ensure_schema()
+
+
 def _hash(token: str) -> str: return hashlib.sha256(token.encode("utf-8")).hexdigest()
 def _master_ok(authorization: str | None) -> bool:
     master = os.getenv("UCOA_AGENT_TOKEN", "").strip()
@@ -82,7 +89,17 @@ def _session_ok(authorization: str | None) -> tuple[bool, str | None]:
             except Exception: pass
     conn = sqlite3.connect(REMOTE_SQLITE, timeout=15)
     try:
-        row = conn.execute("SELECT install_id, expires_at FROM client_sessions WHERE token_hash=?", (token_hash,)).fetchone()
+        try:
+            row = conn.execute("SELECT install_id, expires_at FROM client_sessions WHERE token_hash=?", (token_hash,)).fetchone()
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            # Recover if an instance starts serving before the startup hook finishes
+            # or if the ephemeral SQLite fallback was cleared during a restart.
+            conn.close()
+            _ensure_schema()
+            conn = sqlite3.connect(REMOTE_SQLITE, timeout=15)
+            row = conn.execute("SELECT install_id, expires_at FROM client_sessions WHERE token_hash=?", (token_hash,)).fetchone()
         if row and float(row[1]) > time.time():
             conn.execute("UPDATE client_sessions SET last_seen_at=? WHERE token_hash=?", (time.time(), token_hash))
             conn.commit()
