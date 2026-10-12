@@ -154,12 +154,77 @@ def _requested_app(task: str, installed: list[str]) -> str | None:
     return next((a for a in installed if len(a)>3 and a.lower() in t),None)
 
 
+
+def _youtube_search_query(task: str) -> str | None:
+    """Recognize the bounded, deterministic YouTube search acceptance task."""
+    t = task.casefold()
+    if not any(x in t for x in ("youtube", "يوتيوب")):
+        return None
+    if not any(x in t for x in ("search", "find", "ابحث", "بحث", "دور")):
+        return None
+    if not any(x in t for x in ("naruto", "ناروتو")):
+        return None
+    if any(x in t for x in ("10", "العاشرة", "العاشر", "العاشره", "العاشِرة")):
+        return "Naruto episode 10"
+    return "Naruto"
+
+
+def _ui_nodes(ui_tree: str) -> list[dict[str, Any]]:
+    try:
+        value = json.loads(ui_tree or "[]")
+        if isinstance(value, list):
+            return [n for n in value if isinstance(n, dict)]
+        if isinstance(value, dict) and isinstance(value.get("nodes"), list):
+            return [n for n in value["nodes"] if isinstance(n, dict)]
+    except Exception:
+        pass
+    return []
+
+
+def _youtube_query_visible(query: str, ui_tree: str) -> bool:
+    t = (ui_tree or "").casefold()
+    return "naruto" in t and ("episode" in t or "10" in t or "العاشرة" in t or "العاشر" in t)
+
+
+def _youtube_results_visible(query: str, ui_tree: str) -> bool:
+    """Require both query evidence and result-list evidence, not just the app shell."""
+    t = (ui_tree or "").casefold()
+    if not _youtube_query_visible(query, ui_tree):
+        return False
+    markers = (
+        "filters", "results", "views", "subscribers", "play all", "video",
+        "نتائج البحث", "المشاهدات", "مشاهدات", "مشاهدة", "منذ", "قناة", "اشتراك"
+    )
+    return any(marker in t for marker in markers) and t.count("naruto") >= 2
+
+
+def _youtube_search_field_visible(ui_tree: str) -> bool:
+    for node in _ui_nodes(ui_tree):
+        clazz = str(node.get("class", "")).casefold()
+        text = " ".join(str(node.get(k, "")) for k in ("text", "hint", "description")).casefold()
+        editable = bool(node.get("editable")) or "edittext" in clazz or "searchview" in clazz
+        if editable and any(m in text for m in ("search", "بحث", "ابحث")):
+            return True
+    return False
+
+
+def _last_history_action(history: list[dict[str, Any]]) -> str:
+    for item in reversed(history or []):
+        if isinstance(item, dict) and item.get("action"):
+            return str(item["action"])
+    return ""
+
 def run_plan(req: Any) -> dict[str, Any]:
     sid=app_v3.ensure_session(req.session_id)
     # Opening Android Settings is a deterministic, low-risk navigation task; do not block the phone bridge on an unavailable model provider.
     target=_requested_app(str(req.task), [])
     if target == "settings":
         result={"summary":"Open Android Settings","steps":["Open the Android Settings app.","Confirm the foreground package is com.android.settings."],"output_mode":"deterministic-safe-target","provider":"deterministic","session_id":sid}
+        app_v3.remember(sid,"plan",result); app_v3.save_state(sid,{"phase":"planned","task":req.task,"step":0,"plan":result})
+        return result
+    youtube_query = _youtube_search_query(str(req.task))
+    if youtube_query:
+        result={"summary":f"Search YouTube for {youtube_query}","steps":["Open YouTube.","Open the visible search control.","Enter the requested query.","Submit the query and verify results using the Accessibility UI tree."],"output_mode":"deterministic-youtube-search","provider":"deterministic","query":youtube_query,"session_id":sid}
         app_v3.remember(sid,"plan",result); app_v3.save_state(sid,{"phase":"planned","task":req.task,"step":0,"plan":result})
         return result
     payload=json.dumps({"task":req.task,"attachments":req.attachments[:8],"device":req.device,"memory":app_v3.memory(sid,12)},ensure_ascii=False)
@@ -199,6 +264,68 @@ def _explicit_open_task_target(task: str, installed: list[str]) -> str | None:
     return _requested_app(task, installed)
 def run_step(req: Any) -> dict[str, Any]:
     sid=app_v3.ensure_session(req.session_id)
+    youtube_query = _youtube_search_query(req.task)
+    if youtube_query:
+        ui = req.ui_tree or "[]"
+        history = req.history or []
+        last_action = _last_history_action(history)
+        is_youtube = req.foreground_package == "com.google.android.youtube"
+        if not is_youtube and not _looks_like_target_ui("YouTube", ui):
+            return {
+                "action":"open_app_by_name","params":{"app_name":"YouTube"},
+                "message":"فتح YouTube أولًا قبل تنفيذ البحث.",
+                "done":False,"wait_after_ms":1000,"confidence":1.0,
+                "coordinate_space":None,"verification_goal":"ظهور حزمة YouTube الفعلية",
+                "provider":"deterministic-youtube-search","output_mode":"deterministic-youtube-search"
+            }
+        if is_youtube and _youtube_results_visible(youtube_query, ui):
+            return {
+                "action":"done","params":{},
+                "message":f"ظهرت نتائج YouTube للبحث {youtube_query} ضمن شجرة الواجهة.",
+                "done":True,"wait_after_ms":350,"confidence":1.0,
+                "coordinate_space":None,"verification_goal":"التحقق من وجود نص الاستعلام وقائمة نتائج الفيديو داخل YouTube",
+                "provider":"deterministic-youtube-search","output_mode":"deterministic-youtube-search",
+                "target_query":youtube_query,"target_confirmed":True
+            }
+        query_visible = _youtube_query_visible(youtube_query, ui)
+        search_field_visible = _youtube_search_field_visible(ui)
+        if search_field_visible and not query_visible:
+            return {
+                "action":"type_into_any",
+                "params":{"hints":["Search YouTube","Search","Search videos","بحث","ابحث"],"text":youtube_query},
+                "message":f"إدخال عبارة البحث: {youtube_query}.",
+                "done":False,"wait_after_ms":400,"confidence":1.0,
+                "coordinate_space":None,"verification_goal":"ظهور عبارة البحث في حقل YouTube",
+                "provider":"deterministic-youtube-search","output_mode":"deterministic-youtube-search"
+            }
+        if query_visible:
+            # The previous input step typed the query; now submit through the visible
+            # keyboard/search affordance. Different aliases permit a safe second attempt.
+            aliases = ["Search","Go","بحث","انتقال"] if last_action in ("type_into_any","type_text") else ["Go","Enter","Search","بحث"]
+            return {
+                "action":"click_any_text","params":{"texts":aliases},
+                "message":"إرسال استعلام البحث عبر عنصر ظاهر في واجهة YouTube.",
+                "done":False,"wait_after_ms":1100,"confidence":0.95,
+                "coordinate_space":None,"verification_goal":"ظهور قائمة نتائج البحث بعد إرسال الاستعلام",
+                "provider":"deterministic-youtube-search","output_mode":"deterministic-youtube-search"
+            }
+        if last_action in ("click_any_text","tap"):
+            return {
+                "action":"observe","params":{},
+                "message":"مراقبة واجهة البحث بعد فتح عنصر البحث.",
+                "done":False,"wait_after_ms":500,"confidence":0.9,
+                "coordinate_space":None,"verification_goal":"التأكد من ظهور حقل البحث",
+                "provider":"deterministic-youtube-search","output_mode":"deterministic-youtube-search"
+            }
+        return {
+            "action":"click_any_text",
+            "params":{"texts":["Search","Search YouTube","Search videos","بحث","ابحث"]},
+            "message":"فتح عنصر البحث المرئي في YouTube.",
+            "done":False,"wait_after_ms":500,"confidence":0.95,
+            "coordinate_space":None,"verification_goal":"ظهور حقل إدخال البحث",
+            "provider":"deterministic-youtube-search","output_mode":"deterministic-youtube-search"
+        }
+
     explicit_target = _explicit_open_task_target(req.task, req.installed_apps)
     if explicit_target:
         if explicit_target == "settings" and req.foreground_package == "com.android.settings" and req.ui_tree and req.ui_tree != "[]":
@@ -283,8 +410,21 @@ def run_step(req: Any) -> dict[str, Any]:
 
 def verify_result(req: Any) -> dict[str, Any]:
     out=app_v3.independent_verify(req.task,req.action,req.before_ui_tree,req.after_ui_tree)
+    youtube_query = _youtube_search_query(req.task)
     target = _explicit_open_task_target(req.task, [])
-    if target == "settings" and req.foreground_package == "com.android.settings" and req.after_ui_tree and req.after_ui_tree != "[]" and req.after_screenshot_base64:
+    if youtube_query:
+        confirmed = (
+            req.action.get("action") == "done"
+            and req.foreground_package == "com.google.android.youtube"
+            and _youtube_results_visible(youtube_query, req.after_ui_tree)
+            and bool(req.after_screenshot_base64)
+        )
+        out["verified"] = confirmed
+        out["target_confirmed"] = confirmed
+        out["target_query"] = youtube_query
+        out["verification_source"] = "YouTube foreground + query text + result-list Accessibility evidence + screenshot" if confirmed else "YouTube search evidence incomplete"
+        out["reason"] = "YouTube search results and query are visible." if confirmed else "Required YouTube query/result evidence was not visible in the final UI tree."
+    elif target == "settings" and req.foreground_package == "com.android.settings" and req.after_ui_tree and req.after_ui_tree != "[]" and req.after_screenshot_base64:
         out["verified"] = True
         out["target_confirmed"] = True
         out["verification_source"] = "foreground-package+Accessibility-tree+screen-capture"

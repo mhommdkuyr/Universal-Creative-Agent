@@ -2,6 +2,20 @@ name: UCOA GitHub Token Phone Acceptance
 
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: "Acceptance target"
+        required: true
+        type: choice
+        options:
+          - settings
+          - youtube_search
+        default: settings
+      task:
+        description: "Optional task override"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -14,6 +28,8 @@ jobs:
     env:
       BASE: https://ucoa-agent-brain-69bo.onrender.com
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TARGET: ${{ inputs.target || 'settings' }}
+      TASK: ${{ inputs.task }}
     steps:
       - name: Wait for production bridge
         shell: bash
@@ -54,15 +70,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          task='اختبار القبول الحقيقي: افتح تطبيق الإعدادات فقط. لا تغيّر أي إعداد. يجب إثبات الحالة النهائية من UCOA عبر Accessibility UI tree ولقطة الشاشة.'
-          python3 - "$task" > /tmp/body.json <<'PY'
+          task="${TASK:-}"
+          if [ -z "$task" ]; then
+            if [ "$TARGET" = "youtube_search" ]; then
+              task='افتح يوتيوب وابحث عن حلقة ناروتو العاشرة'
+            else
+              task='اختبار القبول الحقيقي: افتح تطبيق الإعدادات فقط. لا تغيّر أي إعداد. يجب إثبات الحالة النهائية من UCOA عبر Accessibility UI tree ولقطة الشاشة.'
+            fi
+          fi
+          printf 'acceptance_target=%s\n' "$TARGET"
+          python3 - "$task" "$TARGET" > /tmp/body.json <<'PY'
           import json,sys
           print(json.dumps({
             "kind":"task",
             "task":sys.argv[1],
             "attachments":[],
             "metadata":{
-              "qa_suite":"github-token-live-phone-acceptance",
+              "qa_suite":"github-token-live-phone-acceptance-" + sys.argv[2],
               "evidence_required":True,
               "no_external_success":True
             }
@@ -93,7 +117,13 @@ jobs:
           r=d.get('result') or {}
           assert not r.get('error'), r
           assert r.get('completion_verified_by_ucoa') is True, r
-          assert str(r.get('final_foreground','')).endswith('com.android.settings'), r
+          target=__import__('os').environ.get('TARGET','settings')
+          if target == 'youtube_search':
+              assert str(r.get('final_foreground','')) == 'com.google.android.youtube', r
+              assert int(r.get('steps',0) or 0) >= 3, r
+              assert int(r.get('verified_steps',0) or 0) > 0, r
+          else:
+              assert str(r.get('final_foreground','')).endswith('com.android.settings'), r
           assert int(r.get('steps',0) or 0) > 0, r
           assert r.get('evidence_source'), r
           print('REAL_PHONE_ACCEPTANCE_PASS')
