@@ -500,3 +500,100 @@ def list_known_devices(authorization: str | None = Header(default=None)):
         devices = [r[0] for r in conn.execute("SELECT DISTINCT install_id FROM client_sessions WHERE expires_at > ? ORDER BY install_id", (time.time(),)).fetchall()]
         return {"ok": True, "devices": devices}
     finally: conn.close()
+
+
+# ChatGPT UCOA Colab bootstrap endpoint
+# This narrow remote endpoint can only queue a Colab-open task for the currently
+# active Android device; it does not accept arbitrary task text or credentials.
+def _colab_operator_authorized(authorization: str | None) -> bool:
+    expected = os.getenv("UCOA_COLAB_OPERATOR_TOKEN", "").strip()
+    if not expected or not authorization or not authorization.startswith("Bearer "):
+        return False
+    supplied = authorization[7:].strip()
+    return bool(supplied) and __import__("hmac").compare_digest(supplied, expected)
+
+
+def _require_colab_operator(authorization: str | None) -> None:
+    if not _colab_operator_authorized(authorization):
+        raise HTTPException(401, "Colab operator authorization required")
+
+
+@app_v3.app.get("/v1/operator/phone/status")
+def operator_phone_status(authorization: str | None = Header(default=None)):
+    _require_colab_operator(authorization)
+    devices = _active_device_ids()
+    preferred = _preferred_active_device_id() if devices else None
+    return {
+        "ok": True,
+        "online": bool(preferred),
+        "active_device_count": len(devices),
+        "target": "preferred-active-android" if preferred else None,
+    }
+
+
+@app_v3.app.post("/v1/operator/colab/open")
+def operator_open_colab(authorization: str | None = Header(default=None)):
+    _require_colab_operator(authorization)
+    devices = _active_device_ids()
+    if not devices:
+        raise HTTPException(409, "No active Android device session found; open UCOA and verify its cloud bridge is connected.")
+    install_id = _preferred_active_device_id()
+    if not install_id:
+        raise HTTPException(409, "No active Android device could be selected.")
+    req = DeviceCommandRequest(
+        kind="task",
+        task="Open Chrome on this Android phone and navigate to https://colab.research.google.com/. Stop when the Colab page or Google sign-in page is visibly open. Do not perform any additional actions.",
+        attachments=[],
+        metadata={
+            "source": "chatgpt-ucoa-colab-bootstrap",
+            "idempotency_key": "ucoa-colab-open-v1",
+        },
+    )
+    result = _insert_command(install_id, req)
+    return {
+        "ok": True,
+        "command_id": result.get("command_id"),
+        "status": result.get("status", "queued"),
+        "deduplicated": bool(result.get("deduplicated", False)),
+        "expires_in": result.get("expires_in", COMMAND_TTL),
+    }
+
+
+@app_v3.app.get("/v1/operator/commands/{command_id}")
+def operator_command_status(command_id: str, authorization: str | None = Header(default=None)):
+    _require_colab_operator(authorization)
+    _ensure_schema()
+    conn = _pg_conn()
+    if conn is not None:
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT status, result FROM ucoa_device_commands WHERE id=%s",
+                        (command_id,),
+                    )
+                    row = cur.fetchone()
+            conn.close()
+            if row:
+                payload = row[1] if isinstance(row[1], dict) else {}
+                return {"ok": True, "status": row[0], "result": payload}
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    conn = sqlite3.connect(DB_PATH, timeout=15)
+    try:
+        row = conn.execute(
+            "SELECT status, result FROM device_commands WHERE id=?",
+            (command_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "Command not found")
+        try:
+            payload = json.loads(row[1]) if isinstance(row[1], str) else (row[1] or {})
+        except Exception:
+            payload = {}
+        return {"ok": True, "status": row[0], "result": payload}
+    finally:
+        conn.close()
