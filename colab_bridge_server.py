@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
-from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.responses import JSONResponse, PlainTextResponse
@@ -185,9 +184,7 @@ async def lifespan(_app: Starlette):
         yield
 
 
-mcp_asgi = mcp.streamable_http_app(
-    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False)
-)
+mcp_asgi = mcp.streamable_http_app()
 
 starlette_app = Starlette(
     routes=[
