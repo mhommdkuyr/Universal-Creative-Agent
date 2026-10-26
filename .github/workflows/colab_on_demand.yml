@@ -56,44 +56,47 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install "mcp>=1.20.0" "google-auth>=2.30.0" "uv>=0.9.0"
 
-      - name: Prepare credentials without printing secrets
+      - name: Prepare optional credentials without printing secrets
         env:
           COLAB_CREDENTIALS: ${{ secrets.COLAB_CREDENTIALS }}
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p output "$HOME/.config/gcloud" "$HOME/.config/colab-mcp" /content/.config
+          mkdir -p output "$HOME/.config/gcloud" "$HOME/.config/colab-mcp"
           if [ -z "${COLAB_CREDENTIALS:-}" ]; then
-            printf '%s\n' "ERROR: GitHub Actions secret COLAB_CREDENTIALS is missing or empty." > output/colab_result.txt
-            echo "::error::COLAB_CREDENTIALS is missing or empty."
-            exit 1
+            echo "::warning::COLAB_CREDENTIALS was not provided to this workflow; the official browser-connected Colab MCP does not use this secret as a substitute for a browser session."
+            printf '%s\n' "NOTE: COLAB_CREDENTIALS was empty/unavailable to this run. No credential value was printed." > output/credentials_status.txt
+          else
+            python - <<'PY'
+            import json, os, pathlib, sys
+            raw = os.environ.get("COLAB_CREDENTIALS", "")
+            try:
+                value = json.loads(raw)
+                if not isinstance(value, dict):
+                    raise ValueError("credentials JSON must be an object")
+            except Exception as exc:
+                pathlib.Path("output/credentials_status.txt").write_text(
+                    f"ERROR: COLAB_CREDENTIALS is not valid JSON ({type(exc).__name__}: {exc}).\n",
+                    encoding="utf-8")
+                print("ERROR: COLAB_CREDENTIALS is not valid JSON; contents were not printed.")
+                sys.exit(1)
+            base_paths = [
+                pathlib.Path.home() / ".config/gcloud/application_default_credentials.json",
+                pathlib.Path.home() / ".config/colab-mcp/credentials.json",
+            ]
+            for path in base_paths:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(raw, encoding="utf-8")
+                path.chmod(0o600)
+            pathlib.Path("output/credentials_status.txt").write_text(
+                "Credential JSON validated and written to runner-local files with permissions 0600. "
+                "The credential value is not included in artifacts.\n",
+                encoding="utf-8")
+            print("Credential JSON validated and stored in runner-local files with mode 0600.")
+            print("Note: GitHub runner paths are not files inside the remote Colab runtime.")
+            PY
+            echo "GOOGLE_APPLICATION_CREDENTIALS=$HOME/.config/gcloud/application_default_credentials.json" >> "$GITHUB_ENV"
           fi
-          python - <<'PY'
-          import json, os, pathlib, sys
-          raw = os.environ.get("COLAB_CREDENTIALS", "")
-          try:
-              value = json.loads(raw)
-              if not isinstance(value, dict):
-                  raise ValueError("credentials JSON must be an object")
-          except Exception as exc:
-              pathlib.Path("output/colab_result.txt").write_text(
-                  f"ERROR: COLAB_CREDENTIALS is not valid JSON ({type(exc).__name__}: {exc}).\n",
-                  encoding="utf-8")
-              print("ERROR: COLAB_CREDENTIALS is not valid JSON; contents were not printed.")
-              sys.exit(1)
-          paths = [
-              pathlib.Path.home() / ".config/gcloud/application_default_credentials.json",
-              pathlib.Path.home() / ".config/colab-mcp/credentials.json",
-              pathlib.Path("/content/.config/application_default_credentials.json"),
-          ]
-          for path in paths:
-              path.parent.mkdir(parents=True, exist_ok=True)
-              path.write_text(raw, encoding="utf-8")
-              path.chmod(0o600)
-          print("Credential JSON validated and saved in runner-local files (permissions 0600).")
-          print("These files do not authenticate an interactive Colab browser session.")
-          PY
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$HOME/.config/gcloud/application_default_credentials.json" >> "$GITHUB_ENV"
 
       - name: Execute task through official Colab MCP
         env:
@@ -107,13 +110,13 @@ jobs:
       - name: Print result log
         if: always()
         run: |
-          if [ -f output/colab_result.txt ]; then
-            echo "===== Colab MCP result log ====="
-            cat output/colab_result.txt
-            echo "===== End result log ====="
-          else
-            echo "No colab_result.txt was produced."
-          fi
+          for file in output/credentials_status.txt output/colab_result.txt; do
+            if [ -f "$file" ]; then
+              echo "===== $file ====="
+              cat "$file"
+              echo "===== End $file ====="
+            fi
+          done
 
       - name: Upload logs and outputs
         if: always()
