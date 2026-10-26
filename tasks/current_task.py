@@ -1,4 +1,6 @@
-"""Smoke test meant to run inside a connected Colab runtime."""
+"""Smoke test meant to run inside a connected Colab runtime.
+The Actions workflow starts this test automatically whenever a task file changes.
+"""
 import os
 import platform
 import subprocess
