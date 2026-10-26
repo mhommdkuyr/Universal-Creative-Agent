@@ -1,0 +1,125 @@
+name: Colab on-demand task
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_code:
+        description: "Python code to run in a connected Colab notebook; script_path takes priority"
+        required: false
+        type: string
+        default: |
+          import os, platform, subprocess
+          print("Colab smoke test")
+          print("Platform:", platform.platform())
+          print("Python:", platform.python_version())
+          print("CPU cores:", os.cpu_count())
+          r = subprocess.run(["nvidia-smi"], capture_output=True, text=True)
+          print(r.stdout or r.stderr or "nvidia-smi unavailable")
+      script_path:
+        description: "Optional Python file inside the repo, e.g. tasks/current_task.py"
+        required: false
+        type: string
+        default: ""
+  push:
+    branches: [main]
+    paths:
+      - "tasks/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: colab-on-demand-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  run-colab-task:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13 (required by current official Colab MCP)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install MCP client, Google auth, and uv
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "mcp>=1.20.0" "google-auth>=2.30.0" "uv>=0.9.0"
+
+      - name: Prepare credentials without printing secrets
+        env:
+          COLAB_CREDENTIALS: ${{ secrets.COLAB_CREDENTIALS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p output "$HOME/.config/gcloud" "$HOME/.config/colab-mcp" /content/.config
+          if [ -z "${COLAB_CREDENTIALS:-}" ]; then
+            printf '%s\n' "ERROR: GitHub Actions secret COLAB_CREDENTIALS is missing or empty." > output/colab_result.txt
+            echo "::error::COLAB_CREDENTIALS is missing or empty."
+            exit 1
+          fi
+          python - <<'PY'
+          import json, os, pathlib, sys
+          raw = os.environ.get("COLAB_CREDENTIALS", "")
+          try:
+              value = json.loads(raw)
+              if not isinstance(value, dict):
+                  raise ValueError("credentials JSON must be an object")
+          except Exception as exc:
+              pathlib.Path("output/colab_result.txt").write_text(
+                  f"ERROR: COLAB_CREDENTIALS is not valid JSON ({type(exc).__name__}: {exc}).\n",
+                  encoding="utf-8")
+              print("ERROR: COLAB_CREDENTIALS is not valid JSON; contents were not printed.")
+              sys.exit(1)
+          paths = [
+              pathlib.Path.home() / ".config/gcloud/application_default_credentials.json",
+              pathlib.Path.home() / ".config/colab-mcp/credentials.json",
+              pathlib.Path("/content/.config/application_default_credentials.json"),
+          ]
+          for path in paths:
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_text(raw, encoding="utf-8")
+              path.chmod(0o600)
+          print("Credential JSON validated and saved in runner-local files (permissions 0600).")
+          print("These files do not authenticate an interactive Colab browser session.")
+          PY
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$HOME/.config/gcloud/application_default_credentials.json" >> "$GITHUB_ENV"
+
+      - name: Execute task through official Colab MCP
+        env:
+          TASK_CODE: ${{ inputs.task_code }}
+          SCRIPT_PATH: ${{ inputs.script_path }}
+          COLAB_MCP_TIMEOUT_SECONDS: "75"
+        run: |
+          mkdir -p output
+          python scripts/colab_bridge.py
+
+      - name: Print result log
+        if: always()
+        run: |
+          if [ -f output/colab_result.txt ]; then
+            echo "===== Colab MCP result log ====="
+            cat output/colab_result.txt
+            echo "===== End result log ====="
+          else
+            echo "No colab_result.txt was produced."
+          fi
+
+      - name: Upload logs and outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: colab-output-${{ github.run_id }}
+          path: output/**
+          if-no-files-found: warn
+          retention-days: 14
