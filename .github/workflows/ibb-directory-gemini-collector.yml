@@ -1,0 +1,89 @@
+name: Collect Ibb business directory with the existing Gemini secret
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/ibb-directory-gemini-collector.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: "35 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ibb-gemini-directory-collector
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    name: Collect and export Ibb public business records
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out Universal Creative Agent (secret host)
+        uses: actions/checkout@v4
+
+      - name: Check out public IBB repository
+        uses: actions/checkout@v4
+        with:
+          repository: h776117073-eng/IBB
+          ref: main
+          path: ibb
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: ibb/requirements-ibb-enrichment.txt
+
+      - name: Install IBB dependencies and Gemini-backed ScrapeGraphAI
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r ibb/requirements-ibb-enrichment.txt
+          python -m pip install "scrapegraphai==2.3.1" "langchain-google-genai"
+          python -m playwright install --with-deps chromium
+
+      - name: Verify Gemini secret is available without printing it
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "::error::GEMINI_API_KEY is not available to this workflow."
+            exit 1
+          fi
+          echo "Gemini secret is present."
+
+      - name: Collect names, public directory, OSM and Gemini-extracted candidates
+        working-directory: ibb
+        env:
+          SCRAPEGRAPH_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SCRAPEGRAPH_MODEL: google_genai/gemini-2.5-flash
+          IBB_BBOX: ${{ vars.IBB_BBOX || '13.93,44.12,14.01,44.23' }}
+        run: python scripts/enrich_ibb_directory.py
+
+      - name: Validate output bundle
+        working-directory: ibb
+        run: |
+          test -s out/summary.json
+          test -s out/ibb_all_sources_full.csv
+          test -s out/ibb_directory_export.zip
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s = json.loads(Path("out/summary.json").read_text(encoding="utf-8"))
+          print(json.dumps(s, ensure_ascii=False, indent=2))
+          assert s.get("source_name_count", 0) >= 10000, "Source-name input count unexpectedly low"
+          assert s.get("combined_row_count", 0) >= s.get("source_name_count", 0)
+          PY
+
+      - name: Upload complete export as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ibb-directory-export
+          path: ibb/out/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
