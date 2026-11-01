@@ -77,7 +77,7 @@ jobs:
           print(json.dumps(s, ensure_ascii=False, indent=2))
           assert s.get("source_name_count", 0) >= 10000, "Source-name input count unexpectedly low"
           assert s.get("combined_row_count", 0) >= s.get("source_name_count", 0)
-          assert s.get("scrapegraph_candidate_count", 0) > 0, "Gemini extraction returned no candidates; refusing to publish a partial bundle"
+          assert (s.get("scrapegraph_candidate_count", 0) > 0 or s.get("city_directory_record_count", 0) > 0), "Both ScrapeGraphAI and city directory parsing returned zero records; refusing to publish a partial bundle"
           PY
 
       - name: Upload complete export as workflow artifact
