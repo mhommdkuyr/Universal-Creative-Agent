@@ -60,7 +60,7 @@ jobs:
         working-directory: ibb
         env:
           SCRAPEGRAPH_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          SCRAPEGRAPH_MODEL: google_genai/gemini-2.5-flash
+          SCRAPEGRAPH_MODEL: google_genai/gemini-3.8-flash
           IBB_BBOX: ${{ vars.IBB_BBOX || '13.93,44.12,14.01,44.23' }}
         run: python scripts/enrich_ibb_directory.py
 
@@ -77,6 +77,7 @@ jobs:
           print(json.dumps(s, ensure_ascii=False, indent=2))
           assert s.get("source_name_count", 0) >= 10000, "Source-name input count unexpectedly low"
           assert s.get("combined_row_count", 0) >= s.get("source_name_count", 0)
+          assert s.get("scrapegraph_candidate_count", 0) > 0, "Gemini extraction returned no candidates; refusing to publish a partial bundle"
           PY
 
       - name: Upload complete export as workflow artifact
