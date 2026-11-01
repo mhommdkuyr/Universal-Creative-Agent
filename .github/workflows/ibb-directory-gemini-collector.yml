@@ -1,4 +1,4 @@
-name: Build Ibb business directory from cached verified-source extracts
+name: Build Ibb directory export with optional OSM fallback
 
 on:
   push:
@@ -65,7 +65,7 @@ jobs:
           assert s.get("source_name_count", 0) >= 10000, "Source-name input count unexpectedly low"
           assert s.get("combined_row_count", 0) >= s.get("source_name_count", 0)
           assert s.get("city_directory_record_count", 0) >= 200, "Expected at least 200 source-traceable Ibb directory records"
-          assert s.get("osm_business_feature_count", 0) > 0, "OSM source returned no mapped businesses"
+          print("OSM rows are optional; city directory and seed sources remain usable when Overpass is unavailable.")
           PY
 
       - name: Upload complete export as workflow artifact
