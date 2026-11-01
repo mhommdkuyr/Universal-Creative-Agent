@@ -1,4 +1,4 @@
-name: Collect Ibb business directory with Gemini and expanded Yemen directory sources
+name: Build Ibb business directory from cached verified-source extracts
 
 on:
   push:
@@ -39,28 +39,15 @@ jobs:
           cache: pip
           cache-dependency-path: ibb/requirements-ibb-enrichment.txt
 
-      - name: Install IBB dependencies and Gemini-backed ScrapeGraphAI
+      - name: Install lightweight IBB enrichment dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r ibb/requirements-ibb-enrichment.txt
-          python -m pip install "scrapegraphai==2.3.1" "langchain-google-genai"
-          python -m playwright install --with-deps chromium
 
-      - name: Verify Gemini secret is available without printing it
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          if [ -z "$GEMINI_API_KEY" ]; then
-            echo "::error::GEMINI_API_KEY is not available to this workflow."
-            exit 1
-          fi
-          echo "Gemini secret is present."
-
-      - name: Collect names, public directory, OSM and Gemini-extracted candidates
+      - name: Collect and normalize the sourced Ibb business records
         working-directory: ibb
         env:
-          SCRAPEGRAPH_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          SCRAPEGRAPH_MODEL: google_genai/gemini-3.8-flash
+          SCRAPEGRAPH_SKIP: "1"
           IBB_BBOX: ${{ vars.IBB_BBOX || '13.93,44.12,14.01,44.23' }}
         run: python scripts/enrich_ibb_directory.py
 
@@ -77,7 +64,8 @@ jobs:
           print(json.dumps(s, ensure_ascii=False, indent=2))
           assert s.get("source_name_count", 0) >= 10000, "Source-name input count unexpectedly low"
           assert s.get("combined_row_count", 0) >= s.get("source_name_count", 0)
-          assert (s.get("scrapegraph_candidate_count", 0) > 0 or s.get("city_directory_record_count", 0) > 0), "Both ScrapeGraphAI and city directory parsing returned zero records; refusing to publish a partial bundle"
+          assert s.get("city_directory_record_count", 0) >= 200, "Expected at least 200 source-traceable Ibb directory records"
+          assert s.get("osm_business_feature_count", 0) > 0, "OSM source returned no mapped businesses"
           PY
 
       - name: Upload complete export as workflow artifact
