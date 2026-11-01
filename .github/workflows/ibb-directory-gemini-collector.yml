@@ -1,4 +1,4 @@
-name: Collect Ibb business directory with the existing Gemini secret
+name: Collect Ibb business directory with Gemini and expanded Yemen directory sources
 
 on:
   push:
