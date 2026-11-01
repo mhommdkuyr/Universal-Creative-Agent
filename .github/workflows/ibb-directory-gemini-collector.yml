@@ -1,4 +1,4 @@
-name: Build Ibb directory export with optional OSM fallback
+name: Build Ibb directory export from cached source records
 
 on:
   push:
@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: ibb-gemini-directory-collector
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   collect:
@@ -49,6 +49,7 @@ jobs:
         env:
           SCRAPEGRAPH_SKIP: "1"
           IBB_BBOX: ${{ vars.IBB_BBOX || '13.93,44.12,14.01,44.23' }}
+          IBB_SKIP_OSM: "1"
         run: python scripts/enrich_ibb_directory.py
 
       - name: Validate output bundle
