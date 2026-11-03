@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
@@ -281,7 +282,12 @@ async def lifespan(_app: Starlette):
     async with mcp.session_manager.run():
         yield
 
-mcp_asgi = mcp.streamable_http_app()
+mcp_asgi = mcp.streamable_http_app(
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=["colab-mcp-bridge.onrender.com", "colab-mcp-bridge.onrender.com:*"],
+    )
+)
 starlette_app = Starlette(routes=[
     Route("/", root, methods=["GET"]),
     Route("/healthz", healthz, methods=["GET"]),
