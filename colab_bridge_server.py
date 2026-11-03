@@ -36,6 +36,9 @@ mcp = FastMCP("Google Colab Bridge", instructions=(
     "A private bridge to the user's currently connected Google Colab runtime. "
     "The notebook must have the bridge client cell running. Execute code only "
     "when explicitly requested by the connected user."
+), transport_security=TransportSecuritySettings(
+    enable_dns_rebinding_protection=True,
+    allowed_hosts=["colab-mcp-bridge.onrender.com", "colab-mcp-bridge.onrender.com:*"],
 ))
 active_agent: WebSocket | None = None
 connected_at: float | None = None
@@ -282,12 +285,7 @@ async def lifespan(_app: Starlette):
     async with mcp.session_manager.run():
         yield
 
-mcp_asgi = mcp.streamable_http_app(
-    transport_security=TransportSecuritySettings(
-        enable_dns_rebinding_protection=True,
-        allowed_hosts=["colab-mcp-bridge.onrender.com", "colab-mcp-bridge.onrender.com:*"],
-    )
-)
+mcp_asgi = mcp.streamable_http_app()
 starlette_app = Starlette(routes=[
     Route("/", root, methods=["GET"]),
     Route("/healthz", healthz, methods=["GET"]),
